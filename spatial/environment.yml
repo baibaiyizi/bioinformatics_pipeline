@@ -1,0 +1,40 @@
+name: spatial-model
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.11
+  - scanpy>=1.10
+  - anndata
+  - squidpy
+  - pandas
+  - numpy
+  - scipy
+  - scikit-learn
+  - statsmodels
+  - matplotlib
+  - seaborn
+  - pyyaml
+  - openpyxl
+  - python-igraph
+  - leidenalg
+  - harmonypy
+  - gseapy
+  - pip
+  - r-base>=4.3
+  - r-rmarkdown
+  - r-knitr
+  - r-tidyverse
+  - r-ggplot2
+  - r-patchwork
+  - r-pheatmap
+  - r-yaml
+  - r-data.table
+  - r-hdf5r
+  - bioconductor-singlecellexperiment
+  - bioconductor-spatialexperiment
+  - bioconductor-scran
+  - bioconductor-scater
+  - bioconductor-bayesspace
+  - pip:
+      - cell2location

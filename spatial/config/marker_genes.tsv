@@ -1,0 +1,25 @@
+tissue	cell_type	gene	weight	notes
+generic	epithelial	Epcam	1	Generic epithelial marker.
+generic	epithelial	Krt8	1	Generic epithelial marker.
+generic	epithelial	Krt18	1	Generic epithelial marker.
+generic	endothelial	Pecam1	1	Generic endothelial marker.
+generic	endothelial	Kdr	1	Generic endothelial marker.
+generic	endothelial	Vwf	1	Generic endothelial marker.
+generic	fibroblast	Col1a1	1	Generic stromal/fibroblast marker.
+generic	fibroblast	Col1a2	1	Generic stromal/fibroblast marker.
+generic	fibroblast	Dcn	1	Generic stromal/fibroblast marker.
+generic	immune	Ptprc	1	Generic immune marker.
+generic	immune	Lyz2	1	Mouse myeloid marker.
+generic	immune	Cd3d	1	T-cell marker.
+generic	smooth_muscle	Acta2	1	Smooth muscle/pericyte marker.
+generic	smooth_muscle	Tagln	1	Smooth muscle marker.
+generic	proliferating	Mki67	1	Cell-cycle marker.
+generic	proliferating	Top2a	1	Cell-cycle marker.
+ovary	oocyte	Gdf9	1	Inspired by ovarian_aging follicle annotation.
+ovary	oocyte	Zp3	1	Oocyte marker.
+ovary	granulosa	Fshr	1	Granulosa marker.
+ovary	granulosa	Cyp19a1	1	Granulosa marker.
+ovary	theca	Cyp17a1	1	Theca marker.
+ovary	theca	Lhcgr	1	Theca/luteal marker.
+ovary	luteal	Star	1	Luteal steroidogenic marker.
+ovary	luteal	Cyp11a1	1	Luteal steroidogenic marker.

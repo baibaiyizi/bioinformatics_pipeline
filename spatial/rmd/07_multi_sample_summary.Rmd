@@ -1,0 +1,24 @@
+---
+title: "07 Multi Sample Summary"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+source("01_main_setup.R")
+module <- "07_multi_sample_summary"
+```
+
+```{r}
+idx <- read_optional_tsv(file.path(result_dir, "13_multi_sample_summary", "tables", "summary_index.tsv"))
+if (nrow(idx) > 0) {
+  write_review_table(idx, module, "summary_index_review.csv")
+  p <- idx |>
+    ggplot(aes(summary, rows, fill = summary)) +
+    geom_col(show.legend = FALSE) +
+    scale_fill_manual(values = rep(pandoraseq_palette, 20)) +
+    theme_spatial() +
+    labs(x = NULL, y = "Rows")
+  save_plot_versions(p, module, "summary_table_rows", width = 6, height = 4)
+  p
+}
+```

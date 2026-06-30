@@ -1,0 +1,115 @@
+# Platform profiles for choosing optional branches.
+
+visium:
+  input_types: [visium_dir, h5ad]
+  expected_files:
+    visium_dir:
+      - filtered_feature_bc_matrix.h5
+      - spatial/tissue_positions*
+      - spatial/scalefactors_json.json
+      - spatial/tissue_hires_image.png
+  coordinate_unit: spot
+  default_neighbor:
+    method: grid
+    n_neighs: 6
+  qc_metrics: [total_counts, n_genes_by_counts, pct_counts_mt, pct_counts_ribo, in_tissue]
+  default_modules: [anndata, global_qc, spatial_local_outlier, log1p, hvg, harmony, squidpy_graph, spatial_leiden, marker_score, object_segments, nmf]
+  optional_modules: [spotsweeper, bayesspace, banksy, rctd, cell2location, commot, cellchat_spatial]
+
+visium_hd:
+  input_types: [visium_hd_dir, h5ad, spatialdata_zarr]
+  expected_files:
+    visium_hd_dir:
+      - filtered_feature_bc_matrix.h5
+      - binned_outputs/
+      - spatial/
+  coordinate_unit: micron_or_bin
+  default_bin_size_um: 8
+  optional_bin_size_um: [2, 16]
+  default_neighbor:
+    method: radius_or_knn
+    tune_by_density: true
+  qc_metrics: [total_counts, n_genes_by_counts, pct_counts_mt, in_tissue, bin_density]
+  default_modules: [anndata, log1p, sketch_clustering, squidpy_graph, spatial_leiden, marker_score]
+  optional_modules: [spatialdata, sopa, banksy, bin2cell, cell2location, rctd, image_mask]
+
+slide_seq:
+  input_types: [matrix_coords, h5ad]
+  expected_files:
+    matrix_coords:
+      - count_file
+      - spatial_file
+  coordinate_unit: micron_or_bead
+  default_neighbor:
+    method: knn_or_radius
+    tune_by_density: true
+  qc_metrics: [total_counts, n_genes_by_counts, pct_counts_mt, bead_density, local_outlier]
+  default_modules: [anndata, coordinate_qc, log1p, hvg, squidpy_graph, spatial_leiden, marker_score]
+  optional_modules: [spanorm, banksy, graphst, stagate, nnsvg, spark_x]
+
+stereo_seq:
+  input_types: [matrix_coords, h5ad, spatialdata_zarr]
+  coordinate_unit: micron_or_bin
+  default_neighbor:
+    method: radius
+    tune_by_density: true
+  qc_metrics: [total_counts, n_genes_by_counts, pct_counts_mt, bin_density, local_outlier]
+  default_modules: [anndata, coordinate_qc, log1p, hvg, squidpy_graph, spatial_leiden]
+  optional_modules: [spatialdata, sopa, spanorm, banksy, graphst, stagate, spateo]
+
+xenium:
+  input_types: [xenium_dir, spatialdata_zarr, h5ad]
+  expected_files:
+    xenium_dir:
+      - cell_feature_matrix*
+      - transcripts*
+      - cells*
+      - cell_boundaries*
+      - morphology*
+  coordinate_unit: micron
+  default_neighbor:
+    method: delaunay_or_radius
+    radius_um_grid: [20, 50, 100]
+  qc_metrics: [transcripts_per_cell, genes_per_cell, cell_area, negative_control_counts, segmentation_quality]
+  default_modules: [spatialdata, sopa, cell_qc, log1p, hvg, cell_annotation, squidpy_graph, neighborhood_enrichment]
+  optional_modules: [nichecompass, scniche, misty, commot, cellchat_spatial, liana, napari, vitessce]
+
+cosmx:
+  input_types: [cosmx_dir, spatialdata_zarr, h5ad]
+  coordinate_unit: micron
+  default_neighbor:
+    method: radius
+    radius_um_grid: [20, 50, 100]
+  qc_metrics: [transcripts_per_cell, genes_per_cell, cell_area, negative_probe_counts, fov]
+  default_modules: [spatialdata, sopa, fov_qc, log1p, cell_annotation, squidpy_graph, neighborhood_enrichment]
+  optional_modules: [giotto, misty, nichecompass, cellchat_spatial, liana, commot]
+
+merscope:
+  input_types: [merscope_dir, molecule_table, spatialdata_zarr, h5ad]
+  coordinate_unit: micron
+  default_neighbor:
+    method: delaunay_or_radius
+    radius_um_grid: [10, 20, 50]
+  qc_metrics: [molecules_per_cell, genes_per_cell, blank_probe_counts, cell_area, segmentation_quality]
+  default_modules: [spatialdata, sopa, molecule_qc, cell_qc, cell_annotation, squidpy_graph]
+  optional_modules: [sparrow, baysor, cellpose, nichecompass, misty, commot]
+
+spatial_proteomics:
+  input_types: [image_features, spatialdata_zarr, table_coords]
+  coordinate_unit: micron
+  default_neighbor:
+    method: delaunay_or_radius
+    radius_um_grid: [20, 50, 100]
+  qc_metrics: [marker_intensity, cell_area, segmentation_quality, batch_channel]
+  default_modules: [cell_qc, marker_annotation, neighborhood_enrichment, composition]
+  optional_modules: [misty, nichecompass, scniche, topology_features, vitessce]
+
+spatial_multiomics:
+  input_types: [spatialdata_zarr, multimodal_manifest]
+  coordinate_unit: platform_specific
+  default_neighbor:
+    method: modality_specific
+  qc_metrics: [per_modality_qc, coordinate_registration, modality_missingness]
+  default_modules: [per_modality_qc, coordinate_alignment, shared_metadata, modality_specific_analysis]
+  optional_modules: [mefisto, mofa2, multi_view_misty, giotto, spatialdata]
+

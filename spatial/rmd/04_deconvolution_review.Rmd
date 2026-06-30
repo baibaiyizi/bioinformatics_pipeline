@@ -1,0 +1,24 @@
+---
+title: "04 Deconvolution Review"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+source("01_main_setup.R")
+module <- "04_deconvolution_review"
+```
+
+```{r}
+ct <- read_optional_tsv(file.path(result_dir, "08_cell_type_annotation", "tables", "cell_type_counts.tsv"))
+if (nrow(ct) > 0) {
+  write_review_table(ct, module, "cell_type_counts_review.csv")
+  p <- ct |>
+    ggplot(aes(sample, n_spots, fill = cell_type_pred)) +
+    geom_col(position = "fill") +
+    scale_fill_manual(values = rep(pandoraseq_palette, 50)) +
+    theme_spatial() +
+    labs(x = NULL, y = "Fraction of spots")
+  save_plot_versions(p, module, "cell_type_fraction_by_sample", width = 8, height = 5)
+  p
+}
+```

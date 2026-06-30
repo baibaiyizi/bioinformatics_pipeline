@@ -1,0 +1,28 @@
+---
+title: "06 Segment Programs"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+source("01_main_setup.R")
+module <- "06_segment_programs"
+```
+
+```{r}
+segments <- read_optional_tsv(file.path(result_dir, "10_segment_objects", "tables", "segment_summary.tsv"))
+programs <- read_optional_tsv(file.path(result_dir, "11_programs_differential", "tables", "nmf_program_top_genes.tsv"))
+if (nrow(segments) > 0) {
+  write_review_table(segments, module, "segment_summary_review.csv")
+  p <- segments |>
+    ggplot(aes(source_label, n_spots, fill = source_label)) +
+    geom_boxplot(show.legend = FALSE) +
+    scale_fill_manual(values = rep(pandoraseq_palette, 50)) +
+    theme_spatial() +
+    labs(x = NULL, y = "Spots per segment")
+  save_plot_versions(p, module, "segment_size_by_label", width = 7, height = 5)
+  p
+}
+if (nrow(programs) > 0) {
+  write_review_table(programs, module, "nmf_program_top_genes_review.csv")
+}
+```

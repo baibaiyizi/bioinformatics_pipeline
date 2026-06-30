@@ -1,0 +1,4 @@
+tissue	rule_name	source_key	include_values	label	output_key	notes
+generic	domain_segments	spatial_domain	*	domain_object	segment_id	Connected components of same spatial_domain.
+ovary	follicle_like	cell_type_pred	oocyte,granulosa,theca	follicle_like	segment_id	Template inspired by ovarian_aging object-level follicle analysis.
+ovary	immune_niche	cell_type_pred	immune	immune_niche	segment_id	Use for immune-enriched connected components.

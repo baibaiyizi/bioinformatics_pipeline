@@ -1,0 +1,214 @@
+# Optional method shelf for Spatial/model.
+# The executable default pipeline reads spatial_config.yaml. This file records
+# heavier or platform-specific branches that can be enabled per project.
+
+containers:
+  primary: anndata
+  allow:
+    anndata:
+      use_for: [visium, visium_hd, slide_seq, stereo_seq, h5ad]
+      checkpoint: 02processed_h5ad
+    spatialexperiment:
+      use_for: [visium, slide_seq, bioconductor_review]
+      checkpoint: 02processed_spe
+    spatialdata:
+      use_for: [visium_hd, xenium, cosmx, merscope, spatial_multiomics]
+      checkpoint: 02processed_spatialdata
+    giotto:
+      use_for: [multi_platform_review, image_aware_analysis]
+      checkpoint: 02processed_giotto
+
+qc:
+  global_metrics:
+    enabled: true
+    metrics: [total_counts, n_genes_by_counts, pct_counts_mt, pct_counts_ribo]
+  spatial_local_outlier:
+    enabled: true
+    methods: [knn_ratio, robust_zscore]
+    k_values: [6, 8, 18]
+    review_required: true
+  spotsweeper:
+    enabled: false
+    backend: R
+    use_for: [visium, slide_seq_like]
+    checks: [local_outliers, dryspots, hangnails, regional_artifacts]
+  image_mask:
+    enabled: false
+    use_for: [visium, visium_hd, xenium, cosmx, merscope]
+    tools: [sopa, cellpose, vendor_mask, manual_roi]
+  platform_controls:
+    enabled: false
+    use_for: [xenium, cosmx, merscope]
+    metrics: [negative_control_counts, blank_probe_counts, cell_area, transcript_density]
+
+normalization:
+  default: log1p
+  candidates:
+    log1p:
+      enabled: true
+      target_sum: 10000
+      use_for: [baseline]
+    sctransform:
+      enabled: false
+      backend: R
+      use_for: [visium, xenium, cosmx]
+    scran:
+      enabled: false
+      backend: R
+      use_for: [cell_level, bioconductor]
+    spanorm:
+      enabled: false
+      use_for: [spatial_bias, high_density, visium]
+      compare_against: [log1p]
+    imputation:
+      enabled: false
+      methods: [magic, alra, dca]
+      allowed_for: [visualization_only, exploratory_gene_smoothing]
+
+feature_selection:
+  hvg:
+    enabled: true
+    n_top_genes: 3000
+  svg:
+    enabled: true
+    default_methods: [moran_i]
+    optional_methods: [nnsvg, spark_x, spatialde, geary_c, somde, gaade]
+    consensus_min_methods: 2
+    save_union_and_intersection: true
+
+integration_alignment:
+  batch_correction:
+    default: harmony_if_available
+    candidates: [harmony, bbknn, scanorama, scvi, none]
+    keep_uncorrected_for_de: true
+  multi_slice_alignment:
+    enabled: false
+    candidates: [staligner, paste, paste2, moscot]
+    require_alignment_qc_plots: true
+  multiomics_latent:
+    enabled: false
+    candidates: [mefisto, mofa2, multi_view_misty]
+
+domains_niches:
+  default:
+    method: expression_spatial_leiden
+    resolution_grid: [0.4, 0.6, 0.8, 1.0, 1.2]
+    spatial_weight_grid: [0.1, 0.25, 0.5]
+  optional_methods:
+    bayesspace:
+      enabled: false
+      backend: R
+      use_for: [visium]
+    banksy:
+      enabled: false
+      use_for: [visium, visium_hd, xenium, cosmx, merscope]
+      lambda_grid: [0.2, 0.5, 0.8]
+      k_geom_grid: [15, 30]
+    spagcn:
+      enabled: false
+      use_for: [visium_with_histology]
+    stagate:
+      enabled: false
+      use_for: [graph_deep_learning]
+    graphst:
+      enabled: false
+      use_for: [integration, clustering, deconvolution]
+    precast:
+      enabled: false
+      use_for: [multi_sample_shared_domains]
+    spaceflow:
+      enabled: false
+      use_for: [spatial_domain_and_trajectory]
+    misty:
+      enabled: false
+      use_for: [spatial_relationships, niche_effects]
+    nichecompass:
+      enabled: false
+      use_for: [single_cell_spatial_niches]
+    scniche:
+      enabled: false
+      use_for: [single_cell_spatial_niches]
+
+annotation_deconvolution:
+  marker_score:
+    enabled: true
+    min_marker_genes: 2
+  reference_mapping:
+    enabled: false
+    candidates: [seurat_label_transfer, singleR, azimuth, celltypist, scanvi]
+    require_reference_metadata: [cell_type, sample, batch, organism, tissue]
+  deconvolution:
+    enabled: false
+    default_candidates: [rctd, cell2location, spotlight]
+    advanced_candidates: [stereoscope, tangram, spatialscope, redeconve, spatialcogcn, stdgcn, spajoint]
+    require_marker_score_comparison: true
+    require_reference_qc: true
+
+segmentation_image:
+  object_segments:
+    enabled: true
+    source_candidates: [spatial_domain, cell_type_pred, external_segment_id, manual_roi]
+  visium_hd:
+    enabled: false
+    candidates: [bin2cell, banksy, sketch_clustering]
+    default_bin_size_um: 8
+    high_resolution_bin_size_um: 2
+  molecular_platforms:
+    enabled: false
+    candidates: [sopa, sparrow, baysor, cellpose, stardist, mesmer]
+    keep_molecule_table: true
+  image_expression_models:
+    enabled: false
+    candidates: [stpath, st_align, scellst, histology_embedding]
+    allowed_for: [exploratory, prediction_benchmark]
+
+programs_trajectories:
+  gene_programs:
+    enabled: true
+    default: nmf
+    candidates: [nmf, cnmf, topic_model, wgcna, hdwgcna]
+    n_components_grid: [8, 12, 16, 20]
+  spatial_gradient:
+    enabled: false
+    candidates: [scaled_radial_distance, vascular_distance, boundary_distance, custom_axis_score]
+  trajectory:
+    enabled: false
+    candidates: [stlearn_trajectory, spaceflow, spateo, moscot]
+    require_temporal_or_anatomical_prior: true
+
+communication:
+  contact_edges:
+    enabled: true
+    distance_grid: [auto, 50, 100, 200]
+  ligand_receptor:
+    enabled: false
+    candidates: [squidpy_ligrec, commot, cellchat_spatial, liana, multinichenet, nichenet, natmi, cellphoneDB]
+    require_expression_filter: true
+    require_sample_level_summary: true
+    ligand_receptor_resources: [omnipath, cellchatdb, cellphonedb, nichenet]
+
+statistics:
+  exploratory_de:
+    enabled: true
+    working_pvalue_column: pvalue
+  formal_de:
+    enabled: false
+    candidates: [pseudobulk_edger, pseudobulk_deseq2, limma_voom, dreamlet, mixed_model]
+    group_at: [sample, sample_by_domain, sample_by_cell_type, sample_by_segment]
+  differential_abundance:
+    enabled: false
+    candidates: [composition_glm, milo, da_seq]
+  enrichment:
+    enabled: true
+    candidates: [gsea, go, kegg, reactome, enrichr, msigdb, progeny, aucell, gsva]
+
+visualization_review:
+  static_plots:
+    required: [qc_spatial, umap_by_sample, spatial_domain, marker_dotplot, composition_barplot]
+    optional: [cooccurrence, lr_heatmap, object_violin, radial_distance, program_usage]
+  interactive:
+    enabled: false
+    candidates: [napari, vitessce, isee, vendor_viewer]
+  sensitivity:
+    required_for: [qc_thresholds, neighbor_scale, domain_resolution, deconvolution, communication]
+

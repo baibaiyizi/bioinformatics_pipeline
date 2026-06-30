@@ -1,0 +1,129 @@
+project:
+  name: spatial_model
+  organism: mouse
+  default_tissue: generic
+  sample_key: sample
+  group_key: group
+  condition_key: condition
+  batch_key: batch
+  spatial_key: spatial
+  random_seed: 20260629
+
+paths:
+  manifest: 01rawdata/spatial_info.tsv
+  extended_manifest: 01rawdata/spatial_info.extended.tsv
+  processed_dir: 02processed_h5ad
+  integrated_dir: 03integrated_h5ad
+  deconvolution_dir: 04deconvolution
+  result_dir: result
+  cache_dir: .cache/spatial
+  marker_gene_file: config/marker_genes.tsv
+  segment_rule_file: config/segment_rules.tsv
+  method_options_file: config/method_options.yaml
+  platform_profiles_file: config/platform_profiles.yaml
+
+input:
+  matrix_orientation: genes_by_spots
+  visium_count_file: filtered_feature_bc_matrix.h5
+  load_images: true
+  make_var_names_unique: true
+
+qc:
+  min_counts: 500
+  min_genes: 200
+  max_mito_percent: 25
+  min_cells_per_gene: 3
+  mito_prefix:
+    mouse: "mt-"
+    human: "MT-"
+  ribo_prefix:
+    mouse:
+      - "Rpl"
+      - "Rps"
+    human:
+      - "RPL"
+      - "RPS"
+  spatial_local_outlier_k: 8
+  spatial_low_count_ratio: 0.25
+
+normalization:
+  target_sum: 10000
+  hvg_flavor: cell_ranger
+  n_top_genes: 3000
+  regress_out:
+    - total_counts
+    - pct_counts_mt
+  scale_max_value: 10
+  n_pcs: 50
+
+integration:
+  method: harmony_if_available
+  n_neighbors: 15
+  leiden_resolution: 0.8
+  umap_min_dist: 0.3
+
+spatial:
+  coord_type: generic
+  n_neighs: 6
+  radius: null
+  moran_top_genes: 1000
+  moran_permutations: 100
+  nhood_permutations: 1000
+
+domains:
+  method: expression_spatial_leiden
+  resolution: 0.8
+  spatial_weight: 0.25
+  min_segment_spots: 5
+
+annotation:
+  method: marker_score
+  min_marker_genes: 2
+  unknown_margin: 0.05
+
+deconvolution:
+  method: marker_score
+  reference_h5ad: ""
+  reference_cell_type_key: cell_type
+  reference_batch_key: batch
+  cell2location:
+    n_cells_per_location: 8
+    detection_alpha: 20
+    max_epochs_reference: 250
+    max_epochs_spatial: 30000
+    use_gpu: auto
+
+segments:
+  source_key: spatial_domain
+  layer_key: cell_type_pred
+  distance_threshold: auto
+  min_spots: 5
+  compute_scaled_distance: true
+
+programs:
+  method: nmf
+  n_components: 12
+  top_genes_per_program: 50
+  de_primary_pvalue: pvalue
+  de_pvalue_threshold: 0.05
+  de_logfc_threshold: 0.25
+
+communication:
+  cluster_key: cell_type_pred
+  min_spots_per_group: 10
+  run_squidpy_ligrec: false
+  ligand_receptor_source: omnipath
+
+plotting:
+  palette:
+    - "#A1C9F4"
+    - "#FFB482"
+    - "#8DE5A1"
+    - "#FF9F9B"
+    - "#B39FDB"
+    - "#FDFFB6"
+    - "#D4D9DE"
+    - "#5A666F"
+  dpi: 300
+  save_pdf: true
+  save_png: true

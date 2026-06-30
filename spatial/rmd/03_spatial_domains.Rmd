@@ -1,0 +1,24 @@
+---
+title: "03 Spatial Domains"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+source("01_main_setup.R")
+module <- "03_spatial_domains"
+```
+
+```{r}
+domains <- read_optional_tsv(file.path(result_dir, "07_spatial_domains", "tables", "spatial_domain_counts.tsv"))
+if (nrow(domains) > 0) {
+  write_review_table(domains, module, "spatial_domain_counts_review.csv")
+  p <- domains |>
+    ggplot(aes(sample, n_spots, fill = spatial_domain)) +
+    geom_col(position = "fill") +
+    scale_fill_manual(values = rep(pandoraseq_palette, 50)) +
+    theme_spatial() +
+    labs(x = NULL, y = "Fraction of spots")
+  save_plot_versions(p, module, "spatial_domain_fraction_by_sample", width = 8, height = 5)
+  p
+}
+```

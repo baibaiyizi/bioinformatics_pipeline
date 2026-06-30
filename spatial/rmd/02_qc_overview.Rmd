@@ -1,0 +1,26 @@
+---
+title: "02 QC Overview"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+source("01_main_setup.R")
+module <- "02_qc_overview"
+```
+
+```{r}
+qc <- read_optional_tsv(file.path(result_dir, "03_qc_filter", "tables", "sample_qc_summary.tsv"))
+if (nrow(qc) > 0) {
+  write_review_table(qc, module, "sample_qc_summary_review.csv")
+  p1 <- qc |>
+    pivot_longer(-sample, names_to = "metric", values_to = "value") |>
+    ggplot(aes(sample, value, fill = sample)) +
+    geom_col(show.legend = FALSE) +
+    facet_wrap(~metric, scales = "free_y") +
+    scale_fill_manual(values = rep(pandoraseq_palette, length.out = nrow(qc))) +
+    theme_spatial() +
+    labs(x = NULL, y = NULL)
+  save_plot_versions(p1, module, "sample_qc_summary", width = 9, height = 5)
+  p1
+}
+```

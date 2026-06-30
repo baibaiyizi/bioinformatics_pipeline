@@ -1,0 +1,28 @@
+---
+title: "05 Neighborhood Communication"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+source("01_main_setup.R")
+module <- "05_neighborhood_communication"
+```
+
+```{r}
+edges <- read_optional_tsv(file.path(result_dir, "12_neighborhood_communication", "tables", "spatial_contact_edges.tsv"))
+if (nrow(edges) > 0) {
+  write_review_table(edges, module, "spatial_contact_edges_review.csv")
+  top_edges <- edges |>
+    arrange(desc(n_neighbor_edges)) |>
+    slice_head(n = 30) |>
+    mutate(pair = paste(source, target, sep = " -> "))
+  p <- top_edges |>
+    ggplot(aes(reorder(pair, n_neighbor_edges), n_neighbor_edges)) +
+    geom_col(fill = "#A1C9F4") +
+    coord_flip() +
+    theme_spatial() +
+    labs(x = NULL, y = "Neighbor edges")
+  save_plot_versions(p, module, "top_spatial_contact_edges", width = 8, height = 7)
+  p
+}
+```
