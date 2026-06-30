@@ -1,0 +1,291 @@
+# Step 10: TF / 上游调控因子活性
+
+## 10.1 DoRothEA / decoupleR TF 活性评分
+
+```{r}
+ensure_module_result_layout("10_tf_regulator")
+
+de_result <- restore_main_de_result(required = TRUE)
+tf_expr_source <- if (!is.null(gene_logcpm) && identical(colnames(gene_logcpm), colnames(gene_exp))) gene_logcpm else log2(gene_exp + 1)
+tf_expr_mat <- make_gene_symbol_matrix(tf_expr_source, de_result)
+tf_group_factor <- factor(sample_info[colnames(tf_expr_mat), "group"], levels = c(group1_label, group2_label))
+
+tf_status <- data.frame(step = "initialization", status = "started", detail = "", stringsAsFactors = FALSE)
+tf_activity_mat <- matrix(numeric(0), nrow = 0, ncol = ncol(tf_expr_mat), dimnames = list(character(0), colnames(tf_expr_mat)))
+tf_activity_diff <- data.frame()
+tf_regulon <- data.frame()
+
+load_dorothea_regulon <- function() {
+  data_name <- if (identical(rnaseq_species, "mouse")) "dorothea_mm" else "dorothea_hs"
+  reg_env <- new.env(parent = emptyenv())
+  loaded <- tryCatch({
+    utils::data(list = data_name, package = "dorothea", envir = reg_env)
+    TRUE
+  }, error = function(e) FALSE)
+  if (!isTRUE(loaded) || !exists(data_name, envir = reg_env, inherits = FALSE)) {
+    return(data.frame())
+  }
+  get(data_name, envir = reg_env) %>%
+    as.data.frame(stringsAsFactors = FALSE) %>%
+    filter(confidence %in% c("A", "B", "C")) %>%
+    transmute(
+      tf = as.character(tf),
+      target = as.character(target),
+      mor = as.numeric(mor),
+      likelihood = dplyr::recode(as.character(confidence), A = 1, B = 0.75, C = 0.5, .default = 0.25)
+    ) %>%
+    filter(!is.na(tf), tf != "", !is.na(target), target != "", is.finite(mor))
+}
+
+pkg_state <- try_install_and_load(c("decoupleR", "dorothea"), bioc = TRUE)
+if (!isTRUE(pkg_state$ok)) {
+  tf_status <- data.frame(step = "dependency", status = "skipped", detail = paste(pkg_state$messages, collapse = " | "), stringsAsFactors = FALSE)
+} else if (nrow(tf_expr_mat) < 100 || ncol(tf_expr_mat) < 4) {
+  tf_status <- data.frame(step = "input", status = "skipped", detail = "symbol-level expression matrix too small", stringsAsFactors = FALSE)
+} else {
+  tf_regulon <- load_dorothea_regulon()
+  tf_regulon <- tf_regulon %>% filter(target %in% rownames(tf_expr_mat))
+  if (nrow(tf_regulon) == 0) {
+    tf_status <- data.frame(step = "regulon", status = "skipped", detail = "DoRothEA regulon has no targets in expression matrix", stringsAsFactors = FALSE)
+  } else {
+    tf_activity_long <- tryCatch({
+      decoupleR::run_viper(
+        mat = tf_expr_mat,
+        network = tf_regulon,
+        .source = "tf",
+        .target = "target",
+        .mor = "mor",
+        .likelihood = "likelihood",
+        minsize = 5
+      )
+    }, error = function(e) {
+      message("VIPER failed, fallback to ULM: ", conditionMessage(e))
+      tryCatch({
+        decoupleR::run_ulm(
+          mat = tf_expr_mat,
+          network = tf_regulon,
+          .source = "tf",
+          .target = "target",
+          .mor = "mor",
+          minsize = 5
+        )
+      }, error = function(e2) {
+        message("ULM fallback failed: ", conditionMessage(e2))
+        data.frame()
+      })
+    })
+
+    if (nrow(tf_activity_long) > 0) {
+      source_col <- intersect(c("source", ".source", "tf"), colnames(tf_activity_long))[1]
+      condition_col <- intersect(c("condition", "sample", ".condition"), colnames(tf_activity_long))[1]
+      score_col <- intersect(c("score", "statistic"), colnames(tf_activity_long))[1]
+      if (!is.na(source_col) && !is.na(condition_col) && !is.na(score_col)) {
+        tf_activity_mat <- tf_activity_long %>%
+          transmute(tf = .data[[source_col]], sample = .data[[condition_col]], score = as.numeric(.data[[score_col]])) %>%
+          filter(sample %in% colnames(tf_expr_mat), is.finite(score)) %>%
+          tidyr::pivot_wider(names_from = sample, values_from = score) %>%
+          tibble::column_to_rownames("tf") %>%
+          as.matrix()
+        missing_activity_cols <- setdiff(colnames(tf_expr_mat), colnames(tf_activity_mat))
+        for (one_col in missing_activity_cols) {
+          tf_activity_mat <- cbind(tf_activity_mat, rep(NA_real_, nrow(tf_activity_mat)))
+          colnames(tf_activity_mat)[ncol(tf_activity_mat)] <- one_col
+        }
+        tf_activity_mat <- tf_activity_mat[, colnames(tf_expr_mat), drop = FALSE]
+      }
+    }
+
+    if (nrow(tf_activity_mat) > 0) {
+      write.table(tf_activity_mat, "result/10_tf_regulator/10_1_TF_activity_matrix.tsv", sep = "\t", quote = FALSE, col.names = NA)
+      tf_activity_diff <- run_limma_contrast_table(tf_activity_mat, tf_group_factor, group1_label, group2_label) %>%
+        rownames_to_column("tf") %>%
+        mutate(
+          # 保留当前项目 nominal pvalue < 0.05 的探索性 TF 活性筛选口径；正式报告建议同步查看 adj.P.Val/FDR。
+          significant = !is.na(P.Value) & P.Value < 0.05,
+          direction = case_when(
+            significant & logFC > 0 ~ paste0("higher_in_", group2_label),
+            significant & logFC < 0 ~ paste0("higher_in_", group1_label),
+            TRUE ~ "ns"
+          )
+        ) %>%
+        arrange(P.Value, desc(abs(logFC)))
+      write.csv(tf_activity_diff, "result/10_tf_regulator/10_2_TF_activity_differential.csv", row.names = FALSE)
+      tf_status <- data.frame(step = "tf_activity", status = "ok", detail = paste0("tf_n=", nrow(tf_activity_mat)), stringsAsFactors = FALSE)
+    } else {
+      tf_status <- data.frame(step = "tf_activity", status = "skipped", detail = "decoupleR returned no usable activity matrix", stringsAsFactors = FALSE)
+    }
+  }
+}
+write.csv(tf_status, "result/10_tf_regulator/10_0_TF_regulator_status.csv", row.names = FALSE)
+```
+
+## 10.2 TF 活性图表与 target 网络
+
+```{r}
+if (nrow(tf_activity_diff) > 0) {
+  tf_direction_colors <- c(
+    setNames(group1_color, paste0("higher_in_", group1_label)),
+    setNames(group2_color, paste0("higher_in_", group2_label)),
+    ns = unname(viz_pal$neutral["mid"])
+  )
+  tf_volcano <- tf_activity_diff %>%
+    mutate(neg_log10_p = -log10(dplyr::coalesce(P.Value, 1) + 1e-300)) %>%
+    ggplot(aes(x = logFC, y = neg_log10_p, color = direction)) +
+    geom_point(alpha = 0.75, size = 2) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = viz_pal$neutral["dark"]) +
+    scale_color_manual(values = resolve_named_colors(tf_direction_colors, unique(tf_activity_diff$direction))) +
+    labs(title = "TF activity differential analysis", x = paste0(group2_label, " - ", group1_label, " activity logFC"), y = "-log10(pvalue)") +
+    theme_rnaseq_bw()
+  save_plot_versions(tf_volcano, "result/10_tf_regulator/10_3_TF_activity_volcano.pdf", width = 8.5, height = 6)
+
+  top_tf <- tf_activity_diff %>%
+    arrange(P.Value, desc(abs(logFC))) %>%
+    slice_head(n = 30) %>%
+    mutate(tf = factor(tf, levels = rev(tf)))
+  tf_bar <- ggplot(top_tf, aes(x = tf, y = logFC, fill = direction)) +
+    geom_col(width = 0.75) +
+    coord_flip() +
+    scale_fill_manual(values = resolve_named_colors(tf_direction_colors, unique(top_tf$direction))) +
+    labs(title = "Top TF activity changes", x = NULL, y = paste0(group2_label, " - ", group1_label, " activity logFC")) +
+    theme_rnaseq_minimal()
+  save_plot_versions(tf_bar, "result/10_tf_regulator/10_4_Top_TF_activity_barplot.pdf", width = 8.5, height = 7)
+}
+
+tf_target_edges <- data.frame()
+if (nrow(tf_activity_diff) > 0 && nrow(tf_regulon) > 0) {
+  top_tf_names <- tf_activity_diff %>% arrange(P.Value, desc(abs(logFC))) %>% slice_head(n = 8) %>% pull(tf)
+  target_de_tbl <- de_result %>%
+    filter(!is.na(gene_label), gene_label != "") %>%
+    group_by(gene_label) %>%
+    slice_max(order_by = abs(rank_score), n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    dplyr::select(target = gene_label, target_log2FoldChange = log2FoldChange, target_pvalue = pvalue, target_direction = direction)
+  tf_target_edges <- tf_regulon %>%
+    filter(tf %in% top_tf_names) %>%
+    inner_join(target_de_tbl, by = "target") %>%
+    group_by(tf) %>%
+    slice_max(order_by = abs(target_log2FoldChange), n = 12, with_ties = FALSE) %>%
+    ungroup() %>%
+    left_join(tf_activity_diff %>% dplyr::select(tf, tf_logFC = logFC, tf_pvalue = P.Value), by = "tf") %>%
+    arrange(tf_pvalue, desc(abs(target_log2FoldChange)))
+}
+write.csv(tf_target_edges, "result/10_tf_regulator/10_5_Top_TF_target_edges.csv", row.names = FALSE)
+
+if (nrow(tf_target_edges) > 0) {
+  ig_state <- try_install_and_load("igraph", bioc = FALSE)
+  if (isTRUE(ig_state$ok)) {
+    g <- igraph::graph_from_data_frame(tf_target_edges %>% transmute(from = tf, to = target, mor = mor), directed = TRUE)
+    set.seed(1)
+    coords <- as.data.frame(igraph::layout_with_fr(g))
+    colnames(coords) <- c("x", "y")
+    node_tbl <- data.frame(name = igraph::V(g)$name, coords, stringsAsFactors = FALSE) %>%
+      mutate(node_type = ifelse(name %in% unique(tf_target_edges$tf), "TF", "Target"))
+    edge_tbl <- igraph::as_data_frame(g, what = "edges") %>%
+      left_join(node_tbl %>% dplyr::select(from = name, x_from = x, y_from = y), by = "from") %>%
+      left_join(node_tbl %>% dplyr::select(to = name, x_to = x, y_to = y), by = "to")
+    network_plot <- ggplot() +
+      geom_segment(data = edge_tbl, aes(x = x_from, y = y_from, xend = x_to, yend = y_to, color = mor > 0), alpha = 0.35) +
+      geom_point(data = node_tbl, aes(x = x, y = y, fill = node_type), shape = 21, size = 3.2, color = viz_pal$neutral["dark"]) +
+      ggrepel::geom_text_repel(data = node_tbl, aes(x = x, y = y, label = name), size = 3, max.overlaps = 80) +
+      scale_color_manual(values = c(`TRUE` = viz_pal$accent["green"], `FALSE` = viz_pal$accent["warm"]), labels = c(`TRUE` = "activation", `FALSE` = "repression")) +
+      scale_fill_manual(values = c(TF = viz_pal$accent["purple"], Target = viz_pal$neutral["light"])) +
+      labs(title = "Top TF-target network", x = NULL, y = NULL, color = "MoR", fill = NULL) +
+      theme_void() +
+      theme(legend.position = "right")
+    save_plot_versions(network_plot, "result/10_tf_regulator/10_6_Top_TF_target_network.pdf", width = 10, height = 8)
+  }
+}
+```
+
+## 10.3 TF 与通路活性关联
+
+```{r}
+read_activity_matrix_file <- function(path) {
+  path <- resolve_existing_path(path, preferred = "table")
+  if (!file.exists(path)) {
+    return(matrix(numeric(0), nrow = 0, ncol = 0))
+  }
+  mat <- read.table(path, sep = "\t", header = TRUE, row.names = 1, check.names = FALSE, quote = "", comment.char = "")
+  as.matrix(mat)
+}
+
+first_existing_activity_path <- function(paths) {
+  resolved_paths <- vapply(paths, resolve_existing_path, character(1), preferred = "table")
+  hits <- resolved_paths[file.exists(resolved_paths)]
+  if (length(hits) > 0) {
+    return(hits[[1]])
+  }
+  paths[[1]]
+}
+
+activity_candidates <- vapply(
+  list(
+    hallmark_gsva = c(
+      file.path(result_09_dir, "09_1_Hallmark_GSVA_matrix.tsv"),
+      file.path(result_09_dir, "17_1_Hallmark_GSVA_matrix.tsv")
+    ),
+    kegg_gsva = c(
+      file.path(result_09_dir, "09_2_KEGG_GSVA_matrix.tsv"),
+      file.path(result_09_dir, "17_2_KEGG_GSVA_matrix.tsv")
+    ),
+    reactome_gsva = c(
+      file.path(result_09_dir, "09_3_Reactome_GSVA_matrix.tsv"),
+      file.path(result_09_dir, "17_3_Reactome_GSVA_matrix.tsv")
+    ),
+    hallmark_activity = file.path(result_17_dir, "17_1_Hallmark_activity_matrix.tsv"),
+    kegg_activity = file.path(result_17_dir, "17_2_KEGG_activity_matrix.tsv"),
+    reactome_activity = file.path(result_17_dir, "17_3_Reactome_activity_matrix.tsv")
+  ),
+  first_existing_activity_path,
+  character(1)
+)
+pathway_activity_list <- lapply(activity_candidates, read_activity_matrix_file)
+pathway_activity_list <- pathway_activity_list[vapply(pathway_activity_list, nrow, integer(1)) > 0]
+tf_pathway_cor_long <- data.frame()
+
+if (nrow(tf_activity_mat) > 1 && length(pathway_activity_list) > 0) {
+  pathway_activity_mat <- do.call(rbind, pathway_activity_list)
+  rownames(pathway_activity_mat) <- make.unique(rownames(pathway_activity_mat))
+  common_samples <- intersect(colnames(tf_activity_mat), colnames(pathway_activity_mat))
+  top_tfs <- tf_activity_diff %>% arrange(P.Value, desc(abs(logFC))) %>% slice_head(n = 20) %>% pull(tf)
+  top_tfs <- intersect(top_tfs, rownames(tf_activity_mat))
+  pathway_var <- apply(pathway_activity_mat[, common_samples, drop = FALSE], 1, var, na.rm = TRUE)
+  top_pathways <- names(sort(pathway_var, decreasing = TRUE))[seq_len(min(30, sum(is.finite(pathway_var))))]
+  if (length(common_samples) >= 4 && length(top_tfs) >= 2 && length(top_pathways) >= 2) {
+    cor_mat <- cor(t(tf_activity_mat[top_tfs, common_samples, drop = FALSE]), t(pathway_activity_mat[top_pathways, common_samples, drop = FALSE]), use = "pairwise.complete.obs")
+    tf_pathway_cor_long <- as.data.frame(cor_mat) %>%
+      rownames_to_column("tf") %>%
+      pivot_longer(-tf, names_to = "pathway", values_to = "correlation") %>%
+      arrange(desc(abs(correlation)))
+    write.csv(tf_pathway_cor_long, "result/10_tf_regulator/10_7_TF_pathway_activity_correlation.csv", row.names = FALSE)
+    save_base_pdf_versions(
+      primary = "result/10_tf_regulator/10_8_TF_pathway_activity_correlation_heatmap.pdf",
+      width = 10,
+      height = 8,
+      expr = ComplexHeatmap::draw(
+        ComplexHeatmap::Heatmap(
+          cor_mat,
+          name = "r",
+          col = heatmap_diverging_col_fun(cor_mat, midpoint = 0),
+          cluster_rows = TRUE,
+          cluster_columns = TRUE
+        )
+      )
+    )
+  }
+}
+if (nrow(tf_pathway_cor_long) == 0) {
+  write.csv(data.frame(status = "skipped_no_tf_or_pathway_activity_matrix"), "result/10_tf_regulator/10_7_TF_pathway_activity_correlation.csv", row.names = FALSE)
+}
+
+saveRDS(
+  list(
+    tf_activity_mat = tf_activity_mat,
+    tf_activity_diff = tf_activity_diff,
+    tf_target_edges = tf_target_edges,
+    tf_pathway_cor_long = tf_pathway_cor_long,
+    generated_at = as.character(Sys.time())
+  ),
+  cache_10_tf_state_path
+)
+```

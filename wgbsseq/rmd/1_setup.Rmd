@@ -1,0 +1,2275 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 1: 全局配置入口
+# ==============================================================================
+
+# ==============================================================================
+# 1. 项目初始化与依赖加载
+# ==============================================================================
+options(stringsAsFactors = FALSE)
+options(timeout = 600)
+
+# --- 加载依赖包 ---
+suppressPackageStartupMessages({
+  # 1. 基因组基础
+  library(GenomicRanges)
+  library(GenomicFeatures)
+  library(Biostrings)
+  library(rtracklayer)
+
+  # 2. 甲基化分析工具
+  library(methylKit)
+  library(DSS)
+  library(bsseq)
+
+  # 3. 数据处理与绘图
+  library(dplyr)
+  library(tidyr)
+  library(tidyverse)
+  library(stringr)
+  library(readr)
+  library(ggplot2)
+  library(pheatmap)
+  library(ggrepel)
+  library(ggalluvial)
+  library(scales)
+  library(ggnewscale)
+  library(GOplot)
+  library(Cairo)
+  library(cowplot)
+  library(UpSetR)
+  library(ggdist)
+  library(fgsea)
+  library(Gviz)
+
+  # 4. 注释与富集
+  library(ChIPseeker)
+  library(clusterProfiler)
+  library(org.Mm.eg.db) # 确保已安装
+  library(enrichplot)
+  library(ggtree)  # 用于绘制圆形树状图
+  library(ape)     # 用于 as.phylo 函数
+  library(circlize) # 用于绘制弦图
+  library(ComplexHeatmap) # 用于圈图
+  library(RColorBrewer)    # 用于颜色配置
+  library(grid)         # 用于gpar函数
+
+  # 5. Motif 分析 (如果不需要可注释掉)
+  library(motifmatchr)
+  library(BSgenome.Mmusculus.UCSC.mm39)
+  library(JASPAR2020)
+})
+```
+
+```{r}
+# --- 路径与参数配置 ---
+first_nonempty <- function(...) {
+  for(value in list(...)) {
+    if(is.null(value) || length(value) == 0) next
+    value_chr <- trimws(as.character(value[[1]]))
+    if(!is.na(value_chr) && nzchar(value_chr)) return(value_chr)
+  }
+  ""
+}
+
+resolve_project_root <- function() {
+  root_candidate <- first_nonempty(
+    get0("root_dir", ifnotfound = "", inherits = TRUE),
+    Sys.getenv("WGBS_ROOT_DIR", unset = ""),
+    getwd()
+  )
+  normalizePath(root_candidate, winslash = "/", mustWork = FALSE)
+}
+
+root_dir <- resolve_project_root()
+repo_root_dir <- normalizePath(file.path(root_dir, "..", ".."), winslash = "/", mustWork = FALSE)
+rna_seq_root_dir <- file.path(repo_root_dir, "rna_seq", "testis")
+atac_root_dir <- file.path(repo_root_dir, "atac", "liver")
+reads_info_path <- file.path(root_dir, "01rawdata", "reads_info.txt")
+
+config <- list(
+  # 路径设置
+  work_dir     = root_dir,
+  ref_base_dir = file.path(repo_root_dir, "reference", "GRCm39"),
+  input_rdata  = "04methykit/CpG.RData",
+  gtf_file     = file.path(repo_root_dir, "reference", "GRCm39", "Mus_musculus.GRCm39.115.gtf"),
+  cpg_island_file = file.path(repo_root_dir, "reference", "GRCm39", "mm39_cpgIslandExt.txt.gz"),
+  repeatmasker_file = file.path(repo_root_dir, "reference", "GRCm39", "mm39_rmsk.txt.gz"),
+
+  # 外部数据路径
+  rna_seq_file  = file.path(rna_seq_root_dir, "4.DE_analysis", "DE_results"),
+  rna_kegg_file = file.path(rna_seq_root_dir, "result", "06_enrichment", "01_all", "tables", "6_1_KEGG_ORA_results.csv"),
+  wgbs_kegg_file = "result/5_enrichment/tables/1/kegg_enrichment_results.csv",
+
+  # ATAC-seq 数据路径 (可选，如不存在则跳过)
+  atac_peak_dir = file.path(atac_root_dir, "result"),
+  atac_diff_dir = file.path(atac_root_dir, "4.Differential_binding"),
+
+  # 样本分组定义
+  group1_name  = NULL,
+  group2_name  = NULL,
+  group1_idx   = integer(),
+  group2_idx   = integer(),
+
+  # DMR calling 阈值
+  # 当前口径：
+  # 1. 显著 CpG 位点占比 >= 50%
+  # 2. 区域长度 >= 50 bp
+  # 3. 区域内至少 5 个 CpG
+  # 4. group2 - group1 甲基化差异绝对值 >= 0.10
+  dmr_p_threshold = 0.05,
+  dmr_pct_sig = 0.5,
+  dmr_minlen = 50,
+  dmr_minCG = 5,
+  dmr_delta = 0.10,
+  dss_smoothing = TRUE,
+  dss_smoothing_span = 500L,
+  dss_ncores = as.integer(Sys.getenv("WGBS_DSS_NCORES", unset = "4")),
+  dmr_dis_merge = 50L,
+
+  # 稳健性与交叉验证
+  dmr_sensitivity_delta = c(0.05, 0.10, 0.15),
+  dmr_sensitivity_pct_sig = c(0.3, 0.5, 0.7),
+  dmr_sensitivity_minCG = c(3, 5, 10),
+  run_dmrseq_crosscheck = !identical(Sys.getenv("WGBS_SKIP_DMRSEQ", unset = ""), "1"),
+  dmrseq_max_permutations = as.integer(Sys.getenv("WGBS_DMRSEQ_MAX_PERMUTATIONS", unset = "20")),
+
+  # 下游展示/筛选阈值
+  # 当前继续保留既有 pvalue < 0.05 结果口径，避免改变已产出的分析结论。
+  # 严格解读或投稿时建议同步检查 RNA padj < 0.05，富集结果优先报告 p.adjust/qvalue < 0.05。
+  rna_p_threshold = 0.05,
+  rna_p_adjust_threshold = 0.05,
+  rna_log2fc_threshold = 0.58,
+  multiomics_methyl_delta = 0.10,
+  cgi_diff_methyl_pct = 15L,
+  enrichment_p_threshold = 0.05,
+  enrichment_adjust_threshold = 0.05,
+  enrichment_top_n_kegg = 20L,
+  enrichment_top_n_go = 15L,
+  enrichment_goplot_top_n = 10L,
+  enrichment_cnet_show_category = 5L,
+  enrichment_tree_show_category = 15L,
+  enrichment_theme_regex = "metabolic|metabolism|insulin",
+  enrichment_theme_quadrants = c("Hypo-Up", "Hyper-Down"),
+
+  # 区域定义与可视化窗口
+  promoter_upstream = 2000L,
+  promoter_downstream = 2000L,
+  sperm_promoter_upstream = 2000L,
+  sperm_promoter_downstream = 500L,
+  sperm_icr_file = file.path(root_dir, "rmd", "resources", "mouse_icr_regions.tsv"),
+  spermatogenesis_gene_file = file.path(root_dir, "rmd", "resources", "spermatogenesis_genes.tsv"),
+  cgi_shore_width = 2000L,
+  cgi_shelf_width = 2000L,
+  genome_context_upstream_width = 2000L,
+  genome_context_sample_downsample_n = 5000L,
+  qc_corr_max_sites = as.integer(Sys.getenv("WGBS_QC_CORR_MAX_SITES", unset = "500000")),
+  qc_corr_seed = 20260520L,
+  browser_gene_flank = 20000L,
+  browser_dmr_flank = 5000L,
+
+  # 计算量较大的可视化/功能模块参数
+  bsmooth_primary_ns = 70L,
+  bsmooth_primary_h = 1000L,
+  bsmooth_fallback_ns = 50L,
+  bsmooth_fallback_h = 2000L,
+  motif_top_n = 500L,
+  motif_background_seed = 20260520L,
+  repeatmasker_candidates = c(
+    "mm39_rmsk.txt.gz",
+    "mm39_rmsk.txt",
+    "rmsk.txt",
+    "rmsk.txt.gz",
+    "repeatmasker.txt",
+    "repeatmasker.txt.gz"
+  )
+)
+
+# 设置工作目录
+if(dir.exists(config$work_dir)) {
+  setwd(config$work_dir)
+  message("\u2705 工作目录设置完成: ", getwd())
+} else {
+  stop("\u274c 工作目录不存在: ", config$work_dir)
+}
+
+if(!file.exists(reads_info_path)) {
+  stop("❌ 未找到 01rawdata/reads_info.txt: ", reads_info_path)
+}
+```
+
+```{r}
+# ==============================================================================
+# Stage 2 结构总览
+# 3. 读取 stage1 cache 并按需恢复大对象
+# 4. 功能富集与 GSEA
+# 5. 全局基因组上下文
+# 6. 特定区域与调控注释
+# 7. 多组学联合分析
+# 8. DEG-focused 甲基化分析
+# 9. 轨道导出与代表性位点浏览图
+# ==============================================================================
+# ==============================================================================
+# 2. 通用配置与辅助函数 (Shared Helpers)
+# ==============================================================================
+# 这一节和 stage1 共用同一套 helper 逻辑，保证方向、主染色体过滤、配色和输出格式完全一致。
+# 这样即使 stage2 单独运行，也不会因为 helper 口径漂移而得到不同结果。
+
+first_existing_col <- function(df, candidates) {
+  hits <- candidates[candidates %in% colnames(df)]
+  if(length(hits) == 0) return(NA_character_)
+  hits[1]
+}
+
+`%||%` <- function(x, y) {
+  if(is.null(x)) y else x
+}
+
+safe_neglog10 <- function(x) {
+  -log10(pmax(as.numeric(x), .Machine$double.xmin))
+}
+
+slice_max_abs <- function(df, value_col) {
+  if(nrow(df) == 0) return(df)
+  df %>% slice_max(order_by = abs(.data[[value_col]]), n = 1, with_ties = FALSE)
+}
+
+resolve_reads_path <- function(path_value, root_dir) {
+  path_value <- trimws(as.character(path_value))
+  if(!nzchar(path_value)) return(NA_character_)
+  if(grepl("^/", path_value)) {
+    normalizePath(path_value, winslash = "/", mustWork = FALSE)
+  } else {
+    normalizePath(file.path(root_dir, path_value), winslash = "/", mustWork = FALSE)
+  }
+}
+
+read_reads_info <- function(path, root_dir) {
+  if(!file.exists(path)) {
+    stop("未找到 reads_info.txt: ", path)
+  }
+
+  info <- read.delim(
+    path,
+    header = TRUE,
+    sep = "\t",
+    stringsAsFactors = FALSE,
+    check.names = FALSE
+  )
+
+  if(!("sample" %in% colnames(info))) stop("reads_info.txt 缺少 sample 列")
+  if(!("group" %in% colnames(info))) stop("reads_info.txt 缺少 group 列")
+
+  if(!("raw_fq1" %in% colnames(info)) && "fq1" %in% colnames(info)) {
+    info$raw_fq1 <- info$fq1
+  }
+  if(!("raw_fq2" %in% colnames(info)) && "fq2" %in% colnames(info)) {
+    info$raw_fq2 <- info$fq2
+  }
+  if(!all(c("raw_fq1", "raw_fq2") %in% colnames(info))) {
+    stop("reads_info.txt 缺少 raw_fq1/raw_fq2 列")
+  }
+
+  trim_cols <- intersect(c("group_stage", "sample", "group", "stage", "raw_fq1", "raw_fq2"), colnames(info))
+  for(col_name in trim_cols) {
+    info[[col_name]] <- trimws(as.character(info[[col_name]]))
+  }
+
+  if(!("stage" %in% colnames(info))) {
+    if("group_stage" %in% colnames(info) && all(grepl("sperm$", info$group_stage, ignore.case = TRUE))) {
+      info$stage <- "sperm"
+    } else {
+      info$stage <- "sperm"
+    }
+  }
+  if(!("group_stage" %in% colnames(info))) {
+    info$group_stage <- paste0(info$group, info$stage)
+  }
+
+  info <- info %>%
+    filter(nzchar(sample) | nzchar(group) | nzchar(raw_fq1) | nzchar(raw_fq2))
+
+  if(any(!nzchar(info$sample))) stop("reads_info.txt 中存在空 sample")
+  if(any(!nzchar(info$group))) stop("reads_info.txt 中存在空 group")
+  if(any(!nzchar(info$raw_fq1) | !nzchar(info$raw_fq2))) {
+    stop("reads_info.txt 中存在缺失 raw_fq1/raw_fq2 的样本")
+  }
+  if(anyDuplicated(info$sample)) {
+    dup_samples <- unique(info$sample[duplicated(info$sample)])
+    stop("reads_info.txt 中存在重复 sample: ", paste(dup_samples, collapse = ", "))
+  }
+
+  info$raw_fq1_resolved <- vapply(info$raw_fq1, resolve_reads_path, character(1), root_dir = root_dir)
+  info$raw_fq2_resolved <- vapply(info$raw_fq2, resolve_reads_path, character(1), root_dir = root_dir)
+
+  group_levels <- unique(info$group)
+  if(length(group_levels) != 2) {
+    stop("reads_info.txt 必须恰好包含两个分组，当前得到: ", paste(group_levels, collapse = ", "))
+  }
+  if(any(vapply(group_levels, function(group_name) sum(info$group == group_name), integer(1)) == 0L)) {
+    stop("reads_info.txt 中存在没有样本的分组")
+  }
+
+  rownames(info) <- info$sample
+  info
+}
+
+ensure_step_dirs <- function(...) {
+  dirs <- unique(unlist(list(...), use.names = FALSE))
+  dirs <- dirs[!is.na(dirs) & nzchar(dirs)]
+  invisible(lapply(dirs, dir.create, recursive = TRUE, showWarnings = FALSE))
+}
+
+standardize_chr_style <- function(chr_vec, target_has_chr = TRUE) {
+  chr_vec <- as.character(chr_vec)
+  if(target_has_chr) {
+    chr_vec <- ifelse(grepl("^chr", chr_vec), chr_vec, paste0("chr", chr_vec))
+  } else {
+    chr_vec <- sub("^chr", "", chr_vec)
+  }
+  chr_vec
+}
+
+mouse_main_chr_levels <- function(target_has_chr = TRUE) {
+  chr_levels <- c(as.character(1:19), "X", "Y")
+  if(target_has_chr) paste0("chr", chr_levels) else chr_levels
+}
+
+get_mouse_main_chr_sizes <- function(target_has_chr = TRUE) {
+  chr_sizes <- data.frame(
+    chr = names(seqlengths(BSgenome.Mmusculus.UCSC.mm39)),
+    chr_length = as.numeric(seqlengths(BSgenome.Mmusculus.UCSC.mm39))
+  ) %>%
+    filter(!is.na(chr_length), chr %in% mouse_main_chr_levels(TRUE)) %>%
+    mutate(chr = if(target_has_chr) chr else sub("^chr", "", chr))
+
+  chr_sizes$chr <- factor(chr_sizes$chr, levels = mouse_main_chr_levels(target_has_chr))
+  chr_sizes %>% arrange(chr) %>% mutate(chr = as.character(chr))
+}
+
+strip_chr_prefix <- function(chr_vec) {
+  sub("^chr", "", as.character(chr_vec))
+}
+
+get_txdb_sqlite_paths <- function(gtf_file) {
+  full_sqlite <- paste0(gtf_file, ".sqlite")
+  list(
+    full = full_sqlite,
+    main = sub("\\.sqlite$", ".mainchr.sqlite", full_sqlite)
+  )
+}
+
+filter_df_to_main_chr <- function(df, chr_col = "chr") {
+  if(nrow(df) == 0 || !(chr_col %in% colnames(df))) return(df)
+  target_has_chr <- any(grepl("^chr", as.character(df[[chr_col]])))
+  keep_levels <- mouse_main_chr_levels(target_has_chr = target_has_chr)
+  df[[chr_col]] <- standardize_chr_style(df[[chr_col]], target_has_chr = target_has_chr)
+  df[df[[chr_col]] %in% keep_levels & !is.na(df[[chr_col]]), , drop = FALSE]
+}
+
+filter_gr_to_main_chr <- function(gr) {
+  if(length(gr) == 0) return(gr)
+  target_has_chr <- any(grepl("^chr", as.character(seqnames(gr))))
+  keep_levels <- intersect(seqlevels(gr), mouse_main_chr_levels(target_has_chr = target_has_chr))
+  if(length(keep_levels) == 0) return(gr[0])
+  GenomeInfoDb::keepSeqlevels(gr, value = keep_levels, pruning.mode = "coarse")
+}
+
+align_gr_to_target_style <- function(gr, target_gr = NULL) {
+  if(is.null(gr) || length(gr) == 0) return(gr)
+  if(!is.null(target_gr) && length(target_gr) > 0) {
+    target_has_chr <- any(grepl("^chr", as.character(seqnames(target_gr))))
+    current_has_chr <- any(grepl("^chr", as.character(seqnames(gr))))
+    if(target_has_chr != current_has_chr) {
+      seqlevels(gr) <- standardize_chr_style(seqlevels(gr), target_has_chr = target_has_chr)
+    }
+    gr <- tryCatch({
+      seqlevelsStyle(gr) <- seqlevelsStyle(target_gr)[1]
+      gr
+    }, error = function(e) gr)
+  }
+  filter_gr_to_main_chr(gr)
+}
+
+reference_missing_message <- function(label, path, source_url = NULL) {
+  msg <- paste0(
+    "未找到 ", label, " 注释文件: ", path,
+    "。Rmd 渲染阶段不再自动联网下载参考文件，请先在 reference-prep 或 shell 流程中准备好该文件。"
+  )
+  if(!is.null(source_url) && nzchar(source_url)) {
+    msg <- paste0(msg, " 推荐来源: ", source_url)
+  }
+  msg
+}
+
+read_ucsc_cpg_island_gr <- function(config_arg = config, target_gr = NULL, required = FALSE) {
+  cgi_file <- config_arg$cpg_island_file %||% file.path(config_arg$ref_base_dir, "mm39_cpgIslandExt.txt.gz")
+  if(!file.exists(cgi_file)) {
+    msg <- reference_missing_message(
+      "CpG Island",
+      cgi_file,
+      "https://hgdownload.soe.ucsc.edu/goldenPath/mm39/database/cpgIslandExt.txt.gz"
+    )
+    if(required) stop(msg, call. = FALSE)
+    message("   ⚠️ ", msg)
+    return(NULL)
+  }
+
+  cgi_raw <- readr::read_tsv(cgi_file, col_names = FALSE, show_col_types = FALSE)
+  if(ncol(cgi_raw) < 4) {
+    stop("CpG Island 注释列数不足，期望 UCSC cpgIslandExt 格式: ", cgi_file, call. = FALSE)
+  }
+
+  gr_island <- GRanges(
+    seqnames = cgi_raw[[2]],
+    ranges = IRanges(start = cgi_raw[[3]] + 1, end = cgi_raw[[4]])
+  )
+  strand(gr_island) <- "*"
+  align_gr_to_target_style(gr_island, target_gr = target_gr)
+}
+
+build_cgi_context_regions <- function(gr_island, config_arg = config, target_gr = NULL) {
+  gr_island <- align_gr_to_target_style(gr_island, target_gr = target_gr)
+  gr_n_shore <- flank(gr_island, width = config_arg$cgi_shore_width, start = TRUE)
+  gr_n_shelf <- flank(gr_n_shore, width = config_arg$cgi_shelf_width, start = TRUE)
+  gr_s_shore <- flank(gr_island, width = config_arg$cgi_shore_width, start = FALSE)
+  gr_s_shelf <- flank(gr_s_shore, width = config_arg$cgi_shelf_width, start = FALSE)
+
+  region_list_cgi <- list(
+    "N_Shelf" = gr_n_shelf,
+    "N_Shore" = gr_n_shore,
+    "Island" = gr_island,
+    "S_Shore" = gr_s_shore,
+    "S_Shelf" = gr_s_shelf
+  )
+  region_order <- names(region_list_cgi)
+  gr_all_cgi_context <- do.call(c, unname(region_list_cgi))
+  mcols(gr_all_cgi_context)$context <- rep(region_order, lengths(region_list_cgi))
+
+  list(
+    gr_island = gr_island,
+    gr_n_shore = gr_n_shore,
+    gr_n_shelf = gr_n_shelf,
+    gr_s_shore = gr_s_shore,
+    gr_s_shelf = gr_s_shelf,
+    region_list_cgi = region_list_cgi,
+    region_order_cgi = region_order,
+    gr_all_cgi_context = gr_all_cgi_context
+  )
+}
+
+get_cgi_context_resources <- function(config_arg = config, target_gr = NULL, required = FALSE) {
+  gr_island <- read_ucsc_cpg_island_gr(config_arg, target_gr = target_gr, required = required)
+  if(is.null(gr_island) || length(gr_island) == 0) {
+    if(required) stop("CpG Island 注释为空，无法继续。", call. = FALSE)
+    return(NULL)
+  }
+  c(
+    list(cgi_file = config_arg$cpg_island_file),
+    build_cgi_context_regions(gr_island, config_arg = config_arg, target_gr = target_gr)
+  )
+}
+
+resolve_repeatmasker_file <- function(config_arg = config, required = FALSE) {
+  candidates <- unique(c(
+    config_arg$repeatmasker_file,
+    file.path(config_arg$ref_base_dir, config_arg$repeatmasker_candidates)
+  ))
+  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
+  hit <- candidates[file.exists(candidates)]
+  if(length(hit) > 0) return(hit[[1]])
+
+  msg <- reference_missing_message(
+    "RepeatMasker",
+    paste(candidates, collapse = " 或 "),
+    "https://hgdownload.soe.ucsc.edu/goldenPath/mm39/database/rmsk.txt.gz"
+  )
+  if(required) stop(msg, call. = FALSE)
+  message("   ⚠️ ", msg)
+  NA_character_
+}
+
+filter_txdb_to_main_chr <- function(txdb) {
+  txdb_has_chr <- any(grepl("^chr", seqlevels(txdb)))
+  keep_levels <- intersect(seqlevels(txdb), mouse_main_chr_levels(target_has_chr = txdb_has_chr))
+  GenomeInfoDb::keepSeqlevels(txdb, value = keep_levels, pruning.mode = "coarse")
+}
+
+load_main_chr_txdb <- function(gtf_file) {
+  if(!file.exists(gtf_file)) stop("❌ GTF 文件未找到: ", gtf_file)
+  txdb_paths <- get_txdb_sqlite_paths(gtf_file)
+  if(file.exists(txdb_paths$main)) {
+    return(loadDb(txdb_paths$main))
+  }
+  if(file.exists(txdb_paths$full)) {
+    txdb_raw <- loadDb(txdb_paths$full)
+  } else {
+    message("   正在从 GTF 构建 TxDb (首次运行较慢)...")
+    txdb_raw <- makeTxDbFromGFF(gtf_file)
+    saveDb(txdb_raw, txdb_paths$full)
+  }
+  txdb_main <- filter_txdb_to_main_chr(txdb_raw)
+  saveDb(txdb_main, txdb_paths$main)
+  txdb_main
+}
+
+sample_group_factor <- function(sample_ids, config) {
+  group_vec <- rep(NA_character_, length(sample_ids))
+  group_vec[config$group1_idx] <- config$group1_name
+  group_vec[config$group2_idx] <- config$group2_name
+  factor(group_vec, levels = c(config$group1_name, config$group2_name))
+}
+
+simplify_repeat_class <- function(rep_class, rep_family = NA_character_) {
+  rep_class <- as.character(rep_class)
+  rep_family <- as.character(rep_family)
+  dplyr::case_when(
+    rep_class %in% c("LINE", "SINE", "LTR", "DNA") ~ rep_class,
+    rep_class %in% c("Simple_repeat", "Low_complexity", "Satellite") ~ rep_class,
+    rep_family %in% c("LINE", "SINE", "LTR", "DNA") ~ rep_family,
+    TRUE ~ "Other"
+  )
+}
+
+plot_preview_dpi <- 220
+
+pdf_preview_png_paths <- function(pdf_file) {
+  png_base <- sub("(?i)\\.pdf$", "", pdf_file, perl = TRUE)
+  c(paste0(png_base, ".png"), Sys.glob(paste0(png_base, "_page_*.png")))
+}
+
+save_pdf_preview_pngs <- function(pdf_file, dpi = plot_preview_dpi) {
+  if(is.null(pdf_file) || !file.exists(pdf_file) || !grepl("\\.pdf$", pdf_file, ignore.case = TRUE)) {
+    return(invisible(NULL))
+  }
+  gs_bin <- Sys.which("gs")
+  if(identical(gs_bin, "")) {
+    message("Ghostscript 未找到，跳过 PNG 预览导出: ", pdf_file)
+    return(invisible(NULL))
+  }
+
+  png_base <- sub("(?i)\\.pdf$", "", pdf_file, perl = TRUE)
+  png_single <- paste0(png_base, ".png")
+  png_pattern <- paste0(png_base, "_page_%02d.png")
+  unlink(pdf_preview_png_paths(pdf_file), force = TRUE)
+
+  suppressWarnings(
+    system2(
+      gs_bin,
+      args = c(
+        "-dSAFER", "-dBATCH", "-dNOPAUSE",
+        "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4",
+        "-sDEVICE=png16m",
+        paste0("-r", dpi),
+        paste0("-sOutputFile=", png_pattern),
+        pdf_file
+      ),
+      stdout = TRUE, stderr = TRUE
+    )
+  )
+
+  png_pages <- sort(Sys.glob(paste0(png_base, "_page_*.png")))
+  if(length(png_pages) == 1) {
+    file.rename(png_pages, png_single)
+    return(invisible(png_single))
+  }
+  invisible(png_pages)
+}
+
+.tracked_pdf_devices <- new.env(parent = emptyenv())
+.tracked_pdf_devices$files <- list()
+
+cairo_pdf <- function(filename, width = 7, height = 7, ...) {
+  dir.create(dirname(filename), recursive = TRUE, showWarnings = FALSE)
+  grDevices::cairo_pdf(filename, width = width, height = height, ...)
+  .tracked_pdf_devices$files[[as.character(grDevices::dev.cur())]] <- filename
+  invisible(grDevices::dev.cur())
+}
+
+dev.off <- function(which = grDevices::dev.cur()) {
+  which_num <- as.integer(which)
+  dev_key <- as.character(which_num)
+  pdf_file <- .tracked_pdf_devices$files[[dev_key]]
+  result <- grDevices::dev.off(which = which)
+  if(!is.null(pdf_file)) {
+    .tracked_pdf_devices$files[[dev_key]] <- NULL
+    tryCatch(
+      save_pdf_preview_pngs(pdf_file),
+      error = function(e) message("PNG 预览导出失败: ", basename(pdf_file), " - ", e$message)
+    )
+  }
+  invisible(result)
+}
+
+ggsave <- function(filename, plot = ggplot2::last_plot(), device = grDevices::cairo_pdf, ...) {
+  dir.create(dirname(filename), recursive = TRUE, showWarnings = FALSE)
+  if(identical(device, cairo_pdf)) {
+    device <- grDevices::cairo_pdf
+  }
+  result <- ggplot2::ggsave(filename = filename, plot = plot, device = device, ...)
+  if(grepl("\\.pdf$", filename, ignore.case = TRUE)) {
+    tryCatch(
+      save_pdf_preview_pngs(filename),
+      error = function(e) message("PNG 预览导出失败: ", basename(filename), " - ", e$message)
+    )
+  }
+  invisible(result)
+}
+
+safe_granges_to_df <- function(gr) {
+  if(is.null(gr) || length(gr) == 0) return(tibble())
+  if(!methods::is(gr, "GenomicRanges")) {
+    return(as_tibble(as.data.frame(gr)))
+  }
+
+  base_df <- tibble(
+    seqnames = as.character(seqnames(gr)),
+    start = start(gr),
+    end = end(gr),
+    width = width(gr),
+    strand = as.character(strand(gr))
+  )
+
+  meta_df <- S4Vectors::mcols(gr)
+  if(length(meta_df) == 0) return(base_df)
+
+  meta_list <- list()
+  for(nm in names(meta_df)) {
+    col <- meta_df[[nm]]
+
+    if(is.matrix(col) || is.data.frame(col)) {
+      col_mat <- as.matrix(col)
+      if(ncol(col_mat) == 1) {
+        meta_list[[nm]] <- as.vector(col_mat[, 1])
+      } else {
+        for(j in seq_len(ncol(col_mat))) {
+          sub_nm <- colnames(col_mat)[j]
+          if(is.null(sub_nm) || is.na(sub_nm) || sub_nm == "") sub_nm <- paste0("V", j)
+          meta_list[[paste0(nm, "_", sub_nm)]] <- as.vector(col_mat[, j])
+        }
+      }
+    } else if(is(col, "Rle")) {
+      meta_list[[nm]] <- as.vector(col)
+    } else if(is.list(col) && !is.atomic(col)) {
+      meta_list[[nm]] <- vapply(col, function(x) {
+        if(length(x) == 0) return(NA_character_)
+        paste(as.character(x), collapse = ";")
+      }, character(1))
+    } else {
+      meta_list[[nm]] <- as.vector(col)
+    }
+  }
+
+  bind_cols(base_df, as_tibble(meta_list))
+}
+
+draw_pheatmap_pdf <- function(mat, out_pdf, width = 10, height = 8,
+                              color = viz_pal$heat_compare, title = "",
+                              cluster_rows = nrow(mat) > 1, cluster_cols = ncol(mat) > 1,
+                              fontsize_row = NULL, fontsize_col = 10) {
+  if(is.null(mat) || length(mat) == 0 || nrow(mat) == 0 || ncol(mat) == 0) {
+    return(invisible(FALSE))
+  }
+  mat <- as.matrix(mat)
+  suppressWarnings(storage.mode(mat) <- "numeric")
+  mat[is.infinite(mat)] <- NA_real_
+  keep_rows <- rowSums(is.finite(mat)) > 0
+  keep_cols <- colSums(is.finite(mat)) > 0
+  if(!all(keep_rows) || !all(keep_cols)) {
+    mat <- mat[keep_rows, keep_cols, drop = FALSE]
+  }
+  if(nrow(mat) == 0 || ncol(mat) == 0) {
+    message("Heatmap skipped because no finite values remain: ", out_pdf)
+    return(invisible(FALSE))
+  }
+
+  cluster_mat <- mat
+  bad_vals <- !is.finite(cluster_mat)
+  if(any(bad_vals)) {
+    row_medians <- apply(cluster_mat, 1, function(x) {
+      finite_x <- x[is.finite(x)]
+      if(length(finite_x) == 0) NA_real_ else stats::median(finite_x)
+    })
+    cluster_mat[bad_vals] <- row_medians[row(cluster_mat)[bad_vals]]
+  }
+  if(any(!is.finite(cluster_mat))) {
+    global_median <- stats::median(cluster_mat[is.finite(cluster_mat)], na.rm = TRUE)
+    if(!is.finite(global_median)) global_median <- 0
+    cluster_mat[!is.finite(cluster_mat)] <- global_median
+  }
+  mat_display <- mat
+  display_bad <- !is.finite(mat_display)
+  if(any(display_bad)) {
+    mat_display[display_bad] <- cluster_mat[display_bad]
+  }
+
+  cluster_rows_arg <- cluster_rows
+  if(isTRUE(cluster_rows) && nrow(mat) > 1) {
+    cluster_rows_arg <- tryCatch(
+      stats::hclust(stats::dist(cluster_mat)),
+      error = function(e) {
+        message("Heatmap row clustering skipped for ", basename(out_pdf), ": ", e$message)
+        FALSE
+      }
+    )
+  } else if(isTRUE(cluster_rows)) {
+    cluster_rows_arg <- FALSE
+  }
+
+  cluster_cols_arg <- cluster_cols
+  if(isTRUE(cluster_cols) && ncol(mat) > 1) {
+    cluster_cols_arg <- tryCatch(
+      stats::hclust(stats::dist(t(cluster_mat))),
+      error = function(e) {
+        message("Heatmap column clustering skipped for ", basename(out_pdf), ": ", e$message)
+        FALSE
+      }
+    )
+  } else if(isTRUE(cluster_cols)) {
+    cluster_cols_arg <- FALSE
+  }
+
+  if(is.null(fontsize_row)) {
+    fontsize_row <- if(nrow(mat) > 80) 5 else if(nrow(mat) > 40) 6 else 8
+  }
+  dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+  # 显式使用 pheatmap 包，避免被 ComplexHeatmap::pheatmap 掩盖后忽略 filename/width/height。
+  pheatmap::pheatmap(
+    mat_display,
+    cluster_rows = cluster_rows_arg,
+    cluster_cols = cluster_cols_arg,
+    scale = "none",
+    color = color,
+    na_col = viz_pal$neutral_light,
+    main = title,
+    filename = out_pdf,
+    width = width,
+    height = height,
+    fontsize_row = fontsize_row,
+    fontsize_col = fontsize_col
+  )
+  tryCatch(
+    save_pdf_preview_pngs(out_pdf),
+    error = function(e) message("PNG 预览导出失败: ", basename(out_pdf), " - ", e$message)
+  )
+  invisible(TRUE)
+}
+
+draw_complex_heatmap_pdf <- function(ht, out_pdf, width = 10, height = 8) {
+  if(is.null(ht)) return(invisible(FALSE))
+  dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+  cairo_pdf(out_pdf, width = width, height = height)
+  on.exit(dev.off(), add = TRUE)
+  grid::grid.newpage()
+  ComplexHeatmap::draw(
+    ht,
+    newpage = FALSE,
+    heatmap_legend_side = "right",
+    annotation_legend_side = "right",
+    merge_legends = TRUE
+  )
+  invisible(TRUE)
+}
+
+save_enrichment_compare_heatmap <- function(df, context_col, out_pdf, out_csv = NULL,
+                                            title = "", top_n = 25, width = 10, height = 8,
+                                            value_col = "pvalue") {
+  if(is.null(df) || nrow(df) == 0 || !(context_col %in% colnames(df))) return(invisible(NULL))
+  if(!("Description" %in% colnames(df)) || !(value_col %in% colnames(df))) return(invisible(NULL))
+
+  heat_df <- df %>%
+    filter(!is.na(.data[[value_col]]), !is.na(Description), !is.na(.data[[context_col]])) %>%
+    mutate(logP = safe_neglog10(.data[[value_col]])) %>%
+    filter(is.finite(logP)) %>%
+    group_by(.data[[context_col]], Description) %>%
+    summarise(logP = max(logP, na.rm = TRUE), .groups = "drop") %>%
+    group_by(Description) %>%
+    summarise(max_logP = max(logP, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(max_logP)) %>%
+    slice_head(n = top_n) %>%
+    inner_join(df %>%
+                 filter(!is.na(.data[[value_col]]), !is.na(Description), !is.na(.data[[context_col]])) %>%
+                 mutate(logP = safe_neglog10(.data[[value_col]])) %>%
+                 filter(is.finite(logP)) %>%
+                 group_by(.data[[context_col]], Description) %>%
+                 summarise(logP = max(logP, na.rm = TRUE), .groups = "drop"),
+               by = "Description") %>%
+    select(-max_logP) %>%
+    distinct()
+
+  if(nrow(heat_df) == 0) return(invisible(NULL))
+
+  mat_df <- heat_df %>%
+    pivot_wider(names_from = all_of(context_col), values_from = logP, values_fill = 0)
+
+  mat <- as.matrix(mat_df[, setdiff(colnames(mat_df), "Description"), drop = FALSE])
+  rownames(mat) <- mat_df$Description
+
+  if(!is.null(out_csv)) {
+    write_csv(heat_df, out_csv)
+  }
+
+  tryCatch(
+    draw_pheatmap_pdf(
+      mat = mat,
+      out_pdf = out_pdf,
+      width = width,
+      height = height,
+      color = viz_pal$heat_compare,
+      title = title,
+      cluster_rows = nrow(mat) > 1,
+      cluster_cols = ncol(mat) > 1
+    ),
+    error = function(e) message("Compare heatmap error: ", e$message)
+  )
+
+  invisible(mat)
+}
+
+build_gsea_plots <- function(rank_vec, prefix, title_prefix, organism = "mmu", plot_prefix = NULL) {
+  rank_vec <- rank_vec[is.finite(rank_vec)]
+  rank_vec <- sort(rank_vec, decreasing = TRUE)
+  if(length(rank_vec) < 10) return(invisible(NULL))
+
+  gene_names <- names(rank_vec)
+  if(is.null(gene_names) || any(is.na(gene_names))) return(invisible(NULL))
+  if(is.null(plot_prefix)) {
+    plot_prefix <- sub("/tables/", "/plots/", prefix)
+  }
+  dir.create(dirname(prefix), recursive = TRUE, showWarnings = FALSE)
+  dir.create(dirname(plot_prefix), recursive = TRUE, showWarnings = FALSE)
+
+  message("   Running rank-based GSEA: ", title_prefix)
+
+  gsea_kegg <- tryCatch(
+    gseKEGG(geneList = rank_vec, organism = organism, pvalueCutoff = 1, verbose = FALSE),
+    error = function(e) NULL
+  )
+  gsea_go <- tryCatch(
+    gseGO(geneList = rank_vec, OrgDb = org.Mm.eg.db, keyType = "ENTREZID", ont = "BP",
+          pvalueCutoff = 1, verbose = FALSE),
+    error = function(e) NULL
+  )
+
+  if(!is.null(gsea_kegg) && nrow(as.data.frame(gsea_kegg)) > 0) {
+    write_csv(as.data.frame(gsea_kegg), paste0(prefix, "_KEGG_GSEA.csv"))
+    gsea_kegg@result <- gsea_kegg@result[gsea_kegg@result$pvalue < config$enrichment_p_threshold, ]
+    if(nrow(as.data.frame(gsea_kegg)) > 0) {
+      save_gsea_dotplot(gsea_kegg, paste0(plot_prefix, "_KEGG_GSEA_Dotplot.pdf"),
+                        paste0(title_prefix, " KEGG GSEA"), showCategory = 15)
+    }
+  }
+
+  if(!is.null(gsea_go) && nrow(as.data.frame(gsea_go)) > 0) {
+    write_csv(as.data.frame(gsea_go), paste0(prefix, "_GO_BP_GSEA.csv"))
+    gsea_go@result <- gsea_go@result[gsea_go@result$pvalue < config$enrichment_p_threshold, ]
+    if(nrow(as.data.frame(gsea_go)) > 0) {
+      save_gsea_dotplot(gsea_go, paste0(plot_prefix, "_GO_BP_GSEA_Dotplot.pdf"),
+                        paste0(title_prefix, " GO BP GSEA"), showCategory = 15)
+    }
+  }
+
+  invisible(list(go = gsea_go, kegg = gsea_kegg))
+}
+
+safe_granges_to_df <- function(gr) {
+  if(is.null(gr) || length(gr) == 0) return(tibble())
+  if(!methods::is(gr, "GenomicRanges")) {
+    return(as_tibble(as.data.frame(gr)))
+  }
+
+  base_df <- tibble(
+    seqnames = as.character(seqnames(gr)),
+    start = start(gr),
+    end = end(gr),
+    width = width(gr),
+    strand = as.character(strand(gr))
+  )
+
+  meta_df <- S4Vectors::mcols(gr)
+  if(length(meta_df) == 0) return(base_df)
+
+  meta_list <- list()
+  for(nm in names(meta_df)) {
+    col <- meta_df[[nm]]
+
+    if(is.matrix(col) || is.data.frame(col)) {
+      col_mat <- as.matrix(col)
+      if(ncol(col_mat) == 1) {
+        meta_list[[nm]] <- as.vector(col_mat[, 1])
+      } else {
+        for(j in seq_len(ncol(col_mat))) {
+          sub_nm <- colnames(col_mat)[j]
+          if(is.null(sub_nm) || is.na(sub_nm) || sub_nm == "") sub_nm <- paste0("V", j)
+          meta_list[[paste0(nm, "_", sub_nm)]] <- as.vector(col_mat[, j])
+        }
+      }
+    } else if(is(col, "Rle")) {
+      meta_list[[nm]] <- as.vector(col)
+    } else if(is.list(col) && !is.atomic(col)) {
+      meta_list[[nm]] <- vapply(col, function(x) {
+        if(length(x) == 0) return(NA_character_)
+        paste(as.character(x), collapse = ";")
+      }, character(1))
+    } else {
+      meta_list[[nm]] <- as.vector(col)
+    }
+  }
+
+  bind_cols(base_df, as_tibble(meta_list))
+}
+
+draw_pheatmap_pdf <- function(mat, out_pdf, width = 10, height = 8,
+                              color = viz_pal$heat_compare, title = "",
+                              cluster_rows = nrow(mat) > 1, cluster_cols = ncol(mat) > 1,
+                              fontsize_row = NULL, fontsize_col = 10) {
+  if(is.null(mat) || length(mat) == 0 || nrow(mat) == 0 || ncol(mat) == 0) {
+    return(invisible(FALSE))
+  }
+  if(is.null(fontsize_row)) {
+    fontsize_row <- if(nrow(mat) > 80) 5 else if(nrow(mat) > 40) 6 else 8
+  }
+  dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+  # 显式使用 pheatmap 包，避免被 ComplexHeatmap::pheatmap 掩盖后忽略 filename/width/height。
+  pheatmap::pheatmap(
+    mat,
+    cluster_rows = cluster_rows,
+    cluster_cols = cluster_cols,
+    scale = "none",
+    color = color,
+    main = title,
+    filename = out_pdf,
+    width = width,
+    height = height,
+    fontsize_row = fontsize_row,
+    fontsize_col = fontsize_col
+  )
+  tryCatch(
+    save_pdf_preview_pngs(out_pdf),
+    error = function(e) message("PNG 预览导出失败: ", basename(out_pdf), " - ", e$message)
+  )
+  invisible(TRUE)
+}
+
+draw_complex_heatmap_pdf <- function(ht, out_pdf, width = 10, height = 8) {
+  if(is.null(ht)) return(invisible(FALSE))
+  dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
+  cairo_pdf(out_pdf, width = width, height = height)
+  on.exit(dev.off(), add = TRUE)
+  grid::grid.newpage()
+  ComplexHeatmap::draw(
+    ht,
+    newpage = FALSE,
+    heatmap_legend_side = "right",
+    annotation_legend_side = "right",
+    merge_legends = TRUE
+  )
+  invisible(TRUE)
+}
+
+# ==============================================================================
+# 富集绘图统一 helper (配色对齐 rnapost.Rmd)
+# ==============================================================================
+
+resolve_named_colors <- function(levels_vec, palette_map, fallback_colors = NULL, default_color = "#D4D9DE") {
+  levels_vec <- unique(as.character(levels_vec))
+  levels_vec <- levels_vec[!is.na(levels_vec) & levels_vec != ""]
+  if(length(levels_vec) == 0) return(setNames(character(0), character(0)))
+
+  cols <- unname(palette_map[levels_vec])
+  names(cols) <- levels_vec
+  missing_idx <- is.na(cols)
+  if(any(missing_idx)) {
+    if(is.null(fallback_colors) || length(fallback_colors) == 0) {
+      cols[missing_idx] <- default_color
+    } else {
+      cols[missing_idx] <- rep(unname(fallback_colors), length.out = sum(missing_idx))
+    }
+  }
+  cols
+}
+
+resolve_enrichment_category_colors <- function(categories, analysis_type = c("GO", "ORA", "KEGG", "GSEA", "Reactome", "Hallmark")) {
+  analysis_type <- match.arg(analysis_type)
+  categories <- unique(as.character(categories))
+  categories <- categories[!is.na(categories) & categories != ""]
+  if (length(categories) == 0) return(setNames(character(0), character(0)))
+  go_circle_standard_colors <- c(
+    BP = unname(viz_pal$go_category["BP"]),
+    CC = unname(viz_pal$go_category["CC"]),
+    MF = unname(viz_pal$go_category["MF"]),
+    Metabolism = unname(viz_pal$accent["warm"]),
+    Signaling = unname(viz_pal$accent["teal"]),
+    Disease = unname(viz_pal$accent["peach"]),
+    Immune = unname(viz_pal$accent["green"]),
+    "Cellular Process" = unname(viz_pal$accent["yellow"]),
+    Transport = viz_pal$neutral_dark,
+    Development = unname(viz_pal$accent["yellow"]),
+    Stress = viz_pal$neutral_mid,
+    Mixed = viz_pal$neutral_dark,
+    GO = unname(viz_pal$go_category["CC"]),
+    KEGG = unname(viz_pal$accent["warm"]),
+    Reactome = unname(viz_pal$accent["purple"]),
+    Hallmark = unname(viz_pal$accent["teal"])
+  )
+  color_pool <- c(go_circle_standard_colors, viz_pal$accent, viz_pal$go_category,
+                  c(dark = viz_pal$neutral_dark, mid = viz_pal$neutral_mid, light = viz_pal$neutral_light))
+  resolve_named_colors(categories, color_pool, default_color = viz_pal$neutral_mid)
+}
+
+parse_ratio_value <- function(x) {
+  if (length(x) == 0 || is.na(x) || trimws(as.character(x)) == "") return(NA_real_)
+  ratio_parts <- strsplit(as.character(x), "/", fixed = TRUE)[[1]]
+  if (length(ratio_parts) == 2) {
+    numerator <- suppressWarnings(as.numeric(ratio_parts[[1]]))
+    denominator <- suppressWarnings(as.numeric(ratio_parts[[2]]))
+    if (is.finite(numerator) && is.finite(denominator) && denominator > 0) return(numerator / denominator)
+  }
+  suppressWarnings(as.numeric(x))[1]
+}
+
+build_ora_plot_df <- function(ora_df, top_n = 15, facet_col = NULL) {
+  if (is.null(ora_df) || nrow(ora_df) == 0) return(data.frame())
+  plot_df <- as.data.frame(ora_df, stringsAsFactors = FALSE)
+  plot_df$Description <- as.character(plot_df$Description)
+  plot_df$pvalue <- suppressWarnings(as.numeric(plot_df$pvalue))
+  plot_df$Count <- suppressWarnings(as.numeric(plot_df$Count))
+  plot_df$ratio_value <- if ("GeneRatio" %in% colnames(plot_df)) {
+    vapply(plot_df$GeneRatio, parse_ratio_value, numeric(1))
+  } else {
+    plot_df$Count
+  }
+  plot_df$ratio_value[!is.finite(plot_df$ratio_value)] <- plot_df$Count[!is.finite(plot_df$ratio_value)]
+  plot_df$size_value <- dplyr::coalesce(plot_df$Count, plot_df$ratio_value, 1)
+  plot_df$neg_log10_p <- -log10(dplyr::coalesce(plot_df$pvalue, 1) + 1e-300)
+
+  if (!is.null(facet_col) && facet_col %in% colnames(plot_df)) {
+    plot_df <- plot_df %>%
+      group_by(.data[[facet_col]]) %>%
+      arrange(pvalue, desc(ratio_value), .by_group = TRUE) %>%
+      slice_head(n = top_n) %>%
+      ungroup()
+  } else {
+    plot_df <- plot_df %>%
+      arrange(pvalue, desc(ratio_value)) %>%
+      slice_head(n = min(top_n, nrow(plot_df)))
+  }
+
+  plot_df %>% mutate(Description = factor(Description, levels = rev(unique(Description))))
+}
+
+ora_axis_label <- function(ora_df) {
+  if (!is.null(ora_df) && "GeneRatio" %in% colnames(ora_df)) "Gene ratio" else "Gene count"
+}
+
+# 统一 ORA barplot：p 值渐变 + theme_wgbs_bw
+save_ora_barplot <- function(ora_df, primary, title_prefix, top_n = 15, facet_col = NULL) {
+  plot_df <- build_ora_plot_df(ora_df, top_n = top_n, facet_col = facet_col)
+  if (nrow(plot_df) == 0) return(invisible(NULL))
+
+  p <- ggplot(plot_df, aes(x = Description, y = ratio_value, fill = neg_log10_p)) +
+    geom_col(width = 0.75, alpha = 0.92) +
+    scale_fill_wgbs_ryb()
+
+  if (!is.null(facet_col) && facet_col %in% colnames(plot_df)) {
+    p <- p + facet_grid(stats::as.formula(paste(facet_col, "~ .")), scales = "free_y", space = "free_y")
+  }
+
+  p <- p +
+    coord_flip() +
+    labs(title = title_prefix, x = NULL, y = ora_axis_label(ora_df), fill = "-log10(PValue)") +
+    theme_wgbs_bw(base_size = 10) +
+    theme(panel.grid.major.y = element_blank())
+
+  ggsave(primary, plot = p, width = 10, height = 8, device = cairo_pdf)
+}
+
+# 统一 ORA dotplot：p 值渐变 + theme_wgbs_bw
+save_ora_dotplot <- function(ora_df, primary, title_prefix, top_n = 15, facet_col = NULL) {
+  plot_df <- build_ora_plot_df(ora_df, top_n = top_n, facet_col = facet_col)
+  if (nrow(plot_df) == 0) return(invisible(NULL))
+
+  p <- ggplot(plot_df, aes(x = ratio_value, y = Description, size = size_value, color = neg_log10_p)) +
+    geom_point(alpha = 0.88) +
+    scale_color_wgbs_ryb() +
+    labs(title = title_prefix, x = ora_axis_label(ora_df), y = NULL, size = "Gene count", color = "-log10(PValue)") +
+    theme_wgbs_bw(base_size = 10)
+
+  if (!is.null(facet_col) && facet_col %in% colnames(plot_df)) {
+    p <- p + facet_grid(stats::as.formula(paste(facet_col, "~ .")), scales = "free_y", space = "free_y")
+  }
+
+  ggsave(primary, plot = p, width = 10, height = 8, device = cairo_pdf)
+}
+
+# 统一 enrichment treeplot：统一 pvalue 渐变配色 + theme_wgbs_bw
+save_enrichment_treeplot <- function(enrich_obj, primary, title_prefix, showCategory = 15) {
+  if (is.null(enrich_obj) || nrow(as.data.frame(enrich_obj)) == 0) return(invisible(NULL))
+  enrich_obj <- tryCatch(pairwise_termsim(enrich_obj), error = function(e) {
+    message("treeplot pairwise_termsim skipped: ", e$message)
+    NULL
+  })
+  if(is.null(enrich_obj)) return(invisible(NULL))
+  p <- tryCatch({
+    tp <- enrichplot::treeplot(enrich_obj, showCategory = showCategory)
+    # treeplot 内部用 pvalue 映射颜色，用统一渐变替换默认色
+    tp + scale_color_wgbs_ryb(guide = guide_colorbar(title = "-log10(pvalue)")) +
+      labs(title = title_prefix) +
+      theme_wgbs_bw(base_size = 10)
+  }, error = function(e) {
+    message("treeplot skipped: ", e$message)
+    NULL
+  })
+  if(is.null(p)) return(invisible(NULL))
+  ggsave(primary, plot = p, width = 12, height = 10, device = cairo_pdf)
+}
+
+# 统一 enrichment cnetplot
+save_enrichment_cnetplot <- function(enrich_obj, geneList, primary, title_prefix, showCategory = 5) {
+  if (is.null(enrich_obj) || nrow(as.data.frame(enrich_obj)) < showCategory) return(invisible(NULL))
+  tryCatch({
+    p <- cnetplot(enrich_obj, foldChange = geneList, showCategory = showCategory, node_label = "category") +
+      labs(title = title_prefix) +
+      theme_wgbs_bw(base_size = 10)
+    ggsave(primary, plot = p, width = 10, height = 8, device = cairo_pdf)
+  }, error = function(e) message("cnetplot error: ", e$message))
+}
+
+# GOplot 输入数据构建 (复用 rnapost 逻辑)
+build_goplot_inputs <- function(enrich_df, geneList, category_label = "BP", top_n = 10) {
+  if (is.null(enrich_df) || nrow(enrich_df) == 0) return(NULL)
+
+  # 如果有 ONTOLOGY 列，按实际 ontology 映射 category；否则用 category_label
+  if ("ONTOLOGY" %in% colnames(enrich_df)) {
+    enrich_df$category <- enrich_df$ONTOLOGY
+  } else {
+    enrich_df$category <- category_label
+  }
+
+  enrich_top <- enrich_df %>%
+    arrange(pvalue) %>%
+    slice_head(n = top_n) %>%
+    dplyr::select(ID, Description, pvalue, geneID, category)
+
+  if (nrow(enrich_top) == 0) return(NULL)
+
+  goenrichment <- enrich_top
+  colnames(goenrichment)[colnames(goenrichment) == "pvalue"] <- "adj_pval"
+  goenrichment <- goenrichment[, c("category", "ID", "Description", "adj_pval", "geneID")]
+  colnames(goenrichment) <- c("category", "ID", "term", "adj_pval", "genes")
+  goenrichment$genes <- gsub("/", ",", goenrichment$genes)
+
+  genedata <- data.frame(ID = toupper(names(geneList)), logFC = as.numeric(geneList), stringsAsFactors = FALSE)
+  genedata <- genedata[!is.na(genedata$ID) & genedata$ID != "" & is.finite(genedata$logFC), ]
+  genedata <- distinct(genedata, ID, .keep_all = TRUE)
+
+  circ <- tryCatch(circle_dat(goenrichment, genedata), error = function(e) NULL)
+  if (is.null(circ) || nrow(circ) == 0) return(NULL)
+
+  list(goenrichment = goenrichment, genedata = genedata, circ = circ)
+}
+
+# GOChord + GOCluster 统一出图 bundle（参考 rna.Rmd 逻辑）
+save_go_goplot_bundle <- function(goplot_inputs, out_chord, out_cluster, title_suffix = "") {
+  if (is.null(goplot_inputs)) return(invisible(NULL))
+  circ <- goplot_inputs$circ
+  goenrichment <- goplot_inputs$goenrichment
+
+  # lfc.col 顺序：正logFC → 零 → 负logFC（与 rna.Rmd 一致）
+  lfc_colors <- unname(c(viz_pal$de["up"], viz_pal$neutral_light, viz_pal$de["down"]))
+
+  # ribbon 配色种子：从核心色板取多种颜色，不够时 colorRampPalette 扩展
+  ribbon_palette_seed <- c(
+    unname(viz_pal$group),   # group1蓝, group2红
+    unname(viz_pal$accent),  # warm橙, teal青, peach桃
+    "#9B8EC4", "#7BC5A0", "#E8D9A0"  # 紫, 绿, 黄
+  )
+
+  # 筛选 top 基因构建 chord 数据
+  max_genes_to_show <- 20
+  circ$abs_logFC <- abs(circ$logFC)
+  circ <- circ[order(circ$abs_logFC, decreasing = TRUE), , drop = FALSE]
+  top_genes <- unique(circ$genes)[seq_len(min(length(unique(circ$genes)), max_genes_to_show))]
+  circ_filtered <- circ[circ$genes %in% top_genes, , drop = FALSE]
+  genedata_filtered <- goplot_inputs$genedata[goplot_inputs$genedata$ID %in% top_genes, , drop = FALSE]
+  chord <- tryCatch(chord_dat(data = circ_filtered, genes = genedata_filtered), error = function(e) NULL)
+  if (is.null(chord) || nrow(chord) == 0) return(invisible(NULL))
+
+  # --- Chord Plot ---
+  tryCatch({
+    process_cols <- setdiff(colnames(chord), "logFC")
+    ribbon_col <- if (length(process_cols) > 0) {
+      if (length(process_cols) <= length(ribbon_palette_seed)) {
+        ribbon_palette_seed[seq_len(length(process_cols))]
+      } else {
+        colorRampPalette(ribbon_palette_seed)(length(process_cols))
+      }
+    } else {
+      unname(viz_pal$de["up"])
+    }
+
+    cairo_pdf(out_chord, width = 14, height = 12)
+    print(GOChord(
+      data = chord, title = paste0("GO Chord ", title_suffix),
+      space = 0.02, gene.order = "logFC", gene.space = 0.25, gene.size = 3.5,
+      lfc.col = lfc_colors, ribbon.col = ribbon_col,
+      border.size = 0.25, process.label = 10, limit = c(0, 0)
+    ))
+    dev.off()
+  }, error = function(e) message("GOChord error: ", e$message))
+
+  # --- Cluster Plot ---
+  tryCatch({
+    terms_to_cluster <- intersect(unique(goenrichment$term), colnames(chord))
+    if (length(terms_to_cluster) < 2) return(invisible(NULL))
+
+    # GOCluster 在函数环境中直接查找 chord，需显式注入
+    gocluster_fun <- GOCluster
+    environment(gocluster_fun) <- list2env(
+      list(chord = chord),
+      parent = environment(GOCluster)
+    )
+
+    cairo_pdf(out_cluster, width = 16, height = 10)
+    print(gocluster_fun(chord, terms_to_cluster) + labs(title = paste0("GO Cluster ", title_suffix)))
+    dev.off()
+  }, error = function(e) message("GOCluster error: ", e$message))
+}
+
+append_context_column <- function(df, context_col = NULL, context_name = NULL) {
+  df <- as_tibble(df)
+  if(!is.null(context_col) && !is.null(context_name) && nzchar(context_col)) {
+    df[[context_col]] <- context_name
+  }
+  df
+}
+
+write_enrichment_table <- function(df, path, context_col = NULL, context_name = NULL) {
+  df <- append_context_column(df, context_col = context_col, context_name = context_name)
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  write_csv(df, path)
+  invisible(df)
+}
+
+enrichment_context_slug <- function(context_name) {
+  gsub("[^[:alnum:]_-]+", "_", as.character(context_name))
+}
+
+prepare_enrichment_gene_input <- function(df, gene_col = "gene_id_clean", score_col = "log2FoldChange") {
+  if(is.null(df) || nrow(df) == 0) return(NULL)
+  if(!all(c(gene_col, score_col) %in% colnames(df))) return(NULL)
+
+  gene_df <- df %>%
+    filter(!is.na(.data[[gene_col]]), .data[[gene_col]] != "", is.finite(.data[[score_col]])) %>%
+    group_by(.data[[gene_col]]) %>%
+    summarise(score = first(.data[[score_col]]), .groups = "drop")
+  colnames(gene_df)[colnames(gene_df) == gene_col] <- "gene_id_clean"
+  if(nrow(gene_df) == 0) return(NULL)
+
+  gene_map <- tryCatch(
+    bitr(gene_df$gene_id_clean, fromType = "ENSEMBL", toType = c("ENTREZID", "SYMBOL"), OrgDb = org.Mm.eg.db),
+    error = function(e) {
+      message("ID mapping failed: ", e$message)
+      NULL
+    }
+  )
+  if(is.null(gene_map) || nrow(gene_map) == 0) return(NULL)
+
+  gene_df_final <- inner_join(gene_df, gene_map, by = c("gene_id_clean" = "ENSEMBL")) %>%
+    filter(!is.na(ENTREZID), ENTREZID != "", !is.na(SYMBOL), SYMBOL != "") %>%
+    distinct(gene_id_clean, .keep_all = TRUE)
+  if(nrow(gene_df_final) == 0) return(NULL)
+
+  geneList <- gene_df_final$score
+  names(geneList) <- gene_df_final$SYMBOL
+  geneList <- sort(geneList[is.finite(geneList)], decreasing = TRUE)
+  sig_genes <- unique(gene_df_final$ENTREZID)
+  sig_genes <- sig_genes[!is.na(sig_genes) & sig_genes != ""]
+  if(length(sig_genes) == 0 || length(geneList) == 0) return(NULL)
+
+  list(gene_df = gene_df_final, geneList = geneList, sig_genes = sig_genes)
+}
+
+filter_enrichment_object <- function(enrich_obj, p_threshold = config$enrichment_p_threshold) {
+  if(is.null(enrich_obj) || nrow(as.data.frame(enrich_obj)) == 0) return(NULL)
+  sig_df <- as.data.frame(enrich_obj) %>% filter(!is.na(pvalue), pvalue < p_threshold)
+  sig_df <- as.data.frame(sig_df)
+  enrich_obj@result <- sig_df
+  enrich_obj
+}
+
+run_kegg_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir, table_dir,
+                                file_prefix = "", context_col = NULL,
+                                p_threshold = config$enrichment_p_threshold) {
+  safe_context <- enrichment_context_slug(context_name)
+  out_prefix <- file.path(table_dir, paste0(file_prefix, "kegg_", safe_context))
+  ekegg <- tryCatch(
+    enrichKEGG(gene = sig_genes, organism = "mmu", pvalueCutoff = 1, qvalueCutoff = 1),
+    error = function(e) {
+      message("KEGG Error in ", context_name, ": ", e$message)
+      NULL
+    }
+  )
+  if(is.null(ekegg) || nrow(as.data.frame(ekegg)) == 0) return(NULL)
+
+  ekegg <- tryCatch(setReadable(ekegg, OrgDb = org.Mm.eg.db, keyType = "ENTREZID"), error = function(e) ekegg)
+  write_enrichment_table(as.data.frame(ekegg), paste0(out_prefix, ".csv"),
+                         context_col = context_col, context_name = context_name)
+
+  ekegg_sig <- filter_enrichment_object(ekegg, p_threshold = p_threshold)
+  if(is.null(ekegg_sig) || nrow(as.data.frame(ekegg_sig)) == 0) return(NULL)
+  write_enrichment_table(as.data.frame(ekegg_sig), paste0(out_prefix, "_p_lt_0_05.csv"),
+                         context_col = context_col, context_name = context_name)
+
+  save_ora_barplot(as.data.frame(ekegg_sig), file.path(plot_dir, paste0(file_prefix, "kegg_", safe_context, "_barplot.pdf")),
+                   paste("KEGG", context_name), top_n = config$enrichment_top_n_kegg)
+  save_ora_dotplot(as.data.frame(ekegg_sig), file.path(plot_dir, paste0(file_prefix, "kegg_", safe_context, "_dotplot.pdf")),
+                   paste("KEGG", context_name), top_n = config$enrichment_top_n_kegg)
+  save_enrichment_cnetplot(ekegg_sig, geneList,
+                           file.path(plot_dir, paste0(file_prefix, "kegg_", safe_context, "_cnetplot.pdf")),
+                           paste("KEGG", context_name), showCategory = config$enrichment_cnet_show_category)
+  ekegg_sig
+}
+
+run_go_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir, table_dir,
+                              ont = c("BP", "MF", "CC", "ALL"), file_prefix = "",
+                              context_col = NULL, p_threshold = config$enrichment_p_threshold,
+                              theme_regex = NULL, theme_label = "theme") {
+  ont <- match.arg(ont)
+  safe_context <- enrichment_context_slug(context_name)
+  ont_lower <- tolower(ont)
+  out_prefix <- file.path(table_dir, paste0(file_prefix, "go_", ont_lower, "_", safe_context))
+  go_obj <- tryCatch(
+    enrichGO(gene = sig_genes, OrgDb = org.Mm.eg.db, keyType = "ENTREZID",
+             ont = ont, pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE),
+    error = function(e) {
+      message("GO ", ont, " Error in ", context_name, ": ", e$message)
+      NULL
+    }
+  )
+  if(is.null(go_obj) || nrow(as.data.frame(go_obj)) == 0) return(NULL)
+
+  write_enrichment_table(as.data.frame(go_obj), paste0(out_prefix, ".csv"),
+                         context_col = context_col, context_name = context_name)
+
+  go_sig <- filter_enrichment_object(go_obj, p_threshold = p_threshold)
+  if(is.null(go_sig) || nrow(as.data.frame(go_sig)) == 0) return(NULL)
+  go_sig_df <- write_enrichment_table(as.data.frame(go_sig), paste0(out_prefix, "_p_lt_0_05.csv"),
+                                      context_col = context_col, context_name = context_name)
+
+  if(!is.null(theme_regex) && nzchar(theme_regex) && "Description" %in% colnames(go_sig_df)) {
+    theme_df <- go_sig_df %>%
+      filter(grepl(theme_regex, Description, ignore.case = TRUE))
+    write_csv(theme_df, paste0(out_prefix, "_", theme_label, "_p_lt_0_05.csv"))
+  }
+
+  if(ont %in% c("BP", "MF", "CC")) {
+    tryCatch(
+      save_ora_barplot(as.data.frame(go_sig), file.path(plot_dir, paste0(file_prefix, "go_", ont_lower, "_", safe_context, "_barplot.pdf")),
+                       paste("GO", ont, context_name), top_n = config$enrichment_top_n_go),
+      error = function(e) message("GO ", ont, " barplot skipped in ", context_name, ": ", e$message)
+    )
+    tryCatch(
+      save_ora_dotplot(as.data.frame(go_sig), file.path(plot_dir, paste0(file_prefix, "go_", ont_lower, "_", safe_context, "_dotplot.pdf")),
+                       paste("GO", ont, context_name), top_n = config$enrichment_top_n_go),
+      error = function(e) message("GO ", ont, " dotplot skipped in ", context_name, ": ", e$message)
+    )
+    tryCatch(
+      save_enrichment_treeplot(go_sig, file.path(plot_dir, paste0(file_prefix, "go_", ont_lower, "_", safe_context, "_treeplot.pdf")),
+                               paste("GO", ont, context_name), showCategory = config$enrichment_tree_show_category),
+      error = function(e) message("GO ", ont, " treeplot skipped in ", context_name, ": ", e$message)
+    )
+  }
+  if(ont == "BP") {
+    tryCatch(
+      save_enrichment_cnetplot(go_sig, geneList,
+                               file.path(plot_dir, paste0(file_prefix, "go_bp_", safe_context, "_cnetplot.pdf")),
+                               paste("GO BP", context_name), showCategory = config$enrichment_cnet_show_category),
+      error = function(e) message("GO BP cnetplot skipped in ", context_name, ": ", e$message)
+    )
+  }
+  if(ont %in% c("BP", "ALL")) {
+    tryCatch(
+      {
+        gp_inputs <- build_goplot_inputs(as.data.frame(go_sig), geneList, category_label = ont, top_n = config$enrichment_goplot_top_n)
+        save_go_goplot_bundle(
+          gp_inputs,
+          file.path(plot_dir, paste0("go_", ont_lower, "_", safe_context, "_chord.pdf")),
+          file.path(plot_dir, paste0("go_", ont_lower, "_", safe_context, "_cluster.pdf")),
+          title_suffix = paste(ont, context_name)
+        )
+      },
+      error = function(e) message("GOplot bundle skipped in ", ont, " ", context_name, ": ", e$message)
+    )
+  }
+
+  go_sig
+}
+
+run_ora_enrichment_bundle <- function(input_df, context_name, plot_dir, table_dir,
+                                      file_prefix = "", context_col = NULL,
+                                      p_threshold = config$enrichment_p_threshold,
+                                      theme_regex = NULL, theme_label = "theme",
+                                      filter_expr = NULL) {
+  ensure_step_dirs(plot_dir, table_dir)
+  if(!is.null(filter_expr)) {
+    input_df <- input_df %>% filter({{ filter_expr }})
+  }
+  gene_input <- prepare_enrichment_gene_input(input_df)
+  if(is.null(gene_input)) {
+    message("   ⚠️ ", context_name, " 可用于富集的基因不足，跳过。")
+    return(NULL)
+  }
+
+  list(
+    gene_df = gene_input$gene_df,
+    kegg = run_kegg_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
+                               file_prefix = file_prefix, context_col = context_col, p_threshold = p_threshold),
+    go_bp = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
+                              ont = "BP", file_prefix = file_prefix, context_col = context_col,
+                              p_threshold = p_threshold, theme_regex = theme_regex, theme_label = theme_label),
+    go_mf = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
+                              ont = "MF", file_prefix = file_prefix, context_col = context_col,
+                              p_threshold = p_threshold, theme_regex = theme_regex, theme_label = theme_label),
+    go_cc = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
+                              ont = "CC", file_prefix = file_prefix, context_col = context_col,
+                              p_threshold = p_threshold, theme_regex = theme_regex, theme_label = theme_label),
+    go_all = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
+                               ont = "ALL", file_prefix = file_prefix, context_col = context_col,
+                               p_threshold = p_threshold, theme_regex = theme_regex, theme_label = theme_label)
+  )
+}
+
+# 统一 GSEA dotplot helper：p 值渐变 + theme_wgbs_bw
+save_gsea_dotplot <- function(gsea_obj, primary, title_prefix, showCategory = 15) {
+  if (is.null(gsea_obj) || nrow(as.data.frame(gsea_obj)) == 0) return(invisible(NULL))
+  gsea_df <- as.data.frame(gsea_obj)
+  if (!"pvalue" %in% colnames(gsea_df)) return(invisible(NULL))
+
+  gsea_df <- gsea_df %>% arrange(pvalue, desc(abs(NES))) %>% slice_head(n = min(showCategory, nrow(gsea_df)))
+  if (nrow(gsea_df) == 0) return(invisible(NULL))
+
+  gsea_df$Description <- factor(gsea_df$Description, levels = rev(unique(gsea_df$Description)))
+  gsea_df$neg_log10_p <- -log10(gsea_df$pvalue + 1e-300)
+
+  p <- ggplot(gsea_df, aes(x = NES, y = Description, size = abs(NES), color = neg_log10_p)) +
+    geom_point(alpha = 0.88) +
+    scale_color_wgbs_ryb() +
+    labs(title = title_prefix, x = "NES", y = NULL, size = "|NES|", color = "-log10(PValue)") +
+    theme_wgbs_bw(base_size = 10)
+
+  ggsave(primary, plot = p, width = 10, height = 8, device = cairo_pdf)
+}
+
+assign_sample_ids_to_obj <- function(obj_list, sample_ids) {
+  if(length(obj_list) != length(sample_ids)) {
+    stop(
+      "CpG.RData 样本数与 reads_info 不一致: ",
+      length(obj_list), " vs ", length(sample_ids)
+    )
+  }
+  for(i in seq_along(obj_list)) {
+    obj_list[[i]]@sample.id <- sample_ids[i]
+  }
+  obj_list
+}
+
+standardize_dmr_result_columns <- function(dmr_df) {
+  if(!("diffMethy" %in% colnames(dmr_df)) && "diff.Methy" %in% colnames(dmr_df)) {
+    dmr_df$diffMethy <- dmr_df$diff.Methy
+  }
+  if(!("diff.Methy" %in% colnames(dmr_df)) && "diffMethy" %in% colnames(dmr_df)) {
+    dmr_df$diff.Methy <- dmr_df$diffMethy
+  }
+
+  if(!("meanMethy_group1" %in% colnames(dmr_df))) {
+    source_col <- first_existing_col(dmr_df, c("meanMethy1"))
+    dmr_df$meanMethy_group1 <- if(!is.na(source_col)) dmr_df[[source_col]] else NA_real_
+  }
+  if(!("meanMethy_group2" %in% colnames(dmr_df))) {
+    source_col <- first_existing_col(dmr_df, c("meanMethy2"))
+    dmr_df$meanMethy_group2 <- if(!is.na(source_col)) dmr_df[[source_col]] else NA_real_
+  }
+
+  if(!("group1_label" %in% colnames(dmr_df))) {
+    dmr_df$group1_label <- config$group1_name
+  } else {
+    dmr_df$group1_label[is.na(dmr_df$group1_label) | dmr_df$group1_label == ""] <- config$group1_name
+  }
+  if(!("group2_label" %in% colnames(dmr_df))) {
+    dmr_df$group2_label <- config$group2_name
+  } else {
+    dmr_df$group2_label[is.na(dmr_df$group2_label) | dmr_df$group2_label == ""] <- config$group2_name
+  }
+
+  if("diff.Methy" %in% colnames(dmr_df)) {
+    dmr_df$diffMethy <- dmr_df$diff.Methy
+  } else if(all(c("meanMethy_group1", "meanMethy_group2") %in% colnames(dmr_df))) {
+    dmr_df$diff.Methy <- dmr_df$meanMethy_group2 - dmr_df$meanMethy_group1
+    dmr_df$diffMethy <- dmr_df$diff.Methy
+  }
+
+  dmr_df
+}
+
+read_expr_results <- function(file) {
+  if(grepl("\\.csv$", file, ignore.case = TRUE)) {
+    expr_df <- read_csv(file, show_col_types = FALSE)
+  } else {
+    expr_df <- read_tsv(file, show_col_types = FALSE)
+  }
+  required_cols <- c("log2FoldChange", "pvalue")
+  missing_cols <- setdiff(required_cols, colnames(expr_df))
+  if(length(missing_cols) > 0) {
+    stop("RNA-seq 结果缺少必要列: ", paste(missing_cols, collapse = ", "), call. = FALSE)
+  }
+  if(all(c("sampleA", "sampleB") %in% colnames(expr_df)) &&
+     !is.null(config$group1_name) && !is.null(config$group2_name)) {
+    rna_sample_a <- unique(na.omit(as.character(expr_df$sampleA)))
+    rna_sample_b <- unique(na.omit(as.character(expr_df$sampleB)))
+    expected_a <- config$group2_name
+    expected_b <- config$group1_name
+    if(length(rna_sample_a) == 1 && length(rna_sample_b) == 1) {
+      same_direction <- identical(tolower(rna_sample_a), tolower(expected_a)) &&
+        identical(tolower(rna_sample_b), tolower(expected_b))
+      if(!same_direction) {
+        stop(
+          "RNA-seq 对比方向与 WGBS 方向不一致。WGBS diffMethy 为 ",
+          expected_a, " - ", expected_b,
+          "，但 RNA 文件为 ", rna_sample_a, " - ", rna_sample_b,
+          "。请先确认 RNA log2FoldChange 方向，避免四象限解释反向。",
+          call. = FALSE
+        )
+      }
+      expr_df$rna_contrast <- paste(rna_sample_a, rna_sample_b, sep = "_vs_")
+    } else {
+      warning("RNA-seq 文件 sampleA/sampleB 不唯一，无法自动验证 log2FoldChange 对比方向。", call. = FALSE)
+    }
+  } else {
+    warning("RNA-seq 文件缺少 sampleA/sampleB，无法自动验证 log2FoldChange 对比方向。", call. = FALSE)
+  }
+  if(!("gene_id_clean" %in% colnames(expr_df))) {
+    if("gene_id" %in% colnames(expr_df)) {
+      expr_df$gene_id_clean <- str_replace(expr_df$gene_id, "\\..*$", "")
+    } else {
+      expr_df$gene_id_clean <- str_replace(rownames(expr_df), "\\..*$", "")
+    }
+  }
+  for(col in intersect(c("SYMBOL", "ENTREZID", "GENENAME"), colnames(expr_df))) {
+    colnames(expr_df)[colnames(expr_df) == col] <- paste0("RNA_", col)
+  }
+  expr_df
+}
+
+feature_levels_main <- c("Promoter", "UTR", "Exon", "Intron", "Downstream", "Intergenic", "Other")
+feature_layer_levels <- c("Promoter", "Gene Body", "Distal", "Other")
+profile_segment_levels <- c("Upstream", "5' UTR", "Exon", "Intron", "3' UTR", "Downstream")
+profile_segment_to_feature <- c(
+  "Upstream" = "Promoter",
+  "5' UTR" = "UTR",
+  "Exon" = "Exon",
+  "Intron" = "Intron",
+  "3' UTR" = "UTR",
+  "Downstream" = "Downstream"
+)
+
+# feature 与 profile segment 是两套不同概念:
+# 1) feature_levels_main: DMR 注释后真正归类的基因组元件
+# 2) profile_segment_levels: metagene/transcript profile 画图时沿转录本切分的连续区段
+# 两者名称不同，但颜色会映射回同一套 feature 语义，保证前后图形口径一致。
+
+normalize_feature_label <- function(feature_vec) {
+  feature_vec <- as.character(feature_vec)
+  feature_vec <- str_replace(feature_vec, " \\(.*", "")
+  case_when(
+    is.na(feature_vec) | feature_vec == "" ~ "Other",
+    grepl("^Promoter|^Upstream$", feature_vec, ignore.case = TRUE) ~ "Promoter",
+    grepl("UTR", feature_vec, ignore.case = TRUE) ~ "UTR",
+    grepl("Exon", feature_vec, ignore.case = TRUE) ~ "Exon",
+    grepl("Intron", feature_vec, ignore.case = TRUE) ~ "Intron",
+    grepl("Downstream", feature_vec, ignore.case = TRUE) ~ "Downstream",
+    grepl("Distal Intergenic|Intergenic|^Distal$", feature_vec, ignore.case = TRUE) ~ "Intergenic",
+    TRUE ~ "Other"
+  )
+}
+
+derive_feature_layer <- function(feature_vec) {
+  feature_simple <- normalize_feature_label(feature_vec)
+  case_when(
+    feature_simple == "Promoter" ~ "Promoter",
+    feature_simple %in% c("UTR", "Exon", "Intron") ~ "Gene Body",
+    feature_simple %in% c("Downstream", "Intergenic") ~ "Distal",
+    TRUE ~ "Other"
+  )
+}
+
+```
+
+```{r}
+# ==============================================================================
+# 按需加载函数 (替代原 readRDS 机制)
+# ==============================================================================
+# 拆分后各步骤共享全局环境，以下函数仅在对象缺失时按需恢复。
+
+ensure_obj_cpg_loaded <- function() {
+  if(!exists('obj.cpg', envir = .GlobalEnv, inherits = FALSE)) {
+    rdata_full_path <- file.path(config$work_dir, config$input_rdata)
+    if(!file.exists(rdata_full_path)) {
+      stop("\u274c RData 未找到: ", rdata_full_path)
+    }
+    message("\u23f3 按需重载 obj.cpg: ", rdata_full_path)
+    tmp_env <- new.env(parent = emptyenv())
+    load(rdata_full_path, envir = tmp_env)
+    if(!exists('obj.cpg', envir = tmp_env, inherits = FALSE)) {
+      stop("\u274c RData 中未找到 obj.cpg")
+    }
+    assign('obj.cpg', assign_sample_ids_to_obj(get('obj.cpg', envir = tmp_env), sample_ids), envir = .GlobalEnv)
+  }
+  invisible(get('obj.cpg', envir = .GlobalEnv))
+}
+
+ensure_meth_loaded <- function() {
+  if(!exists('meth', envir = .GlobalEnv, inherits = FALSE)) {
+    ensure_obj_cpg_loaded()
+    message("\u23f3 按需构建 methylKit unite 对象...")
+    assign('meth', methylKit::unite(get('obj.cpg', envir = .GlobalEnv), destrand = FALSE), envir = .GlobalEnv)
+  }
+  invisible(get('meth', envir = .GlobalEnv))
+}
+
+build_sample_methylation_dt <- function(obj_list, sample_ids, config) {
+  if(!requireNamespace("data.table", quietly = TRUE)) {
+    stop("❌ 需要 data.table 来构建全局甲基化 profile 输入")
+  }
+  group_vec <- as.character(sample_group_factor(sample_ids, config))
+  if(any(is.na(group_vec))) {
+    stop("❌ 样本分组信息不完整，无法构建全局甲基化 profile 输入")
+  }
+  data.table::rbindlist(lapply(seq_along(obj_list), function(i) {
+    raw_df <- methylKit::getData(obj_list[[i]])
+    required_cols <- c("chr", "start", "end", "strand", "coverage", "numCs")
+    missing_cols <- setdiff(required_cols, colnames(raw_df))
+    if(length(missing_cols) > 0) {
+      stop("❌ methylRaw 缺少列: ", paste(missing_cols, collapse = ", "))
+    }
+    dt <- data.table::as.data.table(raw_df[, required_cols])
+    dt <- dt[coverage > 0]
+    dt[, Methylation := 100 * numCs / coverage]
+    dt[, Sample := sample_ids[[i]]]
+    dt[, Group := group_vec[[i]]]
+    dt[
+      is.finite(Methylation),
+      .(chr, start, end, strand, Sample, Group, Methylation)
+    ]
+  }), use.names = TRUE)
+}
+
+build_group_mean_methyl_gr <- function(obj_list = NULL, sample_ids_arg = NULL, config_arg = NULL, meth_raw_dt = NULL) {
+  if(!requireNamespace("data.table", quietly = TRUE)) {
+    stop("❌ 需要 data.table 来构建组均值甲基化 GRanges")
+  }
+  if(is.null(sample_ids_arg)) {
+    sample_ids_arg <- get("sample_ids", envir = .GlobalEnv)
+  }
+  if(is.null(config_arg)) {
+    config_arg <- get("config", envir = .GlobalEnv)
+  }
+  if(is.null(meth_raw_dt)) {
+    if(is.null(obj_list)) {
+      ensure_obj_cpg_loaded()
+      obj_list <- get("obj.cpg", envir = .GlobalEnv)
+    }
+    meth_raw_dt <- build_sample_methylation_dt(obj_list, sample_ids_arg, config_arg)
+  }
+  group_cols <- c(config_arg$group1_name, config_arg$group2_name)
+  group_mean_long <- meth_raw_dt[
+    ,
+    .(Methylation = mean(Methylation, na.rm = TRUE)),
+    by = .(chr, start, end, strand, Group)
+  ]
+  group_mean_wide <- data.table::dcast(
+    group_mean_long,
+    chr + start + end + strand ~ Group,
+    value.var = "Methylation"
+  )
+  for(group_col in group_cols) {
+    if(!group_col %in% colnames(group_mean_wide)) {
+      group_mean_wide[, (group_col) := NA_real_]
+    }
+  }
+  gr <- GRanges(
+    seqnames = group_mean_wide$chr,
+    ranges = IRanges(start = group_mean_wide$start, end = group_mean_wide$end),
+    strand = group_mean_wide$strand
+  )
+  mcols(gr) <- DataFrame(as.data.frame(group_mean_wide[, ..group_cols]))
+  filter_gr_to_main_chr(gr)
+}
+
+build_region_sample_methylation <- function(obj_list, region_gr, sample_ids_arg = NULL, config_arg = NULL,
+                                            region_ids = NULL, ignore.strand = TRUE) {
+  if(is.null(sample_ids_arg)) {
+    sample_ids_arg <- get("sample_ids", envir = .GlobalEnv)
+  }
+  if(is.null(config_arg)) {
+    config_arg <- get("config", envir = .GlobalEnv)
+  }
+  if(length(region_gr) == 0) {
+    empty_mat <- matrix(numeric(0), nrow = 0, ncol = length(sample_ids_arg))
+    colnames(empty_mat) <- sample_ids_arg
+    return(list(matrix = empty_mat, support = tibble(), long = tibble()))
+  }
+  if(is.null(region_ids)) {
+    if(!is.null(names(region_gr)) && any(nzchar(names(region_gr)))) {
+      region_ids <- names(region_gr)
+    } else if("DMR_id" %in% colnames(as.data.frame(mcols(region_gr)))) {
+      region_ids <- as.character(mcols(region_gr)$DMR_id)
+    } else {
+      region_ids <- paste(as.character(seqnames(region_gr)), start(region_gr), end(region_gr), sep = ":")
+    }
+  }
+  region_ids <- make.unique(as.character(region_ids))
+  names(region_gr) <- region_ids
+  group_vec <- as.character(sample_group_factor(sample_ids_arg, config_arg))
+  sample_group_df <- tibble(Sample = sample_ids_arg, Group = group_vec)
+  region_df <- tibble(RegionID = region_ids, RegionIndex = seq_along(region_ids))
+
+  region_meth_long <- bind_rows(lapply(seq_along(obj_list), function(i) {
+    raw_df <- methylKit::getData(obj_list[[i]])
+    required_cols <- c("chr", "start", "end", "strand", "coverage", "numCs")
+    missing_cols <- setdiff(required_cols, colnames(raw_df))
+    if(length(missing_cols) > 0) {
+      stop("❌ methylRaw 缺少列: ", paste(missing_cols, collapse = ", "))
+    }
+    raw_df <- raw_df[raw_df$coverage > 0, required_cols, drop = FALSE]
+    if(nrow(raw_df) == 0) {
+      return(tibble())
+    }
+    sample_gr <- GRanges(
+      seqnames = raw_df$chr,
+      ranges = IRanges(start = raw_df$start, end = raw_df$end),
+      strand = raw_df$strand
+    )
+    tryCatch({
+      seqlevelsStyle(sample_gr) <- seqlevelsStyle(region_gr)[1]
+    }, error = function(e) {})
+    ov <- findOverlaps(region_gr, sample_gr, ignore.strand = ignore.strand)
+    if(length(ov) == 0) {
+      return(tibble())
+    }
+    tibble(
+      RegionID = region_ids[queryHits(ov)],
+      Sample = sample_ids_arg[[i]],
+      Group = group_vec[[i]],
+      Coverage = raw_df$coverage[subjectHits(ov)],
+      NumCs = raw_df$numCs[subjectHits(ov)],
+      CpG_id = paste(as.character(seqnames(sample_gr))[subjectHits(ov)], start(sample_gr)[subjectHits(ov)], sep = ":")
+    ) %>%
+      group_by(RegionID, Sample, Group) %>%
+      summarise(
+        Coverage = sum(Coverage, na.rm = TRUE),
+        NumCs = sum(NumCs, na.rm = TRUE),
+        n_cpg_records = n(),
+        n_cpg_sites = n_distinct(CpG_id),
+        .groups = "drop"
+      ) %>%
+      mutate(Methylation = ifelse(Coverage > 0, 100 * NumCs / Coverage, NA_real_))
+  }))
+
+  support_df <- expand_grid(RegionID = region_ids, Sample = sample_ids_arg) %>%
+    left_join(region_df, by = "RegionID") %>%
+    left_join(sample_group_df, by = "Sample") %>%
+    left_join(region_meth_long, by = c("RegionID", "Sample", "Group")) %>%
+    mutate(
+      Coverage = replace_na(Coverage, 0),
+      NumCs = replace_na(NumCs, 0),
+      n_cpg_records = replace_na(n_cpg_records, 0L),
+      n_cpg_sites = replace_na(n_cpg_sites, 0L),
+      Methylation = ifelse(Coverage > 0, Methylation, NA_real_)
+    ) %>%
+    arrange(RegionIndex, match(Sample, sample_ids_arg))
+
+  mat_df <- support_df %>%
+    select(RegionID, Sample, Methylation) %>%
+    pivot_wider(names_from = Sample, values_from = Methylation)
+  mat <- as.matrix(mat_df[, sample_ids_arg, drop = FALSE])
+  rownames(mat) <- mat_df$RegionID
+
+  list(matrix = mat, support = support_df, long = region_meth_long)
+}
+
+build_wgbs_gene_universe <- function(obj_list = NULL, sample_ids_arg = NULL, config_arg = NULL,
+                                     txdb_arg = NULL, min_groups = 1L, min_samples = 1L,
+                                     cache_file = NULL) {
+  if(!is.null(cache_file) && file.exists(cache_file)) {
+    return(read_csv(cache_file, show_col_types = FALSE))
+  }
+  if(!requireNamespace("data.table", quietly = TRUE)) {
+    stop("❌ 需要 data.table 来构建 WGBS gene universe")
+  }
+  if(is.null(obj_list)) {
+    ensure_obj_cpg_loaded()
+    obj_list <- get("obj.cpg", envir = .GlobalEnv)
+  }
+  if(is.null(sample_ids_arg)) sample_ids_arg <- get("sample_ids", envir = .GlobalEnv)
+  if(is.null(config_arg)) config_arg <- get("config", envir = .GlobalEnv)
+  if(is.null(txdb_arg)) txdb_arg <- load_main_chr_txdb(config_arg$gtf_file)
+
+  if(min_samples <= 1L && min_groups <= 1L) {
+    cpg_support <- data.table::rbindlist(lapply(obj_list, function(x) {
+      raw_df <- methylKit::getData(x)
+      unique(data.table::data.table(
+        chr = as.character(raw_df$chr),
+        start = as.integer(raw_df$start)
+      ))
+    }), use.names = TRUE)
+    cpg_support <- unique(cpg_support)
+  } else {
+    group_vec <- as.character(sample_group_factor(sample_ids_arg, config_arg))
+    cpg_support <- data.table::rbindlist(lapply(seq_along(obj_list), function(i) {
+      raw_df <- methylKit::getData(obj_list[[i]])
+      data.table::data.table(
+        chr = as.character(raw_df$chr),
+        start = as.integer(raw_df$start),
+        Sample = sample_ids_arg[[i]],
+        Group = group_vec[[i]]
+      )
+    }), use.names = TRUE)[
+      ,
+      .(
+        n_samples = data.table::uniqueN(Sample),
+        n_groups = data.table::uniqueN(Group)
+      ),
+      by = .(chr, start)
+    ][n_samples >= min_samples & n_groups >= min_groups]
+  }
+
+  if(nrow(cpg_support) == 0) {
+    universe_df <- tibble(gene_id_clean = character(), ENTREZID = character(), SYMBOL = character())
+    if(!is.null(cache_file)) write_csv(universe_df, cache_file)
+    return(universe_df)
+  }
+
+  cpg_gr <- GRanges(
+    seqnames = cpg_support$chr,
+    ranges = IRanges(start = cpg_support$start, width = 1)
+  )
+  cpg_gr <- filter_gr_to_main_chr(cpg_gr)
+
+  gene_gr <- genes(txdb_arg)
+  gene_gr <- filter_gr_to_main_chr(gene_gr)
+  tryCatch({
+    seqlevelsStyle(cpg_gr) <- seqlevelsStyle(gene_gr)[1]
+  }, error = function(e) {})
+
+  ov <- findOverlaps(cpg_gr, gene_gr, ignore.strand = TRUE)
+  gene_ids <- unique(names(gene_gr)[subjectHits(ov)])
+  gene_ids <- gene_ids[!is.na(gene_ids) & nzchar(gene_ids)]
+  gene_ids_clean <- str_replace(gene_ids, "\\..*$", "")
+
+  gene_map <- tryCatch({
+    bitr(gene_ids_clean, fromType = "ENSEMBL", toType = c("ENTREZID", "SYMBOL"), OrgDb = org.Mm.eg.db)
+  }, error = function(e) NULL)
+
+  if(is.null(gene_map) || nrow(gene_map) == 0) {
+    universe_df <- tibble(gene_id_clean = gene_ids_clean, ENTREZID = NA_character_, SYMBOL = NA_character_)
+  } else {
+    universe_df <- tibble(gene_id_clean = gene_ids_clean) %>%
+      distinct() %>%
+      inner_join(gene_map, by = c("gene_id_clean" = "ENSEMBL")) %>%
+      distinct(ENTREZID, .keep_all = TRUE)
+  }
+
+  if(!is.null(cache_file)) {
+    dir.create(dirname(cache_file), recursive = TRUE, showWarnings = FALSE)
+    write_csv(universe_df, cache_file)
+  }
+  universe_df
+}
+
+ensure_dmr_outputs_loaded <- function() {
+  if(!exists('dmr_anno_df', envir = .GlobalEnv, inherits = FALSE)) {
+    dmr_anno_file <- file.path(config$work_dir, "result/3_dmr/tables/2/dmr_annotated.csv")
+    if(!file.exists(dmr_anno_file)) {
+      stop("❌ DMR 注释文件未找到: ", dmr_anno_file)
+    }
+    message("⏳ 按需恢复 dmr_anno_df: ", dmr_anno_file)
+    assign('dmr_anno_df', standardize_dmr_result_columns(read_csv(dmr_anno_file, show_col_types = FALSE)), envir = .GlobalEnv)
+  }
+
+  if(!exists('dmrs', envir = .GlobalEnv, inherits = FALSE)) {
+    dmr_raw_file <- file.path(config$work_dir, "result/3_dmr/tables/1/dmr_raw.csv")
+    if(file.exists(dmr_raw_file)) {
+      message("⏳ 按需恢复 dmrs: ", dmr_raw_file)
+      assign('dmrs', standardize_dmr_result_columns(read_csv(dmr_raw_file, show_col_types = FALSE)), envir = .GlobalEnv)
+    }
+  }
+
+  if(exists('dmr_anno_df', envir = .GlobalEnv, inherits = FALSE)) {
+    dmr_df <- standardize_dmr_result_columns(get('dmr_anno_df', envir = .GlobalEnv))
+    if(!('gene_id_clean' %in% colnames(dmr_df)) && 'geneId' %in% colnames(dmr_df)) {
+      dmr_df$gene_id_clean <- str_replace(dmr_df$geneId, "\\..*$", "")
+    }
+    if(!('annotation_simple' %in% colnames(dmr_df)) && 'annotation' %in% colnames(dmr_df)) {
+      dmr_df$annotation_simple <- normalize_feature_label(dmr_df$annotation)
+    }
+    assign('dmr_anno_df', dmr_df, envir = .GlobalEnv)
+  }
+
+  if(!exists('dmr_gr', envir = .GlobalEnv, inherits = FALSE) && exists('dmr_anno_df', envir = .GlobalEnv, inherits = FALSE)) {
+    dmr_df <- get('dmr_anno_df', envir = .GlobalEnv)
+    chr_col <- if('seqnames' %in% colnames(dmr_df)) 'seqnames' else if('chr' %in% colnames(dmr_df)) 'chr' else NA_character_
+    if(!is.na(chr_col) && all(c('start', 'end', 'DMR_id') %in% colnames(dmr_df))) {
+      dmr_gr_local <- GRanges(
+        seqnames = dmr_df[[chr_col]],
+        ranges = IRanges(start = dmr_df$start, end = dmr_df$end),
+        DMR_id = dmr_df$DMR_id,
+        diffMethy = if('diffMethy' %in% colnames(dmr_df)) dmr_df$diffMethy else if('diff.Methy' %in% colnames(dmr_df)) dmr_df$diff.Methy else NA_real_,
+        meanMethy_group1 = dmr_df$meanMethy_group1,
+        meanMethy_group2 = dmr_df$meanMethy_group2,
+        group1_label = dmr_df$group1_label,
+        group2_label = dmr_df$group2_label,
+        DMR_type = if('DMR_type' %in% colnames(dmr_df)) dmr_df$DMR_type else NA_character_
+      )
+      assign('dmr_gr', dmr_gr_local, envir = .GlobalEnv)
+    }
+  }
+
+  invisible(list(
+    dmr_anno_df = if(exists('dmr_anno_df', envir = .GlobalEnv, inherits = FALSE)) get('dmr_anno_df', envir = .GlobalEnv) else NULL,
+    dmrs = if(exists('dmrs', envir = .GlobalEnv, inherits = FALSE)) get('dmrs', envir = .GlobalEnv) else NULL,
+    dmr_gr = if(exists('dmr_gr', envir = .GlobalEnv, inherits = FALSE)) get('dmr_gr', envir = .GlobalEnv) else NULL
+  ))
+}
+```
+
+
+```{r}
+# ==============================================================================
+# 2.1 样本信息与全局参数
+# ==============================================================================
+sample_table <- read_reads_info(reads_info_path, root_dir = config$work_dir)
+sample_ids <- sample_table$sample
+group_levels <- unique(sample_table$group)
+
+config$group1_name <- group_levels[[1]]
+config$group2_name <- group_levels[[2]]
+config$group1_idx <- which(sample_table$group == config$group1_name)
+config$group2_idx <- which(sample_table$group == config$group2_name)
+
+group_diff_label <- paste(config$group2_name, "-", config$group1_name)
+group_diff_axis_label <- paste0("Methylation Difference (", group_diff_label, ")")
+
+message(
+  "✅ 读取 reads_info 完成: ",
+  length(sample_ids), " 个样本，分组顺序 ",
+  config$group1_name, " -> ", config$group2_name
+)
+```
+
+```{r}
+# ==============================================================================
+# 2.2 QC 展示位置说明
+# ==============================================================================
+# 具体 QC 表格和说明统一在 2_qc.Rmd 输出，避免 setup 和 QC 模块重复展示。
+message("ℹ️ QC 展示已集中到 2_qc.Rmd；1_setup.Rmd 仅负责全局配置、样本信息和共享函数。")
+```
+
+```{r}
+# ==============================================================================
+# 2.3 统一配色与作图主题
+# ==============================================================================
+wgbs_group_palette <- setNames(c("#A1C9F4", "#FF9F9B"), c(config$group1_name, config$group2_name))
+wgbs_neutral_palette <- c("light" = "#FFFDF8", "mid" = "#D4D9DE", "dark" = "#5C6B73")
+wgbs_accent_palette <- c(
+  "warm" = "#FFB482",
+  "green" = "#8DE5A1",
+  "purple" = "#B39FDB",
+  "yellow" = "#FDFFB6",
+  "teal" = "#9ED9CC",
+  "peach" = "#FFD3A8"
+)
+wgbs_red_yellow_blue_palette <- c("low" = "#A1C9F4", "mid" = "#FDFFB6", "high" = "#FF9F9B")
+wgbs_red_yellow_blue_binary_palette <- c(
+  "zero" = unname(wgbs_red_yellow_blue_palette["low"]),
+  "mid" = unname(wgbs_red_yellow_blue_palette["mid"]),
+  "one" = unname(wgbs_red_yellow_blue_palette["high"])
+)
+
+feature_core_pal <- c(
+  "Promoter" = unname(wgbs_red_yellow_blue_palette["high"]),
+  "UTR" = unname(wgbs_accent_palette["peach"]),
+  "Exon" = unname(wgbs_accent_palette["warm"]),
+  "Intron" = unname(wgbs_red_yellow_blue_palette["low"]),
+  "Downstream" = unname(wgbs_accent_palette["purple"]),
+  "Intergenic" = unname(wgbs_accent_palette["green"]),
+  "Other" = unname(wgbs_neutral_palette["mid"])
+)
+feature_alias_pal <- c(
+  "Upstream" = feature_core_pal["Promoter"],
+  "5' UTR" = feature_core_pal["UTR"],
+  "3' UTR" = feature_core_pal["UTR"],
+  "Gene Body" = unname(wgbs_accent_palette["teal"]),
+  "Distal" = feature_core_pal["Intergenic"]
+)
+profile_segment_pal <- unname(feature_core_pal[profile_segment_to_feature])
+names(profile_segment_pal) <- names(profile_segment_to_feature)
+
+viz_pal <- list(
+  group = wgbs_group_palette,
+  dmr = c(Hyper = unname(wgbs_accent_palette["warm"]), Hypo = unname(wgbs_red_yellow_blue_palette["low"])),
+  quadrant = c(
+    "Hyper-Up" = unname(wgbs_red_yellow_blue_palette["high"]),
+    "Hyper-Down" = unname(wgbs_accent_palette["purple"]),
+    "Hypo-Down" = unname(wgbs_accent_palette["green"]),
+    "Hypo-Up" = unname(wgbs_red_yellow_blue_palette["low"]),
+    "NS" = unname(wgbs_neutral_palette["mid"])
+  ),
+  cgi = c(
+    "Island" = unname(wgbs_red_yellow_blue_palette["low"]),
+    "N_Shore" = unname(wgbs_accent_palette["green"]),
+    "S_Shore" = unname(wgbs_red_yellow_blue_palette["mid"]),
+    "N_Shelf" = unname(wgbs_accent_palette["warm"]),
+    "S_Shelf" = unname(wgbs_red_yellow_blue_palette["high"]),
+    "Open_Sea" = unname(wgbs_neutral_palette["mid"]),
+    "Others" = unname(wgbs_neutral_palette["mid"]),
+    "NS" = unname(wgbs_neutral_palette["mid"])
+  ),
+  feature_core = feature_core_pal,
+  feature_alias = feature_alias_pal,
+  profile_segment = profile_segment_pal,
+  feature = c(feature_core_pal, feature_alias_pal),
+  feature_accent = c(unname(wgbs_red_yellow_blue_palette), unname(wgbs_accent_palette), unname(wgbs_neutral_palette["mid"])),
+  chr = c(unname(wgbs_red_yellow_blue_palette["low"]), unname(wgbs_accent_palette["warm"])),
+  burden_density = unname(wgbs_red_yellow_blue_palette["low"]),
+  burden_ratio = unname(wgbs_red_yellow_blue_palette["mid"]),
+  motif = unname(wgbs_accent_palette["green"]),
+  upset_sets = unname(wgbs_accent_palette["purple"]),
+  upset_main = unname(wgbs_red_yellow_blue_palette["low"]),
+  track_cgi = unname(wgbs_red_yellow_blue_palette["mid"]),
+  neutral = wgbs_neutral_palette,
+  neutral_light = unname(wgbs_neutral_palette["light"]),
+  neutral_mid = unname(wgbs_neutral_palette["mid"]),
+  neutral_dark = unname(wgbs_neutral_palette["dark"]),
+  sig_gradient = wgbs_red_yellow_blue_palette,
+  diverging = wgbs_red_yellow_blue_palette,
+  heatmap_diverging = wgbs_red_yellow_blue_palette,
+  heatmap_sequential = wgbs_red_yellow_blue_palette,
+  heatmap_binary = wgbs_red_yellow_blue_binary_palette,
+  heat_compare = colorRampPalette(unname(wgbs_red_yellow_blue_palette))(60),
+  heat_warm = colorRampPalette(c(unname(wgbs_neutral_palette["light"]), unname(wgbs_red_yellow_blue_palette["mid"]), unname(wgbs_accent_palette["warm"]), unname(wgbs_red_yellow_blue_palette["high"])))(50),
+  heat_meth = colorRampPalette(unname(wgbs_red_yellow_blue_palette))(100),
+  heat_meth_fun = circlize::colorRamp2(c(0, 50, 100), unname(wgbs_red_yellow_blue_palette)),
+  feature_fun = function(n) colorRampPalette(c(unname(wgbs_red_yellow_blue_palette), unname(wgbs_accent_palette)))(n),
+  cgi_fun = function(n) colorRampPalette(c(unname(wgbs_red_yellow_blue_palette["low"]), unname(wgbs_accent_palette["green"]), unname(wgbs_red_yellow_blue_palette["mid"]), unname(wgbs_accent_palette["warm"]), unname(wgbs_red_yellow_blue_palette["high"])))(n),
+  meth_bin_fun = function(n) colorRampPalette(unname(wgbs_red_yellow_blue_palette))(n),
+  # --- 富集分析专用配色 ---
+  go_category = c("BP" = unname(wgbs_red_yellow_blue_palette["high"]), "CC" = unname(wgbs_red_yellow_blue_palette["low"]), "MF" = unname(wgbs_accent_palette["purple"])),
+  enrich_p = wgbs_red_yellow_blue_palette,
+  score = c("pos" = unname(wgbs_red_yellow_blue_palette["high"]), "neg" = unname(wgbs_red_yellow_blue_palette["low"])),
+  accent = wgbs_accent_palette,
+  de = c("up" = unname(wgbs_red_yellow_blue_palette["high"]), "down" = unname(wgbs_red_yellow_blue_palette["low"]), "ns" = unname(wgbs_neutral_palette["mid"])),
+  heat_meth_top_fun = circlize::colorRamp2(c(0, 50, 100), unname(wgbs_red_yellow_blue_palette))
+)
+
+viz_style <- list(
+  base_size = 13,
+  axis_text = 11,
+  axis_title = 12.5,
+  title = 14.5,
+  subtitle = 12,
+  legend_title = 11,
+  legend_text = 10,
+  strip_text = 11,
+  point_sm = 0.8,
+  point_md = 1.2,
+  point_lg = 2.6,
+  line = 0.95,
+  line_bold = 1.1
+)
+
+theme_wgbs_classic <- function(base_size = viz_style$base_size, legend = "right") {
+  theme_classic(base_size = base_size) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral_dark),
+      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral_dark),
+      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral_dark),
+      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral_dark),
+      strip.background = element_rect(fill = viz_pal$neutral_light, color = NA),
+      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral_dark),
+      legend.position = legend,
+      legend.title = element_text(size = base_size * 0.85, face = "bold"),
+      legend.text = element_text(size = base_size * 0.78),
+      plot.margin = margin(8, 10, 8, 8)
+    )
+}
+
+theme_wgbs_minimal <- function(base_size = viz_style$base_size, legend = "right") {
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral_dark),
+      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral_dark),
+      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral_dark),
+      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral_dark),
+      panel.grid.major = element_line(color = alpha(viz_pal$neutral_mid, 0.45), linewidth = 0.35),
+      panel.grid.minor = element_blank(),
+      strip.background = element_rect(fill = viz_pal$neutral_light, color = NA),
+      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral_dark),
+      legend.position = legend,
+      legend.title = element_text(size = base_size * 0.85, face = "bold"),
+      legend.text = element_text(size = base_size * 0.78),
+      plot.margin = margin(8, 10, 8, 8)
+    )
+}
+
+theme_wgbs_bw <- function(base_size = viz_style$base_size, legend = "right") {
+  theme_bw(base_size = base_size) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral_dark),
+      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral_dark),
+      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral_dark),
+      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral_dark),
+      panel.grid.major = element_line(color = alpha(viz_pal$neutral_mid, 0.45), linewidth = 0.35),
+      panel.grid.minor = element_blank(),
+      panel.border = element_rect(color = alpha(viz_pal$neutral_dark, 0.35), linewidth = 0.5),
+      strip.background = element_rect(fill = viz_pal$neutral_light, color = NA),
+      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral_dark),
+      legend.position = legend,
+      legend.title = element_text(size = base_size * 0.85, face = "bold"),
+      legend.text = element_text(size = base_size * 0.78),
+      plot.margin = margin(8, 10, 8, 8)
+    )
+}
+
+heatmap_diverging_col_fun <- function(x = NULL, midpoint = 0, breaks = NULL, colors = unname(viz_pal$heatmap_diverging)) {
+  if(!is.null(breaks)) {
+    return(circlize::colorRamp2(breaks, colors))
+  }
+
+  values <- as.numeric(x)
+  values <- values[is.finite(values)]
+  if(length(values) == 0) {
+    return(circlize::colorRamp2(c(-1, midpoint, 1), colors))
+  }
+
+  low_value <- min(values, na.rm = TRUE)
+  high_value <- max(values, na.rm = TRUE)
+  if(!is.finite(low_value) || !is.finite(high_value) || low_value == high_value) {
+    low_value <- midpoint - 1
+    high_value <- midpoint + 1
+  } else if(midpoint <= low_value || midpoint >= high_value) {
+    midpoint <- mean(c(low_value, high_value))
+  }
+
+  circlize::colorRamp2(c(low_value, midpoint, high_value), colors)
+}
+
+heatmap_sequential_col_fun <- function(x = NULL, breaks = NULL, colors = unname(viz_pal$heatmap_sequential)) {
+  if(!is.null(breaks)) {
+    return(circlize::colorRamp2(breaks, colors))
+  }
+
+  values <- as.numeric(x)
+  values <- values[is.finite(values)]
+  if(length(values) == 0) {
+    return(circlize::colorRamp2(c(0, 0.5, 1), colors))
+  }
+
+  low_value <- min(values, na.rm = TRUE)
+  high_value <- max(values, na.rm = TRUE)
+  if(!is.finite(low_value) || !is.finite(high_value) || low_value == high_value) {
+    low_value <- 0
+    high_value <- max(1, high_value)
+  }
+  mid_value <- mean(c(low_value, high_value))
+  circlize::colorRamp2(c(low_value, mid_value, high_value), colors)
+}
+
+heatmap_binary_col_fun <- function() {
+  circlize::colorRamp2(c(0, 0.5, 1), unname(viz_pal$heatmap_binary))
+}
+
+scale_fill_wgbs_ryb <- function(...) {
+  ggplot2::scale_fill_gradientn(colors = unname(viz_pal$heatmap_sequential), ...)
+}
+
+scale_color_wgbs_ryb <- function(...) {
+  ggplot2::scale_color_gradientn(colors = unname(viz_pal$heatmap_sequential), ...)
+}
+
+scale_fill_heatmap_diverging <- function(midpoint = 0, limits = NULL, ...) {
+  ggplot2::scale_fill_gradient2(
+    low = unname(viz_pal$heatmap_diverging["low"]),
+    mid = unname(viz_pal$heatmap_diverging["mid"]),
+    high = unname(viz_pal$heatmap_diverging["high"]),
+    midpoint = midpoint,
+    limits = limits,
+    ...
+  )
+}
+
+scale_color_heatmap_diverging <- function(midpoint = 0, limits = NULL, ...) {
+  ggplot2::scale_color_gradient2(
+    low = unname(viz_pal$heatmap_diverging["low"]),
+    mid = unname(viz_pal$heatmap_diverging["mid"]),
+    high = unname(viz_pal$heatmap_diverging["high"]),
+    midpoint = midpoint,
+    limits = limits,
+    ...
+  )
+}
+
+scale_fill_heatmap_sequential <- function(...) {
+  scale_fill_wgbs_ryb(...)
+}
+
+scale_color_heatmap_sequential <- function(...) {
+  scale_color_wgbs_ryb(...)
+}
+
+scale_fill_heatmap_binary <- function(limits = c(0, 1), ...) {
+  ggplot2::scale_fill_gradientn(
+    colors = unname(viz_pal$heatmap_binary),
+    values = c(0, 0.5, 1),
+    limits = limits,
+    ...
+  )
+}
+
+auto_y_axis <- function(values, padding = 0.2, min_span = 1.5, bounds = c(0, 100), n_breaks = 5) {
+  values <- as.numeric(values)
+  values <- values[is.finite(values)]
+
+  if(length(values) == 0) {
+    limits <- bounds
+  } else {
+    low_value <- min(values, na.rm = TRUE)
+    high_value <- max(values, na.rm = TRUE)
+    span <- high_value - low_value
+    if(!is.finite(span) || span == 0) {
+      center <- mean(c(low_value, high_value), na.rm = TRUE)
+      span <- min_span
+      low_value <- center - span / 2
+      high_value <- center + span / 2
+    } else if(span < min_span) {
+      center <- mean(c(low_value, high_value))
+      low_value <- center - min_span / 2
+      high_value <- center + min_span / 2
+      span <- min_span
+    }
+    pad <- span * padding
+    limits <- c(low_value - pad, high_value + pad)
+  }
+
+  limits <- pmax(limits, bounds[1])
+  limits <- pmin(limits, bounds[2])
+  if(diff(limits) <= 0) {
+    limits <- bounds
+  }
+
+  list(
+    limits = limits,
+    breaks = pretty(limits, n = n_breaks)
+  )
+}
+```

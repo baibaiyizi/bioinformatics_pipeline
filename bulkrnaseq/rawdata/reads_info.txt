@@ -1,0 +1,11 @@
+group_stage	sample	group	stage	raw_fq1	raw_fq2
+WTliver	WTliver1	WT	liver	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver1_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver1_2.fastq.gz
+WTliver	WTliver2	WT	liver	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver2_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver2_2.fastq.gz
+WTliver	WTliver3	WT	liver	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver3_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver3_2.fastq.gz
+WTliver	WTliver4	WT	liver	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver4_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver4_2.fastq.gz
+WTliver	WTliver5	WT	liver	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver5_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/WTliver5_2.fastq.gz
+PFOSliver	PFOSliver1	PFOS	liver	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver1_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver1_2.fastq.gz
+PFOSliver	PFOSliver2	PFOS	liver	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver2_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver2_2.fastq.gz
+PFOSliver	PFOSliver3	PFOS	liver	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver3_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver3_2.fastq.gz
+PFOSliver	PFOSliver4	PFOS	liver	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver4_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver4_2.fastq.gz
+PFOSliver	PFOSliver5	PFOS	liver	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver5_1.fastq.gz	/home/h1028/workspace/rna_seq/liver/rawdata/PFOSliver5_2.fastq.gz

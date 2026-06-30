@@ -1,0 +1,242 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 5: 功能富集与 GSEA
+# ==============================================================================
+# 这一节从甲基化关联到的基因出发，先做传统 ORA，再做 rank-based GSEA。
+
+enrichment_plot_dir <- "result/5_enrichment/plots/1"
+enrichment_table_dir <- "result/5_enrichment/tables/1"
+ensure_step_dirs(enrichment_plot_dir, enrichment_table_dir)
+
+ensure_dmr_outputs_loaded()
+
+# 1 富集输入数据准备
+# ------------------------------------------------------------------
+# 使用甲基化注释的基因进行富集分析（不依赖RNA-seq数据）
+# 这里先把同一基因对应的多个 DMR 收敛成“绝对效应最大的一个”，避免富集重复计数。
+message("   Section 4: 使用甲基化差异区域(DMR)注释的基因进行富集分析. DMR数量: ", nrow(dmr_anno_df))
+
+# 准备基因列表 (Gene List) 用于后续分析
+# 策略：对于每个基因，如果有多个 DMR，取 diffMethy 绝对值最大的那个
+if(!("gene_id_clean" %in% colnames(dmr_anno_df)) && "geneId" %in% colnames(dmr_anno_df)) {
+  dmr_anno_df$gene_id_clean <- str_replace(dmr_anno_df$geneId, "\\..*$", "")
+}
+
+gene_df_unique <- dmr_anno_df %>%
+  group_by(gene_id_clean) %>%
+  summarise(
+    diffMethy = diffMethy[which.max(abs(diffMethy))]
+  ) %>%
+  ungroup()
+
+# 转换 ID (Ensembl -> Entrez & Symbol)
+gene_map <- tryCatch({
+  bitr(gene_df_unique$gene_id_clean, fromType = "ENSEMBL", toType = c("ENTREZID", "SYMBOL"), OrgDb = org.Mm.eg.db)
+}, error = function(e) NULL)
+
+if(is.null(gene_map)) {
+  message("Warning: ID mapping failed in Section 4.")
+  gene_df_final <- data.frame()
+} else {
+  gene_df_final <- inner_join(gene_df_unique, gene_map, by = c("gene_id_clean" = "ENSEMBL"))
+  # 去重
+  gene_df_final <- gene_df_final %>% distinct(gene_id_clean, .keep_all = TRUE)
+}
+
+# 准备 geneList (用于 cnetplot 等)
+geneList <- gene_df_final$diffMethy
+names(geneList) <- gene_df_final$SYMBOL
+geneList <- sort(geneList, decreasing = TRUE)
+
+# 提取显著基因的 Entrez ID
+sig_genes <- unique(gene_df_final$ENTREZID)
+
+message("用于富集分析的基因数量：", length(sig_genes))
+
+# WGBS gene universe
+# WGBS 可检测基因受 CpG 密度、覆盖度和基因长度影响。默认背景会偏向全基因组注释基因，
+# 这里优先使用“至少有 WGBS CpG 覆盖并能映射到 Entrez 的基因”作为 universe。
+# 如果构建失败，仍保留原 clusterProfiler 默认背景以保证流程可运行。
+universe_status_file <- file.path(enrichment_table_dir, "wgbs_gene_universe_status.csv")
+wgbs_universe <- tryCatch({
+  ensure_obj_cpg_loaded()
+  txdb_for_universe <- load_main_chr_txdb(config$gtf_file)
+  build_wgbs_gene_universe(
+    obj_list = obj.cpg,
+    sample_ids_arg = sample_ids,
+    config_arg = config,
+    txdb_arg = txdb_for_universe,
+    min_groups = 1L,
+    min_samples = 1L,
+    cache_file = file.path(enrichment_table_dir, "wgbs_gene_universe.csv")
+  )
+}, error = function(e) {
+  write_csv(tibble(step = "wgbs_gene_universe", status = "error", message = e$message), universe_status_file)
+  NULL
+})
+
+enrich_universe <- NULL
+if(!is.null(wgbs_universe) && nrow(wgbs_universe) > 0 && "ENTREZID" %in% colnames(wgbs_universe)) {
+  enrich_universe <- unique(wgbs_universe$ENTREZID[!is.na(wgbs_universe$ENTREZID)])
+  write_csv(
+    tibble(step = "wgbs_gene_universe", status = "ok", message = paste(length(enrich_universe), "Entrez genes")),
+    universe_status_file
+  )
+} else if(!file.exists(universe_status_file)) {
+  write_csv(tibble(step = "wgbs_gene_universe", status = "skipped", message = "using clusterProfiler default universe"), universe_status_file)
+}
+
+# 2 KEGG 功能富集分析
+# ------------------------------------------------------------------
+# 同时保留完整结果和 pvalue < 0.05 的结果，便于后面溯源和换图。
+# 当前继续沿用 pvalue < 0.05 的展示口径；最终投稿/严格筛选建议同时报告 p.adjust 或 qvalue < 0.05。
+message("Running KEGG enrichment...")
+kegg_enrich <- enrichKEGG(gene = sig_genes,
+                          organism = "mmu",
+                          universe = enrich_universe,
+                          pvalueCutoff = 1,
+                          qvalueCutoff = 1)
+
+if(!is.null(kegg_enrich) && nrow(as.data.frame(kegg_enrich)) > 0) {
+  kegg_enrich <- setReadable(kegg_enrich, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+  write.csv(as.data.frame(kegg_enrich), "result/5_enrichment/tables/1/kegg_enrichment_results.csv", row.names = FALSE)
+  kegg_enrich@result <- kegg_enrich@result[kegg_enrich@result$pvalue < config$enrichment_p_threshold, ]
+  write.csv(as.data.frame(kegg_enrich), "result/5_enrichment/tables/1/kegg_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
+  
+  # KEGG 可视化 (统一配色)
+  save_ora_barplot(as.data.frame(kegg_enrich), "result/5_enrichment/plots/1/kegg_barplot.pdf",
+                   "KEGG Pathway Enrichment", top_n = 15)
+  save_ora_dotplot(as.data.frame(kegg_enrich), "result/5_enrichment/plots/1/kegg_dotplot.pdf",
+                   "KEGG Enrichment", top_n = 15)
+  save_enrichment_cnetplot(kegg_enrich, geneList,
+                           "result/5_enrichment/plots/1/kegg_cnetplot.pdf",
+                           "KEGG Cnetplot", showCategory = 5)
+}
+```
+
+```{r}
+# 3 GO 功能富集分析
+# ------------------------------------------------------------------
+# GO 按 BP / MF / CC / ALL 分开运行，后面不同图型直接复用各自结果对象。
+message("Running GO enrichment...")
+
+# 分别运行 BP, MF, CC, ALL
+go_bp <- enrichGO(gene = sig_genes, universe = enrich_universe, OrgDb = org.Mm.eg.db, keyType = "ENTREZID", ont = "BP", pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
+go_mf <- enrichGO(gene = sig_genes, universe = enrich_universe, OrgDb = org.Mm.eg.db, keyType = "ENTREZID", ont = "MF", pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
+go_cc <- enrichGO(gene = sig_genes, universe = enrich_universe, OrgDb = org.Mm.eg.db, keyType = "ENTREZID", ont = "CC", pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
+go_all <- enrichGO(gene = sig_genes, universe = enrich_universe, OrgDb = org.Mm.eg.db, keyType = "ENTREZID", ont = "ALL", pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
+
+# 保存未过滤结果
+if(!is.null(go_bp)) write.csv(as.data.frame(go_bp), "result/5_enrichment/tables/1/go_bp_enrichment_results.csv", row.names = FALSE)
+if(!is.null(go_mf)) write.csv(as.data.frame(go_mf), "result/5_enrichment/tables/1/go_mf_enrichment_results.csv", row.names = FALSE)
+if(!is.null(go_cc)) write.csv(as.data.frame(go_cc), "result/5_enrichment/tables/1/go_cc_enrichment_results.csv", row.names = FALSE)
+if(!is.null(go_all)) write.csv(as.data.frame(go_all), "result/5_enrichment/tables/1/go_all_enrichment_results.csv", row.names = FALSE)
+
+# 过滤pvalue<0.05并保存，用于后续绘图
+if(!is.null(go_bp)) go_bp@result <- go_bp@result[go_bp@result$pvalue < config$enrichment_p_threshold, ]
+if(!is.null(go_mf)) go_mf@result <- go_mf@result[go_mf@result$pvalue < config$enrichment_p_threshold, ]
+if(!is.null(go_cc)) go_cc@result <- go_cc@result[go_cc@result$pvalue < config$enrichment_p_threshold, ]
+if(!is.null(go_all)) go_all@result <- go_all@result[go_all@result$pvalue < config$enrichment_p_threshold, ]
+
+if(!is.null(go_bp)) write.csv(as.data.frame(go_bp), "result/5_enrichment/tables/1/go_bp_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
+if(!is.null(go_mf)) write.csv(as.data.frame(go_mf), "result/5_enrichment/tables/1/go_mf_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
+if(!is.null(go_cc)) write.csv(as.data.frame(go_cc), "result/5_enrichment/tables/1/go_cc_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
+if(!is.null(go_all)) write.csv(as.data.frame(go_all), "result/5_enrichment/tables/1/go_all_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
+
+# 计算相似度 (用于 treeplot)
+if(!is.null(go_bp) && nrow(go_bp) > 0) go_bp <- pairwise_termsim(go_bp)
+if(!is.null(go_mf) && nrow(go_mf) > 0) go_mf <- pairwise_termsim(go_mf)
+if(!is.null(go_cc) && nrow(go_cc) > 0) go_cc <- pairwise_termsim(go_cc)
+if(!is.null(go_all) && nrow(go_all) > 0) go_all <- pairwise_termsim(go_all)
+```
+
+```{r}
+# BP 可视化
+if(nrow(go_bp) > 0) {
+  save_ora_barplot(as.data.frame(go_bp), "result/5_enrichment/plots/1/go_bp_barplot.pdf",
+                   "GO BP Enrichment", top_n = 15)
+  save_ora_dotplot(as.data.frame(go_bp), "result/5_enrichment/plots/1/go_bp_dotplot.pdf",
+                   "GO BP Enrichment", top_n = 15)
+  save_enrichment_cnetplot(go_bp, geneList,
+                           "result/5_enrichment/plots/1/go_bp_cnetplot.pdf",
+                           "GO BP Cnetplot", showCategory = 5)
+  save_enrichment_treeplot(go_bp, "result/5_enrichment/plots/1/go_bp_treeplot.pdf",
+                           "GO BP Treeplot", showCategory = 15)
+  
+  # Chord & Cluster (GOplot，使用统一 helper)
+  gp_inputs <- build_goplot_inputs(as.data.frame(go_bp), geneList, category_label = "BP", top_n = 10)
+  save_go_goplot_bundle(gp_inputs,
+                        "result/5_enrichment/plots/1/go_bp_chord.pdf",
+                        "result/5_enrichment/plots/1/go_bp_cluster.pdf",
+                        title_suffix = "BP")
+  
+  # UpSet Plot
+  tryCatch({
+      go_df_raw <- as.data.frame(go_bp)
+      top_go <- go_df_raw %>% arrange(p.adjust) %>% head(15)
+      gene_sets <- list()
+      for(i in seq_len(nrow(top_go))) {
+        genes <- unlist(strsplit(as.character(top_go$geneID[i]), "/"))
+        genes <- genes[genes != ""]
+        if(length(genes) > 0) {
+          set_name <- as.character(top_go$Description[i])
+          if(nchar(set_name) > 30) set_name <- paste0(substr(set_name, 1, 30), "...")
+          gene_sets[[set_name]] <- genes
+        }
+      }
+      if(length(gene_sets) >= 2) {
+        cairo_pdf("result/5_enrichment/plots/1/go_bp_upset.pdf", width = 12, height = 8)
+        print(upset(fromList(gene_sets), nsets = length(gene_sets), nintersects = 20,
+                    order.by = "freq", sets.bar.color = viz_pal$upset_sets,
+                    main.bar.color = viz_pal$upset_main, text.scale = c(1.3, 1.3, 1, 1, 1.3, 1)))
+        dev.off()
+      }
+  }, error = function(e) cat("GO BP UpSet Error:", e$message, "\n"))
+}
+
+# MF 可视化
+if(nrow(go_mf) > 0) {
+  save_ora_barplot(as.data.frame(go_mf), "result/5_enrichment/plots/1/go_mf_barplot.pdf",
+                   "GO MF Enrichment", top_n = 15)
+  save_ora_dotplot(as.data.frame(go_mf), "result/5_enrichment/plots/1/go_mf_dotplot.pdf",
+                   "GO MF Enrichment", top_n = 15)
+  save_enrichment_cnetplot(go_mf, geneList,
+                           "result/5_enrichment/plots/1/go_mf_cnetplot.pdf",
+                           "GO MF Cnetplot", showCategory = 5)
+  save_enrichment_treeplot(go_mf, "result/5_enrichment/plots/1/go_mf_treeplot.pdf",
+                           "GO MF Treeplot", showCategory = 15)
+}
+
+# CC 可视化
+if(nrow(go_cc) > 0) {
+  save_ora_barplot(as.data.frame(go_cc), "result/5_enrichment/plots/1/go_cc_barplot.pdf",
+                   "GO CC Enrichment", top_n = 15)
+  save_ora_dotplot(as.data.frame(go_cc), "result/5_enrichment/plots/1/go_cc_dotplot.pdf",
+                   "GO CC Enrichment", top_n = 15)
+  save_enrichment_cnetplot(go_cc, geneList,
+                           "result/5_enrichment/plots/1/go_cc_cnetplot.pdf",
+                           "GO CC Cnetplot", showCategory = 5)
+  save_enrichment_treeplot(go_cc, "result/5_enrichment/plots/1/go_cc_treeplot.pdf",
+                           "GO CC Treeplot", showCategory = 15)
+}
+
+```
+
+```{r}
+# 4 Rank-based 富集分析 (GSEA)
+# ==============================================================================
+# 和 ORA 不同，这里保留连续效应值，更适合捕捉“整体偏移但单基因不过阈值”的通路。
+message("Running rank-based methylation GSEA...")
+
+if(exists("gene_df_final") && nrow(gene_df_final) > 0) {
+  meth_rank <- gene_df_final$diffMethy
+  names(meth_rank) <- gene_df_final$ENTREZID
+  meth_rank <- meth_rank[!is.na(names(meth_rank)) & !duplicated(names(meth_rank))]
+  build_gsea_plots(
+    rank_vec = meth_rank,
+    prefix = "result/5_enrichment/tables/1/methylation",
+    title_prefix = "Methylation Rank",
+    plot_prefix = "result/5_enrichment/plots/1/methylation"
+  )
+}
+```

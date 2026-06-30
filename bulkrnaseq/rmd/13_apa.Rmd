@@ -1,0 +1,173 @@
+# Step 13: 差异可变 polyA
+
+## 13.1 APA 输入与结果表
+
+```{r}
+ensure_module_result_layout("13_apa")
+
+apa_required_files <- c(
+  file.path(apa_dir, "apa_all_events.csv"),
+  file.path(apa_dir, "significant_apa_events.csv"),
+  file.path(apa_dir, "apa_gene_summary.csv")
+)
+if (!all(file.exists(apa_required_files))) {
+  stop("未找到完整 APA 结果，请先重新运行 bash rnaseq_third.sh。缺失文件: ", paste(basename(apa_required_files[!file.exists(apa_required_files)]), collapse = ", "))
+}
+
+if (nrow(apa_all_events) == 0) {
+  apa_all_events <- read.csv(file.path(apa_dir, "apa_all_events.csv"), check.names = FALSE, stringsAsFactors = FALSE) %>%
+    filter_primary_chr_df()
+}
+if (nrow(apa_sig_events) == 0) {
+  apa_sig_events <- read.csv(file.path(apa_dir, "significant_apa_events.csv"), check.names = FALSE, stringsAsFactors = FALSE) %>%
+    filter_primary_chr_df()
+}
+if (nrow(apa_gene_summary_tbl) == 0) {
+  apa_gene_summary_tbl <- read.csv(file.path(apa_dir, "apa_gene_summary.csv"), check.names = FALSE, stringsAsFactors = FALSE)
+}
+
+apa_all_events <- apa_all_events %>%
+  mutate(
+    gene_id_clean = sub("\\.[0-9]+$", "", dplyr::coalesce(gene_id_clean, gene_id, ENSEMBL, gene_label)),
+    gene_label = dplyr::coalesce(gene_label, gene_symbol, gene_name, gene_id_clean),
+    delta_PAU = suppressWarnings(as.numeric(delta_PAU)),
+    apa_pvalue = suppressWarnings(as.numeric(dplyr::coalesce(apa_pvalue, pvalue))),
+    apa_padj = suppressWarnings(as.numeric(dplyr::coalesce(apa_padj, p_adj))),
+    # 保留当前项目 APA nominal pvalue < 0.05 + |delta PAU| >= 0.1 口径；
+    # 更严格汇报时建议同步查看 apa_padj / BH FDR。
+    significant_apa = dplyr::coalesce(as.logical(significant_apa), is.finite(apa_pvalue) & apa_pvalue < 0.05 & is.finite(delta_PAU) & abs(delta_PAU) >= 0.1)
+  ) %>%
+  arrange(apa_pvalue, desc(abs(delta_PAU)))
+
+apa_sig_events <- apa_all_events %>%
+  filter(significant_apa) %>%
+  arrange(apa_pvalue, desc(abs(delta_PAU)))
+apa_sig_ids <- unique(stats::na.omit(apa_sig_events$gene_id_clean))
+
+apa_gene_summary_tbl <- apa_gene_summary_tbl %>%
+  mutate(
+    gene_id_clean = sub("\\.[0-9]+$", "", dplyr::coalesce(gene_id_clean, gene_id, ENSEMBL, gene_label)),
+    gene_label = dplyr::coalesce(gene_label, gene_symbol, gene_name, gene_id_clean),
+    best_apa_pvalue = suppressWarnings(as.numeric(best_apa_pvalue)),
+    best_apa_padj = suppressWarnings(as.numeric(best_apa_padj)),
+    max_abs_delta_PAU = suppressWarnings(as.numeric(max_abs_delta_PAU))
+  ) %>%
+  arrange(best_apa_pvalue, desc(max_abs_delta_PAU))
+if (nrow(apa_all_events) > 0) {
+  apa_gene_summary_tbl <- apa_gene_summary_tbl %>%
+    filter(gene_id_clean %in% unique(stats::na.omit(apa_all_events$gene_id_clean)))
+}
+
+apa_overlap_summary <- make_overlap_summary(apa_sig_ids, unique(de_result$ensembl_id[de_result$direction != "ns"]), "APA", "DE")
+apa_de_scatter_tbl <- apa_gene_summary_tbl %>%
+  left_join(
+    de_result %>%
+      dplyr::select(ensembl_id, gene_label, log2FoldChange, pvalue, direction) %>%
+      distinct(ensembl_id, .keep_all = TRUE),
+    by = c("gene_id_clean" = "ensembl_id"),
+    suffix = c("", "_de")
+  ) %>%
+  mutate(gene_label_plot = dplyr::coalesce(gene_label_de, gene_label, gene_id_clean))
+
+write.csv(apa_all_events, file.path(step11_dir, "13_1_APA_all_events.csv"), row.names = FALSE)
+write.csv(apa_sig_events, file.path(step11_dir, "13_2_significant_APA_events.csv"), row.names = FALSE)
+write.csv(apa_gene_summary_tbl, file.path(step11_dir, "13_3_APA_gene_summary.csv"), row.names = FALSE)
+write.csv(apa_overlap_summary, file.path(step11_dir, "13_4_DE_APA_overlap_summary.csv"), row.names = FALSE)
+```
+
+## 13.2 APA 图表
+
+```{r}
+if (nrow(apa_all_events) > 0) {
+  apa_event_summary <- apa_all_events %>%
+    group_by(event_type) %>%
+    summarise(
+      total_events = n(),
+      significant_events = sum(significant_apa, na.rm = TRUE),
+      higher_in_group2 = sum(delta_PAU > 0 & significant_apa, na.rm = TRUE),
+      higher_in_group1 = sum(delta_PAU < 0 & significant_apa, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(significant_events), event_type)
+  write.csv(apa_event_summary, file.path(step11_dir, "13_5_APA_event_summary.csv"), row.names = FALSE)
+
+  apa_bar_plot <- ggplot(apa_event_summary, aes(x = event_type, y = significant_events, fill = event_type)) +
+    geom_col(width = 0.75) +
+    labs(title = "Significant APA event summary", x = NULL, y = "Significant events") +
+    theme_rnaseq_minimal() +
+    theme(legend.position = "none")
+  save_plot_versions(apa_bar_plot, file.path(step11_dir, "13_6_APA_event_summary_barplot.pdf"), width = 7, height = 4.5)
+
+  apa_scatter <- apa_all_events %>%
+    mutate(status = ifelse(significant_apa, "significant", "ns")) %>%
+    ggplot(aes(x = delta_PAU, y = -log10(apa_pvalue + 1e-300), color = status)) +
+    geom_point(alpha = 0.65, size = 1.2) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+    geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed") +
+    scale_color_manual(values = viz_pal$sig_status) +
+    facet_wrap(~ event_type, scales = "free_y") +
+    labs(title = "APA delta-PAU landscape", x = paste0("delta PAU (", group2_label, " - ", group1_label, ")"), y = "-log10(PValue)") +
+    theme_rnaseq_bw()
+  save_plot_versions(apa_scatter, file.path(step11_dir, "13_7_APA_delta_PAU_scatter.pdf"), width = 10.5, height = 6.5)
+
+  if (nrow(apa_gene_summary_tbl) > 0) {
+    top_apa_plot <- apa_gene_summary_tbl %>%
+      slice_head(n = 20) %>%
+      mutate(gene_label = factor(gene_label, levels = rev(unique(gene_label)))) %>%
+      ggplot(aes(x = gene_label, y = max_abs_delta_PAU, fill = significant_apa_event_count)) +
+      geom_col(width = 0.75) +
+      coord_flip() +
+      scale_fill_heatmap_sequential() +
+      labs(title = "Top APA genes", x = NULL, y = "Max |delta PAU|", fill = "Sig APA events") +
+      theme_rnaseq_minimal()
+    save_plot_versions(top_apa_plot, file.path(step11_dir, "13_8_top_APA_gene_ranking.pdf"), width = 8.5, height = 6)
+
+    top_apa_gene_ids <- apa_gene_summary_tbl %>%
+      slice_head(n = 30) %>%
+      pull(gene_id_clean)
+    top_apa_gene_ids <- top_apa_gene_ids[top_apa_gene_ids %in% de_result$ensembl_id]
+    top_apa_gene_ids <- de_result$gene_id[match(top_apa_gene_ids, de_result$ensembl_id)]
+    top_apa_gene_ids <- top_apa_gene_ids[top_apa_gene_ids %in% rownames(gene_exp)]
+    if (length(top_apa_gene_ids) >= 2) {
+      apa_heat_mat <- log2(gene_exp[top_apa_gene_ids, , drop = FALSE] + 1)
+      apa_heat_mat <- safe_scale_rows(apa_heat_mat)
+      rownames(apa_heat_mat) <- de_result$gene_label[match(rownames(apa_heat_mat), de_result$gene_id)]
+      save_base_pdf_versions(
+        primary = file.path(step11_dir, "13_9_top_APA_gene_heatmap.pdf"),
+        width = 8.5,
+        height = 10,
+        expr = ComplexHeatmap::draw(
+          ComplexHeatmap::Heatmap(
+            apa_heat_mat,
+            name = "z-score",
+            col = heatmap_diverging_col_fun(apa_heat_mat),
+            top_annotation = heatmap_group_annotation(sample_info$group),
+            cluster_rows = TRUE,
+            cluster_columns = TRUE,
+            column_names_rot = 45
+          )
+        )
+      )
+    }
+  }
+
+  apa_overlap_plot <- ggplot(apa_overlap_summary, aes(x = category, y = count, fill = category)) +
+    geom_col(width = 0.75) +
+    scale_fill_manual(values = viz_pal$overlap[c("APA_only", "DE_only", "APA_and_DE")]) +
+    labs(title = "DE 与 APA overlap", x = NULL, y = "Gene count") +
+    theme_rnaseq_minimal() +
+    theme(legend.position = "none")
+  save_plot_versions(apa_overlap_plot, file.path(step11_dir, "13_10_DE_APA_overlap_barplot.pdf"), width = 7, height = 4.5)
+
+  if (nrow(apa_de_scatter_tbl) > 0) {
+    apa_de_scatter <- apa_de_scatter_tbl %>%
+      filter(is.finite(log2FoldChange), is.finite(max_abs_delta_PAU)) %>%
+      ggplot(aes(x = log2FoldChange, y = max_abs_delta_PAU, size = significant_apa_event_count, color = direction)) +
+      geom_point(alpha = 0.8) +
+      scale_color_manual(values = viz_pal$de) +
+      labs(title = "Gene expression change vs APA effect", x = "Gene log2FC", y = "Max |delta PAU|", size = "Sig APA events") +
+      theme_rnaseq_bw()
+    save_plot_versions(apa_de_scatter, file.path(step11_dir, "13_11_DE_APA_joint_scatter.pdf"), width = 8.5, height = 6)
+  }
+}
+```

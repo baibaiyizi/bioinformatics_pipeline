@@ -1,0 +1,137 @@
+# Step 8: GSEA
+
+## 8.1 GO / KEGG GSEA 主图与扩展图
+
+```{r}
+ensure_module_result_layout("08_gsea")
+
+de_result <- restore_main_de_result(required = TRUE)
+
+if (!file.exists(cache_06_tables_path)) {
+  stop("缺少 06 表格缓存: ", cache_06_tables_path, "。请先运行模块 06。")
+}
+
+enrichment_tables <- readRDS(cache_06_tables_path)
+if (!is.list(enrichment_tables)) {
+  stop("06 表格缓存格式错误（应为 list）: ", cache_06_tables_path)
+}
+
+gsea_go_df <- enrichment_tables[["gsea_go_df"]] %||% data.frame()
+gsea_kegg_df <- enrichment_tables[["gsea_kegg_df"]] %||% data.frame()
+gsea_hallmark_df <- enrichment_tables[["gsea_hallmark_df"]] %||% data.frame()
+gsea_reactome_df <- enrichment_tables[["gsea_reactome_df"]] %||% data.frame()
+leading_edge_go <- enrichment_tables[["leading_edge_go"]] %||% data.frame()
+leading_edge_kegg <- enrichment_tables[["leading_edge_kegg"]] %||% data.frame()
+leading_edge_hallmark <- enrichment_tables[["leading_edge_hallmark"]] %||% data.frame()
+leading_edge_reactome <- enrichment_tables[["leading_edge_reactome"]] %||% data.frame()
+
+has_enrichment_objects <- FALSE
+if (file.exists(cache_06_objects_path)) {
+  enrichment_objects <- readRDS(cache_06_objects_path)
+  if (is.list(enrichment_objects)) {
+    gsea_go <- enrichment_objects[["gsea_go"]] %||% gsea_go_df
+    gsea_kegg <- enrichment_objects[["gsea_kegg"]] %||% gsea_kegg_df
+    gsea_reactome <- enrichment_objects[["gsea_reactome"]] %||% gsea_reactome_df
+    has_enrichment_objects <- !is.null(enrichment_objects[["gsea_go"]]) || !is.null(enrichment_objects[["gsea_kegg"]]) || !is.null(enrichment_objects[["gsea_reactome"]])
+  }
+}
+
+if (!exists("gsea_go")) {
+  gsea_go <- gsea_go_df
+}
+if (!exists("gsea_kegg")) {
+  gsea_kegg <- gsea_kegg_df
+}
+if (!exists("gsea_reactome")) {
+  gsea_reactome <- gsea_reactome_df
+}
+
+if (!has_enrichment_objects) {
+  message("[08_gsea] 未检测到 06 对象缓存，ridge/emap/gseaplot2 等对象型图将显式跳过；dotplot/leading-edge 表格型输出继续生成。")
+}
+
+gsea_go_sets <- split_gsea_results_by_direction(gsea_go_df)
+gsea_kegg_sets <- split_gsea_results_by_direction(make_result_df(gsea_kegg))
+gsea_hallmark_sets <- split_gsea_results_by_direction(gsea_hallmark_df)
+gsea_reactome_sets <- split_gsea_results_by_direction(gsea_reactome_df)
+
+for (one_direction in DIRECTION_LEVELS) {
+  one_table_dir <- step7_table_dir(one_direction)
+  one_plot_dir <- step7_plot_dir(one_direction)
+  one_label <- direction_label(one_direction)
+
+  write_csv_safe(gsea_go_sets[[one_direction]], file.path(one_table_dir, "8_1_GSEA_GO_results.csv"), row.names = FALSE)
+  write_csv_safe(gsea_kegg_sets[[one_direction]], file.path(one_table_dir, "8_2_GSEA_KEGG_results.csv"), row.names = FALSE)
+  write_csv_safe(gsea_hallmark_sets[[one_direction]], file.path(one_table_dir, "8_3_GSEA_Hallmark_results.csv"), row.names = FALSE)
+  write_csv_safe(gsea_reactome_sets[[one_direction]], file.path(one_table_dir, "8_4_GSEA_Reactome_results.csv"), row.names = FALSE)
+
+  if (one_direction == "all") {
+    write_csv_safe(leading_edge_go, file.path(one_table_dir, "8_10_GSEA_GO_leading_edge.csv"), row.names = FALSE)
+    write_csv_safe(leading_edge_kegg, file.path(one_table_dir, "8_11_GSEA_KEGG_leading_edge.csv"), row.names = FALSE)
+    write_csv_safe(leading_edge_hallmark, file.path(one_table_dir, "8_12_GSEA_Hallmark_leading_edge.csv"), row.names = FALSE)
+    write_csv_safe(leading_edge_reactome, file.path(one_table_dir, "8_13_GSEA_Reactome_leading_edge.csv"), row.names = FALSE)
+  } else {
+    write_csv_safe(subset_leading_edge_table(leading_edge_go, gsea_go_sets[[one_direction]]), file.path(one_table_dir, "8_10_GSEA_GO_leading_edge.csv"), row.names = FALSE)
+    write_csv_safe(subset_leading_edge_table(leading_edge_kegg, gsea_kegg_sets[[one_direction]]), file.path(one_table_dir, "8_11_GSEA_KEGG_leading_edge.csv"), row.names = FALSE)
+    write_csv_safe(subset_leading_edge_table(leading_edge_hallmark, gsea_hallmark_sets[[one_direction]], id_col = "pathway"), file.path(one_table_dir, "8_12_GSEA_Hallmark_leading_edge.csv"), row.names = FALSE)
+    write_csv_safe(subset_leading_edge_table(leading_edge_reactome, gsea_reactome_sets[[one_direction]]), file.path(one_table_dir, "8_13_GSEA_Reactome_leading_edge.csv"), row.names = FALSE)
+  }
+
+  save_gsea_df_dotplot(
+    gsea_go_sets[[one_direction]],
+    file.path(one_plot_dir, "8_1_GSEA_GO_dotplot.pdf"),
+    paste("GO GSEA", one_label),
+    top_n = 12,
+    facet_col = "ONTOLOGY"
+  )
+  save_gsea_df_dotplot(
+    gsea_kegg_sets[[one_direction]],
+    file.path(one_plot_dir, "8_2_GSEA_KEGG_dotplot.pdf"),
+    paste("KEGG GSEA", one_label),
+    top_n = 12
+  )
+  save_gsea_df_dotplot(
+    gsea_hallmark_sets[[one_direction]],
+    file.path(one_plot_dir, "8_3_GSEA_Hallmark_dotplot.pdf"),
+    paste("Hallmark GSEA", one_label),
+    top_n = 12
+  )
+  save_gsea_df_dotplot(
+    gsea_reactome_sets[[one_direction]],
+    file.path(one_plot_dir, "8_4_GSEA_Reactome_dotplot.pdf"),
+    paste("Reactome GSEA", one_label),
+    top_n = 12
+  )
+}
+
+if (nrow(make_result_df(gsea_go)) > 0) {
+  save_gsea_family(gsea_go, list(
+    ridge = file.path(step7_plot_dir("all"), "8_5_GSEA_GO_ridgeplot.pdf"),
+    dot = file.path(step7_plot_dir("all"), "8_6_GSEA_GO_dotplot_full.pdf"),
+    emap = file.path(step7_plot_dir("all"), "8_7_GSEA_GO_emapplot.pdf"),
+    single = NA_character_
+  ), "GO Enrichment Analysis")
+}
+
+if (nrow(make_result_df(gsea_kegg)) > 0) {
+  save_gsea_family(gsea_kegg, list(
+    ridge = file.path(step7_plot_dir("all"), "8_8_GSEA_KEGG_ridgeplot.pdf"),
+    dot = file.path(step7_plot_dir("all"), "8_9_GSEA_KEGG_dotplot_full.pdf"),
+    emap = file.path(step7_plot_dir("all"), "8_10_GSEA_KEGG_emapplot.pdf"),
+    single = file.path(step7_plot_dir("all"), "8_11_GSEA_single_pathway_example.pdf")
+  ), "KEGG Pathway Analysis", include_single = TRUE)
+}
+
+if (nrow(leading_edge_go) > 0) {
+  save_leading_edge_heatmap(leading_edge_go, de_result, file.path(step7_plot_dir("all"), "8_12_GSEA_GO_leading_edge_heatmap.pdf"), id_type = "ENTREZID")
+}
+if (nrow(leading_edge_kegg) > 0) {
+  save_leading_edge_heatmap(leading_edge_kegg, de_result, file.path(step7_plot_dir("all"), "8_13_GSEA_KEGG_leading_edge_heatmap.pdf"), id_type = "ENTREZID")
+}
+if (nrow(leading_edge_hallmark) > 0) {
+  save_leading_edge_heatmap(leading_edge_hallmark, de_result, file.path(step7_plot_dir("all"), "8_14_GSEA_Hallmark_leading_edge_heatmap.pdf"), id_type = "SYMBOL")
+}
+if (nrow(leading_edge_reactome) > 0) {
+  save_leading_edge_heatmap(leading_edge_reactome, de_result, file.path(step7_plot_dir("all"), "8_15_GSEA_Reactome_leading_edge_heatmap.pdf"), id_type = "ENTREZID")
+}
+```

@@ -1,0 +1,237 @@
+# Step 09: GSVA 全通路活性评分
+
+## 09.1 GSVA 矩阵与差异通路
+
+```{r}
+ensure_module_result_layout("09_gsva")
+
+de_result <- restore_main_de_result(required = TRUE)
+gsva_expr_source <- if (!is.null(gene_logcpm) && identical(colnames(gene_logcpm), colnames(gene_exp))) gene_logcpm else log2(gene_exp + 1)
+gsva_expr_mat <- make_gene_symbol_matrix(gsva_expr_source, de_result)
+gsva_group_factor <- factor(sample_info[colnames(gsva_expr_mat), "group"], levels = c(group1_label, group2_label))
+
+run_gsva_score_matrix <- function(expr_mat, gene_sets, min_size = 10, max_size = 500) {
+  gene_sets <- lapply(gene_sets, function(x) unique(intersect(as.character(x), rownames(expr_mat))))
+  gene_sets <- gene_sets[lengths(gene_sets) >= min_size & lengths(gene_sets) <= max_size]
+  if (length(gene_sets) == 0 || nrow(expr_mat) < 100 || ncol(expr_mat) < 4) {
+    return(matrix(numeric(0), nrow = 0, ncol = ncol(expr_mat), dimnames = list(character(0), colnames(expr_mat))))
+  }
+  res <- tryCatch({
+    if ("gsvaParam" %in% getNamespaceExports("GSVA")) {
+      param <- GSVA::gsvaParam(
+        exprData = as.matrix(expr_mat),
+        geneSets = gene_sets,
+        minSize = min_size,
+        maxSize = max_size,
+        kcdf = "Gaussian"
+      )
+      GSVA::gsva(param, verbose = FALSE)
+    } else {
+      GSVA::gsva(
+        expr = as.matrix(expr_mat),
+        gset.idx.list = gene_sets,
+        method = "gsva",
+        kcdf = "Gaussian",
+        min.sz = min_size,
+        max.sz = max_size,
+        verbose = FALSE
+      )
+    }
+  }, error = function(e) {
+    message("GSVA method failed, fallback to ssGSEA: ", conditionMessage(e))
+    run_ssgsea_matrix(expr_mat, gene_sets, min_size = min_size, max_size = max_size)
+  })
+  as.matrix(res)
+}
+
+write_gsva_matrix <- function(mat, path) {
+  if (is.null(mat)) {
+    mat <- matrix(numeric(0), nrow = 0, ncol = ncol(gsva_expr_mat), dimnames = list(character(0), colnames(gsva_expr_mat)))
+  }
+  write.table(mat, path, sep = "\t", quote = FALSE, col.names = NA)
+}
+
+run_gsva_diff <- function(mat, family_label) {
+  diff_tbl <- run_limma_contrast_table(mat, gsva_group_factor, group1_label, group2_label)
+  if (nrow(diff_tbl) == 0) {
+    return(data.frame(
+      pathway = character(),
+      logFC = numeric(),
+      AveExpr = numeric(),
+      t = numeric(),
+      P.Value = numeric(),
+      adj.P.Val = numeric(),
+      B = numeric(),
+      family = character(),
+      significant = logical(),
+      direction = character(),
+      stringsAsFactors = FALSE
+    ))
+  }
+  diff_tbl %>%
+    rownames_to_column("pathway") %>%
+    mutate(
+      family = family_label,
+      # 保留当前项目 nominal pvalue < 0.05 的通路活性探索性筛选口径；正式报告建议同步查看 adj.P.Val/FDR。
+      significant = !is.na(P.Value) & P.Value < 0.05,
+      direction = case_when(
+        significant & logFC > 0 ~ paste0("higher_in_", group2_label),
+        significant & logFC < 0 ~ paste0("higher_in_", group1_label),
+        TRUE ~ "ns"
+      )
+    ) %>%
+    arrange(P.Value, desc(abs(logFC)))
+}
+
+gsva_status <- data.frame(step = "initialization", status = "started", detail = "", stringsAsFactors = FALSE)
+if (nrow(gsva_expr_mat) < 100 || ncol(gsva_expr_mat) < 4) {
+  gsva_status <- data.frame(step = "input", status = "skipped", detail = "symbol-level expression matrix too small", stringsAsFactors = FALSE)
+  hallmark_gsva <- kegg_gsva <- reactome_gsva <- c5_gsva <- matrix(numeric(0), nrow = 0, ncol = ncol(gsva_expr_mat), dimnames = list(character(0), colnames(gsva_expr_mat)))
+} else {
+  hallmark_sets <- build_msig_symbol_sets("H")
+  kegg_sets <- build_msig_symbol_sets("C2", c("CP:KEGG", "CP:KEGG_LEGACY", "CP:KEGG_MEDICUS"))
+  reactome_sets <- build_msig_symbol_sets("C2", "CP:REACTOME")
+  c5_sets <- build_msig_symbol_sets("C5")
+
+  hallmark_gsva <- run_gsva_score_matrix(gsva_expr_mat, hallmark_sets)
+  kegg_gsva <- run_gsva_score_matrix(gsva_expr_mat, kegg_sets)
+  reactome_gsva <- run_gsva_score_matrix(gsva_expr_mat, reactome_sets)
+  c5_gsva <- run_gsva_score_matrix(gsva_expr_mat, c5_sets)
+  gsva_status <- data.frame(
+    step = "gsva",
+    status = "ok",
+    detail = paste0("H=", nrow(hallmark_gsva), ";KEGG=", nrow(kegg_gsva), ";Reactome=", nrow(reactome_gsva), ";C5=", nrow(c5_gsva)),
+    stringsAsFactors = FALSE
+  )
+}
+
+hallmark_gsva_diff <- run_gsva_diff(hallmark_gsva, "Hallmark")
+kegg_gsva_diff <- run_gsva_diff(kegg_gsva, "KEGG")
+reactome_gsva_diff <- run_gsva_diff(reactome_gsva, "Reactome")
+c5_gsva_diff <- run_gsva_diff(c5_gsva, "MSigDB_C5")
+
+write_gsva_matrix(hallmark_gsva, "result/09_gsva/09_1_Hallmark_GSVA_matrix.tsv")
+write_gsva_matrix(kegg_gsva, "result/09_gsva/09_2_KEGG_GSVA_matrix.tsv")
+write_gsva_matrix(reactome_gsva, "result/09_gsva/09_3_Reactome_GSVA_matrix.tsv")
+write_gsva_matrix(c5_gsva, "result/09_gsva/09_4_MSigDB_C5_GSVA_matrix.tsv")
+write.csv(hallmark_gsva_diff, "result/09_gsva/09_5_Hallmark_GSVA_differential.csv", row.names = FALSE)
+write.csv(kegg_gsva_diff, "result/09_gsva/09_6_KEGG_GSVA_differential.csv", row.names = FALSE)
+write.csv(reactome_gsva_diff, "result/09_gsva/09_7_Reactome_GSVA_differential.csv", row.names = FALSE)
+write.csv(c5_gsva_diff, "result/09_gsva/09_8_MSigDB_C5_GSVA_differential.csv", row.names = FALSE)
+write.csv(gsva_status, "result/09_gsva/09_0_GSVA_status.csv", row.names = FALSE)
+
+gsva_leading_summary <- bind_rows(hallmark_gsva_diff, kegg_gsva_diff, reactome_gsva_diff, c5_gsva_diff) %>%
+  filter(is.finite(P.Value)) %>%
+  group_by(family, direction) %>%
+  arrange(P.Value, desc(abs(logFC)), .by_group = TRUE) %>%
+  slice_head(n = 10) %>%
+  ungroup()
+write.csv(gsva_leading_summary, "result/09_gsva/09_9_leading_GSVA_pathway_summary.csv", row.names = FALSE)
+```
+
+## 09.2 GSVA 图表
+
+```{r}
+top_gsva_pathways <- gsva_leading_summary %>%
+  arrange(P.Value, desc(abs(logFC))) %>%
+  slice_head(n = 30) %>%
+  pull(pathway) %>%
+  unique()
+
+gsva_heat_mat <- rbind(
+  hallmark_gsva[rownames(hallmark_gsva) %in% top_gsva_pathways, , drop = FALSE],
+  kegg_gsva[rownames(kegg_gsva) %in% top_gsva_pathways, , drop = FALSE],
+  reactome_gsva[rownames(reactome_gsva) %in% top_gsva_pathways, , drop = FALSE],
+  c5_gsva[rownames(c5_gsva) %in% top_gsva_pathways, , drop = FALSE]
+)
+if (nrow(gsva_heat_mat) >= 2) {
+  gsva_heat_scaled <- safe_scale_rows(gsva_heat_mat)
+  save_base_pdf_versions(
+    primary = "result/09_gsva/09_10_GSVA_pathway_activity_heatmap.pdf",
+    width = 10,
+    height = 10,
+    expr = ComplexHeatmap::draw(
+      ComplexHeatmap::Heatmap(
+        gsva_heat_scaled,
+        name = "z-score",
+        col = heatmap_diverging_col_fun(gsva_heat_scaled),
+        top_annotation = heatmap_group_annotation(sample_info[colnames(gsva_heat_scaled), "group"]),
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        column_names_rot = 45
+      )
+    )
+  )
+}
+
+if (nrow(gsva_leading_summary) > 0) {
+  gsva_bar_tbl <- gsva_leading_summary %>%
+    group_by(family) %>%
+    arrange(P.Value, desc(abs(logFC)), .by_group = TRUE) %>%
+    slice_head(n = 8) %>%
+    ungroup() %>%
+    mutate(pathway_label = factor(paste(family, pathway, sep = " | "), levels = rev(unique(paste(family, pathway, sep = " | ")))))
+  gsva_bar <- ggplot(gsva_bar_tbl, aes(x = pathway_label, y = logFC, fill = family)) +
+    geom_col(width = 0.75) +
+    coord_flip() +
+    labs(title = "Differential GSVA pathway activities", x = NULL, y = paste0(group2_label, " - ", group1_label, " GSVA logFC")) +
+    theme_rnaseq_minimal()
+  save_plot_versions(gsva_bar, "result/09_gsva/09_11_GSVA_differential_barplot.pdf", width = 10, height = 9)
+}
+```
+
+## 09.3 GSVA 与 WGCNA 模块 eigengene 关联
+
+```{r}
+gsva_module_cor_long <- data.frame()
+if ((!exists("me_df") || nrow(me_df) == 0) && file.exists(cache_12_wgcna_path)) {
+  wgcna_state <- readRDS(cache_12_wgcna_path)
+  me_df <- wgcna_state$me_df %||% data.frame()
+}
+
+if (exists("me_df") && is.data.frame(me_df) && nrow(me_df) > 0 && nrow(gsva_heat_mat) >= 2) {
+  module_cols <- grep("^Module_", colnames(me_df), value = TRUE)
+  common_samples <- intersect(colnames(gsva_heat_mat), me_df$sample)
+  if (length(module_cols) >= 1 && length(common_samples) >= 4) {
+    module_mat <- t(as.matrix(me_df[match(common_samples, me_df$sample), module_cols, drop = FALSE]))
+    colnames(module_mat) <- common_samples
+    pathway_mat <- gsva_heat_mat[, common_samples, drop = FALSE]
+    cor_mat <- cor(t(module_mat), t(pathway_mat), use = "pairwise.complete.obs")
+    gsva_module_cor_long <- as.data.frame(cor_mat) %>%
+      rownames_to_column("Module") %>%
+      pivot_longer(-Module, names_to = "pathway", values_to = "correlation") %>%
+      arrange(desc(abs(correlation)))
+    write.csv(gsva_module_cor_long, "result/09_gsva/09_12_GSVA_WGCNA_module_correlation.csv", row.names = FALSE)
+    save_base_pdf_versions(
+      primary = "result/09_gsva/09_13_GSVA_WGCNA_module_correlation_heatmap.pdf",
+      width = 10,
+      height = 8,
+      expr = ComplexHeatmap::draw(
+        ComplexHeatmap::Heatmap(
+          cor_mat,
+          name = "r",
+          col = heatmap_diverging_col_fun(cor_mat, midpoint = 0),
+          cluster_rows = TRUE,
+          cluster_columns = TRUE
+        )
+      )
+    )
+  }
+}
+if (nrow(gsva_module_cor_long) == 0) {
+  write.csv(data.frame(status = "skipped_wgcna_eigengene_or_gsva_matrix_unavailable"), "result/09_gsva/09_12_GSVA_WGCNA_module_correlation.csv", row.names = FALSE)
+}
+
+saveRDS(
+  list(
+    hallmark_gsva = hallmark_gsva,
+    kegg_gsva = kegg_gsva,
+    reactome_gsva = reactome_gsva,
+    c5_gsva = c5_gsva,
+    gsva_leading_summary = gsva_leading_summary,
+    gsva_module_cor_long = gsva_module_cor_long,
+    generated_at = as.character(Sys.time())
+  ),
+  cache_09_gsva_state_path
+)
+```

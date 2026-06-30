@@ -1,0 +1,300 @@
+# Step 14: 差异表达区域（DER）
+
+## 14.1 DER 结果表
+
+```{r}
+ensure_module_result_layout("14_der")
+
+der_required_files <- c(
+  file.path(der_dir, "all_ders.csv"),
+  file.path(der_dir, "significant_ders.csv"),
+  file.path(der_dir, "der_gene_summary.csv"),
+  file.path(der_dir, "coverage_matrix.tsv")
+)
+if (!all(file.exists(der_required_files))) {
+  stop("未找到完整 DER 结果，请先重新运行 bash rnaseq_third.sh。缺失文件: ", paste(basename(der_required_files[!file.exists(der_required_files)]), collapse = ", "))
+}
+
+if (nrow(der_all_regions) == 0) {
+  der_all_regions <- read.csv(file.path(der_dir, "all_ders.csv"), check.names = FALSE, stringsAsFactors = FALSE) %>%
+    filter_primary_chr_df()
+}
+if (nrow(der_sig_regions) == 0) {
+  der_sig_regions <- read.csv(file.path(der_dir, "significant_ders.csv"), check.names = FALSE, stringsAsFactors = FALSE) %>%
+    filter_primary_chr_df()
+}
+if (nrow(der_gene_summary_tbl) == 0) {
+  der_gene_summary_tbl <- read.csv(file.path(der_dir, "der_gene_summary.csv"), check.names = FALSE, stringsAsFactors = FALSE)
+}
+
+coalesce_chr_columns <- function(tbl, cols, default = NA_character_) {
+  out <- rep(default, nrow(tbl))
+  for (one_col in cols[cols %in% colnames(tbl)]) {
+    vals <- as.character(tbl[[one_col]])
+    fill <- (is.na(out) | out == "") & !is.na(vals) & vals != ""
+    out[fill] <- vals[fill]
+  }
+  out
+}
+
+coalesce_num_columns <- function(tbl, cols, default = NA_real_) {
+  out <- rep(default, nrow(tbl))
+  for (one_col in cols[cols %in% colnames(tbl)]) {
+    vals <- suppressWarnings(as.numeric(tbl[[one_col]]))
+    fill <- !is.finite(out) & is.finite(vals)
+    out[fill] <- vals[fill]
+  }
+  out
+}
+
+discover_der_gtf <- function() {
+  candidates <- c(
+    Sys.getenv("GTF_FILE", unset = ""),
+    file.path(Sys.getenv("REFERENCE_DIR", unset = "/home/h1028/workspace/reference/GRCm39"), "Mus_musculus.GRCm39.115.gtf"),
+    list.files("/home/h1028/workspace/reference/GRCm39", pattern = "Mus_musculus\\.GRCm39.*\\.gtf$", full.names = TRUE)[1]
+  )
+  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
+  hit <- candidates[file.exists(candidates)]
+  if (length(hit) == 0) NA_character_ else hit[[1]]
+}
+
+annotate_der_nearest_genes <- function(der_tbl) {
+  required_cols <- c("region_id", "seqnames", "start", "end")
+  missing_cols <- setdiff(required_cols, colnames(der_tbl))
+  if (length(missing_cols) > 0) {
+    return(data.frame(status = paste0("skipped_missing_der_columns:", paste(missing_cols, collapse = ","))))
+  }
+  gtf_file <- discover_der_gtf()
+  if (is.na(gtf_file) || !file.exists(gtf_file)) {
+    return(data.frame(status = "skipped_missing_gtf"))
+  }
+  pkg_state <- try_install_and_load(c("GenomicRanges", "IRanges", "rtracklayer"), bioc = TRUE)
+  if (!isTRUE(pkg_state$ok)) {
+    return(data.frame(status = paste0("skipped_missing_packages:", paste(pkg_state$missing, collapse = ","))))
+  }
+
+  der_valid <- der_tbl %>%
+    mutate(
+      .row_id = row_number(),
+      .seqnames = as.character(seqnames),
+      .start = suppressWarnings(as.numeric(start)),
+      .end = suppressWarnings(as.numeric(end))
+    ) %>%
+    filter(!is.na(region_id), region_id != "", !is.na(.seqnames), .seqnames != "", is.finite(.start), is.finite(.end), .end >= .start)
+  if (nrow(der_valid) == 0) {
+    return(data.frame(status = "skipped_no_valid_der_ranges"))
+  }
+
+  gtf_gr <- tryCatch(rtracklayer::import(gtf_file), error = function(e) NULL)
+  if (is.null(gtf_gr)) {
+    return(data.frame(status = "skipped_gtf_import_failed"))
+  }
+  gtf_type <- as.character(S4Vectors::mcols(gtf_gr)$type)
+  if (length(gtf_type) != length(gtf_gr)) {
+    gtf_type <- rep(NA_character_, length(gtf_gr))
+  }
+  gene_gr <- gtf_gr[gtf_type == "gene"]
+  if (length(gene_gr) == 0) {
+    gene_gr <- gtf_gr[!is.na(S4Vectors::mcols(gtf_gr)$gene_id)]
+  }
+  if (length(gene_gr) == 0) {
+    return(data.frame(status = "skipped_no_gene_features_in_gtf"))
+  }
+
+  gene_levels <- GenomeInfoDb::seqlevels(gene_gr)
+  der_has_chr <- any(grepl("^chr", der_valid$.seqnames))
+  gene_has_chr <- any(grepl("^chr", gene_levels))
+  if (der_has_chr && !gene_has_chr) {
+    gene_gr <- GenomeInfoDb::`seqlevels<-`(gene_gr, paste0("chr", gene_levels))
+  } else if (!der_has_chr && gene_has_chr) {
+    gene_gr <- GenomeInfoDb::`seqlevels<-`(gene_gr, sub("^chr", "", gene_levels))
+  }
+
+  der_gr <- GenomicRanges::GRanges(
+    seqnames = der_valid$.seqnames,
+    ranges = IRanges::IRanges(start = der_valid$.start, end = der_valid$.end)
+  )
+  nearest_idx <- GenomicRanges::nearest(der_gr, gene_gr, ignore.strand = TRUE)
+  keep <- !is.na(nearest_idx)
+  if (!any(keep)) {
+    return(data.frame(status = "skipped_no_nearest_gene_hits"))
+  }
+  nearest_gene_gr <- gene_gr[nearest_idx[keep]]
+  gene_meta <- as.data.frame(S4Vectors::mcols(nearest_gene_gr), stringsAsFactors = FALSE)
+  gene_id <- coalesce_chr_columns(gene_meta, c("gene_id", "ID", "Name"))
+  gene_symbol <- coalesce_chr_columns(gene_meta, c("gene_name", "gene_symbol", "Name", "gene_id"))
+  distance_bp <- IRanges::distance(der_gr[keep], nearest_gene_gr)
+  data.frame(
+    region_id = der_valid$region_id[keep],
+    nearest_gene_id_clean = sub("\\.[0-9]+$", "", gene_id),
+    nearest_gene_symbol = gene_symbol,
+    nearest_gene_seqnames = as.character(GenomicRanges::seqnames(nearest_gene_gr)),
+    nearest_gene_start = start(nearest_gene_gr),
+    nearest_gene_end = end(nearest_gene_gr),
+    distance_to_nearest_gene = as.numeric(distance_bp),
+    gtf_file = gtf_file,
+    status = "ok",
+    stringsAsFactors = FALSE
+  )
+}
+
+der_all_regions$gene_id_clean <- sub("\\.[0-9]+$", "", coalesce_chr_columns(der_all_regions, c("gene_id_clean", "gene_id", "gene_name")))
+der_all_regions$gene_label <- coalesce_chr_columns(der_all_regions, c("gene_name", "gene_label", "gene_id_clean"))
+der_all_regions$der_effect <- coalesce_num_columns(der_all_regions, c("der_effect", "logFC"))
+der_all_regions$region_width <- coalesce_num_columns(der_all_regions, c("width"))
+if (all(c("start", "end") %in% colnames(der_all_regions))) {
+  missing_width <- !is.finite(der_all_regions$region_width)
+  der_all_regions$region_width[missing_width] <- suppressWarnings(as.numeric(der_all_regions$end[missing_width]) - as.numeric(der_all_regions$start[missing_width]) + 1)
+}
+if ("significant_der" %in% colnames(der_all_regions)) {
+  der_all_regions$significant_der <- as.logical(der_all_regions$significant_der)
+} else {
+  der_all_regions$significant_der <- FALSE
+}
+if ("P.Value" %in% colnames(der_all_regions)) {
+  missing_sig <- is.na(der_all_regions$significant_der)
+  der_pvalue_num <- suppressWarnings(as.numeric(der_all_regions$P.Value))
+  # 保留当前项目 DER nominal pvalue < 0.05 口径；更严格汇报时建议同步查看 adj.P.Val / best_der_padj。
+  der_all_regions$significant_der[missing_sig] <- is.finite(der_pvalue_num[missing_sig]) & der_pvalue_num[missing_sig] < 0.05
+}
+der_all_regions$significant_der[is.na(der_all_regions$significant_der)] <- FALSE
+
+der_nearest_tbl <- annotate_der_nearest_genes(der_all_regions)
+write.csv(der_nearest_tbl, file.path(step13_dir, "14_11_DER_nearest_gene_annotation.csv"), row.names = FALSE)
+if (nrow(der_nearest_tbl) > 0 && all(c("region_id", "nearest_gene_id_clean", "nearest_gene_symbol") %in% colnames(der_nearest_tbl))) {
+  der_all_regions <- der_all_regions %>%
+    left_join(
+      der_nearest_tbl %>%
+        dplyr::select(region_id, nearest_gene_id_clean, nearest_gene_symbol, distance_to_nearest_gene),
+      by = "region_id"
+    )
+  missing_direct_gene <- is.na(der_all_regions$gene_id_clean) | der_all_regions$gene_id_clean == "" | der_all_regions$gene_id_clean == "NA"
+  has_nearest_gene <- !is.na(der_all_regions$nearest_gene_id_clean) & der_all_regions$nearest_gene_id_clean != "" & der_all_regions$nearest_gene_id_clean != "NA"
+  der_all_regions$gene_assignment_source <- ifelse(missing_direct_gene & has_nearest_gene, "nearest_gene", "direct_or_unassigned")
+  fill_nearest <- missing_direct_gene & has_nearest_gene
+  der_all_regions$gene_id_clean[fill_nearest] <- der_all_regions$nearest_gene_id_clean[fill_nearest]
+  der_all_regions$gene_label[fill_nearest] <- der_all_regions$nearest_gene_symbol[fill_nearest]
+}
+
+der_all_regions <- der_all_regions %>%
+  arrange(P.Value, desc(abs(der_effect)))
+der_sig_regions <- der_all_regions %>% filter(significant_der)
+der_sig_ids <- unique(stats::na.omit(der_sig_regions$gene_id_clean))
+
+der_gene_summary_tbl$gene_id_clean <- sub("\\.[0-9]+$", "", coalesce_chr_columns(der_gene_summary_tbl, c("gene_id_clean", "gene_id", "gene_name")))
+der_gene_summary_tbl$gene_label <- coalesce_chr_columns(der_gene_summary_tbl, c("gene_name", "gene_label", "gene_id_clean"))
+der_gene_summary_tbl$best_der_pvalue <- coalesce_num_columns(der_gene_summary_tbl, c("best_der_pvalue"))
+der_gene_summary_tbl$best_der_padj <- coalesce_num_columns(der_gene_summary_tbl, c("best_der_padj"))
+der_gene_summary_tbl$max_abs_der_effect <- coalesce_num_columns(der_gene_summary_tbl, c("max_abs_der_effect"))
+
+der_gene_summary_tbl <- der_gene_summary_tbl %>%
+  arrange(best_der_pvalue, desc(max_abs_der_effect))
+if (nrow(der_gene_summary_tbl) == 0 || all(is.na(der_gene_summary_tbl$gene_id_clean) | der_gene_summary_tbl$gene_id_clean == "" | der_gene_summary_tbl$gene_id_clean == "NA")) {
+  der_gene_summary_tbl <- der_all_regions %>%
+    filter(!is.na(gene_id_clean), gene_id_clean != "", gene_id_clean != "NA") %>%
+    group_by(gene_id_clean, gene_label) %>%
+    summarise(
+      der_region_count = n(),
+      significant_der_region_count = sum(significant_der, na.rm = TRUE),
+      best_der_pvalue = suppressWarnings(min(P.Value, na.rm = TRUE)),
+      best_der_padj = suppressWarnings(min(adj.P.Val, na.rm = TRUE)),
+      max_abs_der_effect = suppressWarnings(max(abs(der_effect), na.rm = TRUE)),
+      representative_region = region_id[which.min(dplyr::coalesce(P.Value, Inf))][1],
+      major_region_class = first_non_missing_chr(region_class),
+      min_distance_to_nearest_gene = suppressWarnings(min(distance_to_nearest_gene, na.rm = TRUE)),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      best_der_pvalue = ifelse(is.infinite(best_der_pvalue), NA_real_, best_der_pvalue),
+      best_der_padj = ifelse(is.infinite(best_der_padj), NA_real_, best_der_padj),
+      max_abs_der_effect = ifelse(is.infinite(max_abs_der_effect), NA_real_, max_abs_der_effect),
+      min_distance_to_nearest_gene = ifelse(is.infinite(min_distance_to_nearest_gene), NA_real_, min_distance_to_nearest_gene)
+    ) %>%
+    arrange(best_der_pvalue, desc(max_abs_der_effect))
+}
+if (nrow(der_all_regions) > 0 && nrow(der_gene_summary_tbl) > 0) {
+  der_gene_summary_tbl <- der_gene_summary_tbl %>%
+    filter(gene_id_clean %in% unique(stats::na.omit(der_all_regions$gene_id_clean)))
+}
+
+der_overlap_summary <- make_overlap_summary(der_sig_ids, unique(de_result$ensembl_id[de_result$direction != "ns"]), "DER", "DE")
+write.csv(der_all_regions, file.path(step13_dir, "14_1_all_DERs.csv"), row.names = FALSE)
+write.csv(der_sig_regions, file.path(step13_dir, "14_2_significant_DERs.csv"), row.names = FALSE)
+write.csv(der_gene_summary_tbl, file.path(step13_dir, "14_3_DER_gene_summary.csv"), row.names = FALSE)
+write.csv(der_overlap_summary, file.path(step13_dir, "14_4_DE_DER_overlap_summary.csv"), row.names = FALSE)
+```
+
+## 14.2 DER 图表
+
+```{r}
+if (nrow(der_all_regions) > 0) {
+  der_class_tbl <- der_all_regions %>%
+    count(region_class, name = "region_count") %>%
+    arrange(desc(region_count), region_class)
+  write.csv(der_class_tbl, file.path(step13_dir, "14_5_DER_region_class_summary.csv"), row.names = FALSE)
+
+  der_class_plot <- ggplot(der_class_tbl, aes(x = reorder(region_class, region_count), y = region_count, fill = region_class)) +
+    geom_col(width = 0.75) +
+    coord_flip() +
+    scale_fill_manual(values = resolve_named_colors(viz_pal$accent, der_class_tbl$region_class)) +
+    labs(title = "DER genomic class distribution", x = NULL, y = "Region count") +
+    theme_rnaseq_minimal() +
+    theme(legend.position = "none")
+  save_plot_versions(der_class_plot, file.path(step13_dir, "14_6_DER_region_class_distribution.pdf"), width = 7, height = 4.5)
+
+  der_width_plot <- ggplot(der_all_regions, aes(x = region_width, fill = significant_der)) +
+    geom_histogram(bins = 40, alpha = 0.8, position = "identity") +
+    scale_fill_manual(values = viz_rekey_colors(viz_pal$sig_status, c("TRUE" = "significant", "FALSE" = "ns"))) +
+    labs(title = "DER width distribution", x = "Region width", y = "Count", fill = "Significant") +
+    theme_rnaseq_minimal()
+  save_plot_versions(der_width_plot, file.path(step13_dir, "14_7_DER_width_distribution.pdf"), width = 8, height = 5)
+
+  top_der_plot <- der_all_regions %>%
+    filter(is.finite(P.Value), is.finite(der_effect)) %>%
+    arrange(P.Value, desc(abs(der_effect))) %>%
+    slice_head(n = 20) %>%
+    mutate(region_label = factor(region_id, levels = rev(region_id))) %>%
+    ggplot(aes(x = region_label, y = -log10(P.Value + 1e-300), fill = der_effect)) +
+    geom_col(width = 0.75) +
+    coord_flip() +
+    scale_fill_heatmap_diverging(midpoint = 0) +
+    labs(title = "Top DER ranking", x = NULL, y = "-log10(PValue)", fill = "Effect") +
+    theme_rnaseq_minimal()
+  save_plot_versions(top_der_plot, file.path(step13_dir, "14_8_top_DER_ranking.pdf"), width = 8.5, height = 6.5)
+
+  der_cov_mat <- read.delim(file.path(der_dir, "coverage_matrix.tsv"), row.names = 1, check.names = FALSE)
+  der_cov_mat <- der_cov_mat[rownames(der_cov_mat) %in% der_all_regions$region_id, , drop = FALSE]
+  if (nrow(der_cov_mat) >= 2) {
+    top_regions <- der_sig_regions %>% slice_head(n = min(30, nrow(der_sig_regions))) %>% pull(region_id)
+    top_regions <- top_regions[top_regions %in% rownames(der_cov_mat)]
+    if (length(top_regions) >= 2) {
+      der_heat_mat <- as.matrix(der_cov_mat[top_regions, , drop = FALSE])
+      der_heat_mat <- safe_scale_rows(log2(der_heat_mat + 1))
+      save_base_pdf_versions(
+        primary = file.path(step13_dir, "14_9_DER_coverage_heatmap.pdf"),
+        width = 8.5,
+        height = 10,
+        expr = ComplexHeatmap::draw(
+          ComplexHeatmap::Heatmap(
+            der_heat_mat,
+            name = "z-score",
+            col = heatmap_diverging_col_fun(der_heat_mat),
+            top_annotation = heatmap_group_annotation(sample_info$group),
+            cluster_rows = TRUE,
+            cluster_columns = TRUE,
+            column_names_rot = 45
+          )
+        )
+      )
+    }
+  }
+
+  der_overlap_plot <- ggplot(der_overlap_summary, aes(x = category, y = count, fill = category)) +
+    geom_col(width = 0.75) +
+    scale_fill_manual(values = viz_pal$overlap[c("DER_only", "DE_only", "DER_and_DE")]) +
+    labs(title = "DE 与 DER overlap", x = NULL, y = "Gene count") +
+    theme_rnaseq_minimal() +
+    theme(legend.position = "none")
+  save_plot_versions(der_overlap_plot, file.path(step13_dir, "14_10_DE_DER_overlap_barplot.pdf"), width = 7, height = 4.5)
+}
+```

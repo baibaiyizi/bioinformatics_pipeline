@@ -1,0 +1,311 @@
+# Step 3: 选中样本 count/QC 诊断
+
+## 3.1 样本概览与表达分布
+
+```{r}
+ensure_module_result_layout("03_qc")
+
+if (!exists("count_qc_tbl") || !is.data.frame(count_qc_tbl)) {
+  count_qc_tbl <- data.frame()
+}
+if (nrow(count_qc_tbl) == 0 && !is.null(gene_count_mat)) {
+  cpm_for_qc <- edgeR::cpm(gene_count_mat, log = FALSE)
+  count_qc_tbl <- data.frame(
+    sample = colnames(gene_count_mat),
+    group = sample_info[colnames(gene_count_mat), "group"],
+    raw_counts = colSums(gene_count_mat),
+    detected_genes_cpm1 = colSums(cpm_for_qc >= 1),
+    detected_genes_cpm5 = colSums(cpm_for_qc >= 5),
+    top100_gene_fraction = vapply(colnames(gene_count_mat), function(one_sample) {
+      one_counts <- sort(gene_count_mat[, one_sample], decreasing = TRUE)
+      sum(head(one_counts, 100), na.rm = TRUE) / sum(one_counts, na.rm = TRUE)
+    }, numeric(1)),
+    stringsAsFactors = FALSE
+  )
+}
+if (nrow(count_qc_tbl) == 0) {
+  count_qc_file <- file.path(result_02_dir, "2_4_count_based_qc_metrics.csv")
+  if (file.exists(resolve_existing_path(count_qc_file, preferred = "table"))) {
+    count_qc_tbl <- read.csv(count_qc_file, check.names = FALSE, stringsAsFactors = FALSE)
+  }
+}
+
+if (nrow(count_qc_tbl) > 0) {
+  library_size_plot <- ggplot(count_qc_tbl, aes(x = sample, y = raw_counts / 1e6, fill = group)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = group_colors) +
+    labs(title = "测序文库大小概览", x = NULL, y = "Raw counts (million)") +
+    theme_rnaseq_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+
+  save_plot_versions(
+    library_size_plot,
+    primary = "result/03_qc/3_3_library_size_overview.pdf",
+    width = 8.5,
+    height = 5
+  )
+}
+
+sample_overview <- data.frame(
+  sample = colnames(gene_exp),
+  group = sample_info[colnames(gene_exp), "group"],
+  stage = sample_info[colnames(gene_exp), "stage"],
+  detected_genes_tmm_gt1 = colSums(gene_exp > 1),
+  median_tmm = apply(gene_exp, 2, median),
+  stringsAsFactors = FALSE
+)
+expr_plot_mat <- if (!is.null(gene_logcpm) && identical(colnames(gene_logcpm), colnames(gene_exp))) {
+  gene_logcpm
+} else {
+  log2(gene_exp + 1)
+}
+expr_plot_label <- if (!is.null(gene_logcpm) && identical(colnames(gene_logcpm), colnames(gene_exp))) "counts logCPM" else "log2(DESeq2 normalized counts + 1)"
+sample_overview$median_expression_for_qc <- apply(expr_plot_mat, 2, median)
+
+if (!is.null(gene_count_mat)) {
+  sample_overview$raw_counts <- colSums(gene_count_mat)
+  cpm_mat <- edgeR::cpm(gene_count_mat, log = FALSE)
+  log2_cpm_mat <- log2(cpm_mat + 1)
+  sample_overview$detected_genes_cpm1 <- colSums(cpm_mat >= 1)
+  sample_overview$detected_genes_cpm5 <- colSums(cpm_mat >= 5)
+} else {
+  cpm_mat <- NULL
+  log2_cpm_mat <- NULL
+}
+
+write.csv(sample_overview, "result/03_qc/3_1_selected_sample_overview.csv", row.names = FALSE)
+
+expr_long <- as.data.frame(expr_plot_mat) %>%
+  rownames_to_column("gene_id") %>%
+  pivot_longer(-gene_id, names_to = "sample", values_to = "expr") %>%
+  mutate(group = sample_info[sample, "group"])
+
+expr_boxplot <- ggplot(expr_long, aes(x = sample, y = expr, fill = group)) +
+  geom_boxplot(outlier.size = 0.25, width = 0.7) +
+  scale_fill_manual(values = group_colors) +
+  labs(title = "选中样本表达分布", x = NULL, y = expr_plot_label) +
+  theme_rnaseq_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+
+save_plot_versions(
+  expr_boxplot,
+  primary = "result/03_qc/3_2_expression_distribution_boxplot.pdf",
+  width = 8.5,
+  height = 5
+)
+```
+
+## 3.2 RLE、相关性与样本距离
+
+```{r}
+if (!is.null(log2_cpm_mat)) {
+  gene_median <- apply(log2_cpm_mat, 1, median, na.rm = TRUE)
+  rle_mat <- sweep(log2_cpm_mat, 1, gene_median, "-")
+} else {
+  log2_tmm_mat <- log2(gene_exp + 1)
+  gene_median <- apply(log2_tmm_mat, 1, median, na.rm = TRUE)
+  rle_mat <- sweep(log2_tmm_mat, 1, gene_median, "-")
+}
+
+rle_long <- as.data.frame(rle_mat) %>%
+  rownames_to_column("gene_id") %>%
+  pivot_longer(-gene_id, names_to = "sample", values_to = "rle") %>%
+  mutate(group = sample_info[sample, "group"])
+
+rle_plot <- ggplot(rle_long, aes(x = sample, y = rle, fill = group)) +
+  geom_boxplot(outlier.size = 0.2, width = 0.7) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+  scale_fill_manual(values = group_colors) +
+  labs(title = "Relative Log Expression (RLE)", x = NULL, y = "RLE") +
+  theme_rnaseq_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+
+save_plot_versions(
+  rle_plot,
+  primary = "result/03_qc/3_4_rle_boxplot.pdf",
+  width = 8.5,
+  height = 5
+)
+
+sample_cor <- cor(expr_plot_mat, method = "pearson")
+cor_df <- expand.grid(sample_x = colnames(sample_cor), sample_y = colnames(sample_cor), stringsAsFactors = FALSE)
+cor_df$correlation <- as.vector(sample_cor)
+
+cor_plot <- ggplot(cor_df, aes(sample_x, sample_y, fill = correlation)) +
+  geom_tile(color = viz_pal$neutral["light"]) +
+  geom_text(aes(label = sprintf("%.2f", correlation)), size = 3) +
+  scale_fill_heatmap_diverging(midpoint = 0.95, limits = c(min(cor_df$correlation), 1)) +
+  labs(title = "样本相关性热图", x = NULL, y = NULL, fill = "Pearson r") +
+  theme_rnaseq_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+save_plot_versions(
+  cor_plot,
+  primary = "result/03_qc/3_5_sample_correlation_heatmap.pdf",
+  width = 7.5,
+  height = 6.5
+)
+
+sample_dist <- dist(t(expr_plot_mat))
+dist_mat <- as.matrix(sample_dist)
+dist_df <- expand.grid(sample_x = colnames(dist_mat), sample_y = colnames(dist_mat), stringsAsFactors = FALSE)
+dist_df$distance <- as.vector(dist_mat)
+
+distance_primary <- "result/03_qc/3_6_sample_distance_heatmap.pdf"
+distance_saved <- FALSE
+
+try({
+  distance_annotation <- heatmap_group_annotation(sample_info[colnames(dist_mat), "group"])
+  distance_row_anno <- heatmap_group_annotation(sample_info[rownames(dist_mat), "group"], which = "row")
+  save_base_pdf_versions(
+    primary = distance_primary,
+    width = 7,
+    height = 6,
+    expr = ComplexHeatmap::draw(
+      ComplexHeatmap::Heatmap(
+        dist_mat,
+        name = "distance",
+        top_annotation = distance_annotation,
+        right_annotation = distance_row_anno,
+        cluster_rows = TRUE,
+        cluster_columns = TRUE
+      )
+    )
+  )
+  distance_saved <- TRUE
+}, silent = TRUE)
+
+if (!distance_saved) {
+  dist_plot <- ggplot(dist_df, aes(sample_x, sample_y, fill = distance)) +
+    geom_tile(color = viz_pal$neutral["light"]) +
+    geom_text(aes(label = sprintf("%.1f", distance)), size = 3) +
+    scale_fill_heatmap_sequential() +
+    labs(title = "样本距离热图", x = NULL, y = NULL, fill = "Distance") +
+    theme_rnaseq_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  save_plot_versions(
+    dist_plot,
+    primary = distance_primary,
+    width = 7.5,
+    height = 6.5
+  )
+}
+
+sample_hclust <- hclust(sample_dist, method = "average")
+dend_data <- ggdendro::dendro_data(as.dendrogram(sample_hclust), type = "rectangle")
+
+dend_plot <- ggplot(ggdendro::segment(dend_data)) +
+  geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
+  coord_flip() +
+  scale_y_reverse(expand = c(0.2, 0)) +
+  labs(title = "样本聚类树", x = NULL, y = "Height") +
+  theme_rnaseq_minimal()
+
+save_plot_versions(
+  dend_plot,
+  primary = "result/03_qc/3_7_sample_dendrogram.pdf",
+  width = 7,
+  height = 5
+)
+```
+
+## 3.3 fastp 全样本聚合统计
+
+```{r}
+fastp_dir_candidates <- c(
+  file.path(working_dir, "fastqc"),
+  file.path(working_dir, "1.FastQC")
+)
+fastp_dir_hits <- fastp_dir_candidates[dir.exists(fastp_dir_candidates)]
+fastp_dir <- if (length(fastp_dir_hits) > 0) fastp_dir_hits[[1]] else file.path(working_dir, "fastqc")
+
+safe_json_value <- function(x, path, default = NA_real_) {
+  cur <- x
+  for (key in path) {
+    if (is.null(cur) || !key %in% names(cur)) {
+      return(default)
+    }
+    cur <- cur[[key]]
+  }
+  if (is.null(cur) || length(cur) == 0) {
+    return(default)
+  }
+  cur[[1]]
+}
+
+read_fastp_one <- function(sample_id) {
+  json_path <- file.path(fastp_dir, paste0(sample_id, "_fastp.json"))
+  if (!file.exists(json_path)) {
+    return(data.frame(
+      sample = sample_id,
+      group = reads_info[sample_id, "group"],
+      fastp_json = json_path,
+      status = "missing",
+      before_reads = NA_real_,
+      after_reads = NA_real_,
+      retained_ratio = NA_real_,
+      before_q20_rate = NA_real_,
+      after_q20_rate = NA_real_,
+      before_q30_rate = NA_real_,
+      after_q30_rate = NA_real_,
+      after_gc_content = NA_real_,
+      duplication_rate = NA_real_,
+      stringsAsFactors = FALSE
+    ))
+  }
+  obj <- tryCatch(jsonlite::fromJSON(json_path), error = function(e) NULL)
+  if (is.null(obj)) {
+    return(data.frame(sample = sample_id, group = reads_info[sample_id, "group"], fastp_json = json_path, status = "parse_failed", stringsAsFactors = FALSE))
+  }
+  before_reads <- as.numeric(safe_json_value(obj, c("summary", "before_filtering", "total_reads")))
+  after_reads <- as.numeric(safe_json_value(obj, c("summary", "after_filtering", "total_reads")))
+  data.frame(
+    sample = sample_id,
+    group = reads_info[sample_id, "group"],
+    fastp_json = json_path,
+    status = "ok",
+    before_reads = before_reads,
+    after_reads = after_reads,
+    retained_ratio = ifelse(is.finite(before_reads) && before_reads > 0, after_reads / before_reads, NA_real_),
+    before_q20_rate = as.numeric(safe_json_value(obj, c("summary", "before_filtering", "q20_rate"))),
+    after_q20_rate = as.numeric(safe_json_value(obj, c("summary", "after_filtering", "q20_rate"))),
+    before_q30_rate = as.numeric(safe_json_value(obj, c("summary", "before_filtering", "q30_rate"))),
+    after_q30_rate = as.numeric(safe_json_value(obj, c("summary", "after_filtering", "q30_rate"))),
+    after_gc_content = as.numeric(safe_json_value(obj, c("summary", "after_filtering", "gc_content"))),
+    duplication_rate = as.numeric(safe_json_value(obj, c("duplication", "rate"))),
+    stringsAsFactors = FALSE
+  )
+}
+
+fastp_summary <- bind_rows(lapply(rownames(reads_info), read_fastp_one))
+write.csv(fastp_summary, "result/03_qc/3_8_fastp_aggregate_summary.csv", row.names = FALSE)
+
+fastp_ok <- fastp_summary %>% filter(status == "ok")
+if (nrow(fastp_ok) > 0) {
+  fastp_reads_long <- fastp_ok %>%
+    dplyr::select(sample, group, before_reads, after_reads) %>%
+    pivot_longer(c(before_reads, after_reads), names_to = "stage", values_to = "reads") %>%
+    mutate(stage = factor(stage, levels = c("before_reads", "after_reads"), labels = c("Before filtering", "After filtering")))
+
+  fastp_reads_plot <- ggplot(fastp_reads_long, aes(x = sample, y = reads / 1e6, fill = stage)) +
+    geom_col(position = position_dodge(width = 0.75), width = 0.68) +
+    labs(title = "fastp filtering read retention", x = NULL, y = "Reads (million)", fill = NULL) +
+    theme_rnaseq_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+  save_plot_versions(fastp_reads_plot, "result/03_qc/3_9_fastp_read_retention_barplot.pdf", width = 9, height = 5)
+
+  fastp_quality_long <- fastp_ok %>%
+    dplyr::select(sample, group, retained_ratio, after_q30_rate, duplication_rate) %>%
+    pivot_longer(c(retained_ratio, after_q30_rate, duplication_rate), names_to = "metric", values_to = "value") %>%
+    mutate(metric = recode(metric, retained_ratio = "Retained reads", after_q30_rate = "After-filter Q30", duplication_rate = "Duplication"))
+
+  fastp_quality_plot <- ggplot(fastp_quality_long, aes(x = sample, y = value, fill = group)) +
+    geom_col(width = 0.72) +
+    facet_wrap(~ metric, ncol = 1, scales = "free_y") +
+    scale_fill_manual(values = group_colors) +
+    labs(title = "fastp quality summary", x = NULL, y = "Rate") +
+    theme_rnaseq_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+  save_plot_versions(fastp_quality_plot, "result/03_qc/3_10_fastp_quality_metrics.pdf", width = 9, height = 7)
+}
+```

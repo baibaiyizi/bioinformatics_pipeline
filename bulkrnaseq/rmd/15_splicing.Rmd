@@ -1,0 +1,2211 @@
+# Step 15: 可变剪切、Isoform Switch 与多证据整合
+
+Step 15 结果目录按分析层次拆分为 6 组：`01_event_level`、`02_gene_level`、`03_visual_validation`、`04_isoform_switch`、`05_integration`、`06_sashimi_inputs`。
+
+`01_event_level`：rMATS 事件表、事件统计、JC/JCEC 一致性、DSFA、PSI 层样本结构与 DE-DAS 重叠。
+
+`02_gene_level`：DAS / DEU 基因层优先级、功能富集、PSI 热图与剪切调控候选。
+
+`03_visual_validation`：真实 sashimi 图、候选事件清单、执行命令与渲染状态。
+
+`04_isoform_switch`：Salmon + IsoformSwitchAnalyzeR 的转录本切换结果与功能后果汇总。
+
+`05_integration`：DE / DAS / DEU / IS / APA / DER 多方法整合、联合散点、证据热图与模块整合。
+
+`06_sashimi_inputs`：sashimi 原始输入事件、分事件输入目录与辅助导出文件。
+
+## 15.1 事件层输入与标准化
+
+```{r}
+ensure_module_result_layout("15_splicing")
+
+event_types <- c("SE", "A5SS", "A3SS", "RI", "MXE")
+count_modes <- c("JC", "JCEC")
+
+rmats_file_index <- data.frame()
+rmats_combined <- data.frame()
+rmats_sig <- data.frame()
+preferred_count_mode <- NA_character_
+high_confidence_events <- data.frame()
+overlap_summary <- data.frame()
+as_gene_priority <- data.frame()
+exon_gene_simes <- data.frame()
+exon_gene_f <- data.frame()
+exon_exon_results <- data.frame()
+deu_gene_priority <- data.frame()
+as_gene_membership <- data.frame()
+as_gene_evidence <- data.frame()
+top_as_candidates <- data.frame()
+isoform_switch_genes <- data.frame()
+isoform_switch_isoforms <- data.frame()
+isoform_switch_summary <- data.frame()
+isoform_consequence_summary <- data.frame()
+isoform_switch_pairs <- data.frame()
+isoform_fraction_df <- data.frame()
+isoform_top_switches <- data.frame()
+dsfa_event_table <- data.frame()
+dsfa_gene_burden <- data.frame()
+dsfa_sig_events <- data.frame()
+apa_all_events <- data.frame()
+apa_sig_events <- data.frame()
+apa_gene_summary_tbl <- data.frame()
+der_all_regions <- data.frame()
+der_sig_regions <- data.frame()
+der_gene_summary_tbl <- data.frame()
+deu_sig_ids <- character(0)
+isoform_sig_ids <- character(0)
+dsfa_sig_ids <- character(0)
+apa_sig_ids <- character(0)
+der_sig_ids <- character(0)
+
+coalesce_chr_columns <- function(tbl, cols, default = NA_character_) {
+  out <- rep(default, nrow(tbl))
+  for (one_col in cols[cols %in% colnames(tbl)]) {
+    vals <- as.character(tbl[[one_col]])
+    fill <- (is.na(out) | out == "") & !is.na(vals) & vals != ""
+    out[fill] <- vals[fill]
+  }
+  out
+}
+
+coalesce_num_columns <- function(tbl, cols, default = NA_real_) {
+  out <- rep(default, nrow(tbl))
+  for (one_col in cols[cols %in% colnames(tbl)]) {
+    vals <- suppressWarnings(as.numeric(tbl[[one_col]]))
+    fill <- !is.finite(out) & is.finite(vals)
+    out[fill] <- vals[fill]
+  }
+  out
+}
+
+coalesce_lgl_columns <- function(tbl, cols, default = NA) {
+  out <- rep(default, nrow(tbl))
+  for (one_col in cols[cols %in% colnames(tbl)]) {
+    vals <- suppressWarnings(as.logical(tbl[[one_col]]))
+    fill <- is.na(out) & !is.na(vals)
+    out[fill] <- vals[fill]
+  }
+  out
+}
+
+with_gene_id_fields <- function(tbl, id_cols, label_cols = NULL, label_name = "gene_label") {
+  tbl$gene_id_clean <- sub("\\.[0-9]+$", "", coalesce_chr_columns(tbl, id_cols))
+  if (!is.null(label_cols)) {
+    tbl[[label_name]] <- coalesce_chr_columns(tbl, label_cols)
+  }
+  tbl
+}
+
+ensure_columns <- function(tbl, defaults) {
+  for (nm in names(defaults)) {
+    if (!nm %in% colnames(tbl)) {
+      tbl[[nm]] <- defaults[[nm]]
+    }
+  }
+  tbl
+}
+
+load_rmats_table <- function(target_file, event_type, count_mode) {
+  rmats_df <- read.delim(target_file, check.names = FALSE, stringsAsFactors = FALSE)
+  rmats_df <- filter_primary_chr_df(rmats_df)
+  rmats_df$event_type <- event_type
+  rmats_df$count_mode <- count_mode
+  rmats_df$source_file <- normalizePath(target_file, mustWork = FALSE)
+  rmats_df$gene_id_clean <- dplyr::coalesce(
+    if ("GeneID" %in% colnames(rmats_df)) sub("\\.[0-9]+$", "", rmats_df$GeneID) else NA_character_,
+    if ("geneSymbol" %in% colnames(rmats_df)) sub("\\.[0-9]+$", "", rmats_df$geneSymbol) else NA_character_,
+    if ("ID" %in% colnames(rmats_df)) sub("\\.[0-9]+$", "", as.character(rmats_df$ID)) else NA_character_
+  )
+  rmats_df$gene_label <- dplyr::coalesce(
+    if ("geneSymbol" %in% colnames(rmats_df)) rmats_df$geneSymbol else NA_character_,
+    if ("GeneID" %in% colnames(rmats_df)) sub("\\.[0-9]+$", "", rmats_df$GeneID) else NA_character_,
+    if ("ID" %in% colnames(rmats_df)) as.character(rmats_df$ID) else NA_character_
+  )
+  rmats_df$event_pvalue <- dplyr::coalesce(
+    if ("PValue" %in% colnames(rmats_df)) suppressWarnings(as.numeric(rmats_df$PValue)) else NA_real_,
+    if ("pvalue" %in% colnames(rmats_df)) suppressWarnings(as.numeric(rmats_df$pvalue)) else NA_real_
+  )
+  rmats_df$event_fdr <- dplyr::coalesce(
+    if ("FDR" %in% colnames(rmats_df)) suppressWarnings(as.numeric(rmats_df$FDR)) else NA_real_,
+    if ("fdr" %in% colnames(rmats_df)) suppressWarnings(as.numeric(rmats_df$fdr)) else NA_real_,
+    if ("adj.P.Val" %in% colnames(rmats_df)) suppressWarnings(as.numeric(rmats_df$adj.P.Val)) else NA_real_
+  )
+  rmats_df$event_pvalue[is.na(rmats_df$event_pvalue)] <- 1
+  rmats_df$IncLevelDifference[is.na(rmats_df$IncLevelDifference)] <- 0
+  rmats_df$psi_group1_mean <- if ("IncLevel1" %in% colnames(rmats_df)) vapply(rmats_df$IncLevel1, mean_numeric_string, numeric(1)) else NA_real_
+  rmats_df$psi_group2_mean <- if ("IncLevel2" %in% colnames(rmats_df)) vapply(rmats_df$IncLevel2, mean_numeric_string, numeric(1)) else NA_real_
+  rmats_df$abs_delta_psi <- abs(rmats_df$IncLevelDifference)
+  # 保留当前项目 rMATS nominal pvalue < 0.05 + |delta PSI| >= 0.1 口径；
+  # 更严格汇报时建议同时筛选 rMATS FDR < 0.05。
+  rmats_df$significant_as <- rmats_df$event_pvalue < 0.05 & rmats_df$abs_delta_psi >= 0.1
+  rmats_df$splice_direction <- dplyr::case_when(
+    !rmats_df$significant_as ~ "ns",
+    rmats_df$IncLevelDifference > 0 ~ paste0("higher_in_", group2_label),
+    TRUE ~ paste0("higher_in_", group1_label)
+  )
+
+  coord_cols <- intersect(
+    c("chr", "strand", "exonStart_0base", "exonEnd", "upstreamEE", "downstreamES",
+      "upstreamES", "downstreamEE", "longExonStart_0base", "longExonEnd",
+      "shortES", "shortEE", "riExonStart_0base", "riExonEnd",
+      "1stExonStart_0base", "1stExonEnd", "2ndExonStart_0base", "2ndExonEnd"),
+    colnames(rmats_df)
+  )
+  if (length(coord_cols) > 0) {
+    rmats_df$event_label <- apply(rmats_df[, coord_cols, drop = FALSE], 1, function(x) {
+      paste(x[!is.na(x) & x != ""], collapse = ":")
+    })
+  } else {
+    rmats_df$event_label <- if ("ID" %in% colnames(rmats_df)) as.character(rmats_df$ID) else paste0(event_type, "_", seq_len(nrow(rmats_df)))
+  }
+
+  rmats_df$event_key <- paste(rmats_df$event_type, rmats_df$gene_id_clean, rmats_df$event_label, sep = "|")
+  rmats_df$event_priority <- -log10(rmats_df$event_pvalue + 1e-300) * pmax(rmats_df$abs_delta_psi, 0.001)
+  rmats_df
+}
+
+if (dir.exists(rmats_dir)) {
+  rmats_file_index <- expand.grid(
+    event_type = event_types,
+    count_mode = count_modes,
+    stringsAsFactors = FALSE
+  ) %>%
+    mutate(
+      file_path = mapply(function(one_event, one_mode) {
+        find_rmats_file(rmats_dir, one_event, one_mode)
+      }, event_type, count_mode),
+      exists = !is.na(file_path)
+    ) %>%
+    filter(exists)
+
+  if (nrow(rmats_file_index) > 0) {
+    rmats_tables <- lapply(seq_len(nrow(rmats_file_index)), function(i) {
+      load_rmats_table(
+        target_file = rmats_file_index$file_path[i],
+        event_type = rmats_file_index$event_type[i],
+        count_mode = rmats_file_index$count_mode[i]
+      )
+    })
+    rmats_combined <- bind_rows(rmats_tables)
+  }
+}
+
+if (nrow(rmats_combined) == 0) {
+  cat("当前未检测到完整 rMATS 输出，Step 6 将自动跳过 AS 相关分析。\n")
+} else {
+  de_map <- de_result %>%
+    arrange(pvalue, desc(abs(log2FoldChange))) %>%
+    distinct(ensembl_id, .keep_all = TRUE) %>%
+    dplyr::select(ensembl_id, gene_label, log2FoldChange, pvalue, padj, direction, ENTREZID)
+
+  rmats_combined <- rmats_combined %>%
+    left_join(
+      de_map,
+      by = c("gene_id_clean" = "ensembl_id"),
+      suffix = c("", "_de")
+    ) %>%
+    dplyr::rename(
+      de_log2FoldChange = log2FoldChange,
+      de_pvalue = pvalue,
+      de_padj = padj,
+      de_direction = direction
+    )
+
+  if (dir.exists(exon_usage_dir)) {
+    exon_gene_simes_file <- file.path(exon_usage_dir, "diffsplice_gene_simes.csv")
+    exon_gene_f_file <- file.path(exon_usage_dir, "diffsplice_gene_f.csv")
+    exon_exon_file <- file.path(exon_usage_dir, "diffsplice_exon.csv")
+
+    if (file.exists(exon_gene_simes_file)) {
+      exon_gene_simes <- read.csv(exon_gene_simes_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "GeneID")) %>%
+        mutate(
+          significant_deu = !is.na(P.Value) & P.Value < 0.05
+        ) %>%
+        arrange(P.Value, FDR)
+      deu_sig_ids <- unique(exon_gene_simes$gene_id_clean[exon_gene_simes$significant_deu])
+    }
+
+    if (file.exists(exon_gene_f_file)) {
+      exon_gene_f <- read.csv(exon_gene_f_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "GeneID")) %>%
+        mutate(
+          significant_gene_test = !is.na(P.Value) & P.Value < 0.05
+        ) %>%
+        arrange(P.Value, FDR)
+    }
+
+    if (file.exists(exon_exon_file)) {
+      exon_exon_results <- read.csv(exon_exon_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "GeneID")) %>%
+        mutate(
+          significant_exon = !is.na(P.Value) & P.Value < 0.05,
+          abs_logFC = abs(logFC)
+        ) %>%
+        arrange(P.Value, desc(abs_logFC))
+    }
+  }
+
+  if (dir.exists(isoform_results_dir)) {
+    isoform_gene_file <- file.path(isoform_results_dir, "significant_switch_genes.csv")
+    isoform_isoform_file <- file.path(isoform_results_dir, "significant_switch_isoforms.csv")
+    isoform_summary_file <- file.path(isoform_results_dir, "switch_summary.csv")
+    isoform_consequence_file <- file.path(isoform_results_dir, "consequence_summary.csv")
+    isoform_pairs_file <- file.path(isoform_results_dir, "representative_switch_pairs.csv")
+    isoform_fraction_file <- file.path(isoform_results_dir, "isoform_fraction_matrix.tsv")
+    isoform_top_switch_file <- file.path(isoform_results_dir, "top_switches_with_consequences.csv")
+    if (!file.exists(isoform_top_switch_file)) {
+      isoform_top_switch_file <- file.path(isoform_results_dir, "top_switches.csv")
+    }
+
+    if (file.exists(isoform_gene_file)) {
+      isoform_switch_genes <- read.csv(isoform_gene_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "geneID"), c("gene_name", "gene_label", "gene_id_clean"), label_name = "gene_name") %>%
+        {
+          .x <- .
+          .x$gene_switch_q_value <- coalesce_num_columns(.x, c("gene_switch_q_value", "switch_q_value", "q_value"))
+          .x$max_abs_dIF <- coalesce_num_columns(.x, c("max_abs_dIF", "dIF", "abs_dIF"))
+          .x
+        } %>%
+        arrange(gene_switch_q_value, desc(max_abs_dIF))
+      isoform_sig_ids <- unique(stats::na.omit(isoform_switch_genes$gene_id_clean))
+    }
+
+    if (file.exists(isoform_isoform_file)) {
+      isoform_switch_isoforms <- read.csv(isoform_isoform_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "geneID"), c("gene_name", "gene_label", "gene_id_clean"), label_name = "gene_name") %>%
+        {
+          .x <- .
+          .x$isoform_switch_q_value <- coalesce_num_columns(.x, c("isoform_switch_q_value", "switch_q_value", "q_value"))
+          .x$dIF_value <- coalesce_num_columns(.x, c("dIF_value", "dIF", "isoform_dIF"))
+          .x
+        } %>%
+        arrange(isoform_switch_q_value, desc(abs(dIF_value)))
+    }
+
+    if (file.exists(isoform_summary_file)) {
+      isoform_switch_summary <- read.csv(isoform_summary_file, check.names = FALSE, stringsAsFactors = FALSE)
+    }
+    if (file.exists(isoform_consequence_file)) {
+      isoform_consequence_summary <- read.csv(isoform_consequence_file, check.names = FALSE, stringsAsFactors = FALSE)
+    }
+    if (file.exists(isoform_pairs_file)) {
+      isoform_switch_pairs <- read.csv(isoform_pairs_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "geneID"))
+    }
+    if (file.exists(isoform_fraction_file)) {
+      isoform_fraction_df <- read.delim(isoform_fraction_file, check.names = FALSE, stringsAsFactors = FALSE)
+    }
+    if (file.exists(isoform_top_switch_file)) {
+      isoform_top_switches <- read.csv(isoform_top_switch_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "geneID"), c("gene_name", "gene_label", "gene_id_clean"), label_name = "gene_name") %>%
+        {
+          .x <- .
+          .x$isoform_switch_q_value <- coalesce_num_columns(.x, c("isoform_switch_q_value", "switch_q_value", "q_value"))
+          .x$dIF_value <- coalesce_num_columns(.x, c("dIF", "dIF_value", "isoform_dIF"))
+          .x
+        }
+    }
+  }
+
+  if (dir.exists(apa_dir)) {
+    apa_all_file <- file.path(apa_dir, "apa_all_events.csv")
+    apa_sig_file <- file.path(apa_dir, "significant_apa_events.csv")
+    apa_gene_file <- file.path(apa_dir, "apa_gene_summary.csv")
+    if (file.exists(apa_all_file)) {
+      apa_all_events <- read.csv(apa_all_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        filter_primary_chr_df() %>%
+        with_gene_id_fields(c("gene_id_clean", "ENSEMBL", "gene_id", "gene_label"), c("gene_label", "gene_symbol", "gene_name", "gene_id_clean")) %>%
+        {
+          .x <- .
+          .x$delta_PAU <- coalesce_num_columns(.x, c("delta_PAU"))
+          .x$apa_pvalue <- coalesce_num_columns(.x, c("apa_pvalue", "pvalue"))
+          .x$apa_padj <- coalesce_num_columns(.x, c("apa_padj", "p_adj"))
+          .x$significant_apa <- coalesce_lgl_columns(.x, c("significant_apa"))
+          missing_sig <- is.na(.x$significant_apa)
+          .x$significant_apa[missing_sig] <- is.finite(.x$apa_pvalue[missing_sig]) & .x$apa_pvalue[missing_sig] < 0.05 & is.finite(.x$delta_PAU[missing_sig]) & abs(.x$delta_PAU[missing_sig]) >= 0.1
+          .x$significant_apa[is.na(.x$significant_apa)] <- FALSE
+          .x
+        } %>%
+        arrange(apa_pvalue, desc(abs(delta_PAU)))
+    }
+    if (file.exists(apa_sig_file)) {
+      apa_sig_events <- read.csv(apa_sig_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        filter_primary_chr_df() %>%
+        with_gene_id_fields(c("gene_id_clean", "ENSEMBL", "gene_id", "gene_label"), c("gene_label", "gene_symbol", "gene_name", "gene_id_clean")) %>%
+        {
+          .x <- .
+          .x$delta_PAU <- coalesce_num_columns(.x, c("delta_PAU"))
+          .x$apa_pvalue <- coalesce_num_columns(.x, c("apa_pvalue", "pvalue"))
+          .x
+        } %>%
+        arrange(apa_pvalue, desc(abs(delta_PAU)))
+      apa_sig_ids <- unique(stats::na.omit(apa_sig_events$gene_id_clean))
+    }
+    if (file.exists(apa_gene_file)) {
+      apa_gene_summary_tbl <- read.csv(apa_gene_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        with_gene_id_fields(c("gene_id_clean", "ENSEMBL", "gene_id", "gene_label"), c("gene_label", "gene_symbol", "gene_name", "gene_id_clean")) %>%
+        {
+          .x <- .
+          .x$best_apa_pvalue <- coalesce_num_columns(.x, c("best_apa_pvalue"))
+          .x$best_apa_padj <- coalesce_num_columns(.x, c("best_apa_padj"))
+          .x$max_abs_delta_PAU <- coalesce_num_columns(.x, c("max_abs_delta_PAU"))
+          .x
+        } %>%
+        arrange(best_apa_pvalue, desc(max_abs_delta_PAU))
+      if (nrow(apa_all_events) > 0) {
+        apa_gene_summary_tbl <- apa_gene_summary_tbl %>%
+          filter(gene_id_clean %in% unique(stats::na.omit(apa_all_events$gene_id_clean)))
+      }
+    }
+  }
+
+  if (dir.exists(der_dir)) {
+    der_all_file <- file.path(der_dir, "all_ders.csv")
+    der_sig_file <- file.path(der_dir, "significant_ders.csv")
+    der_gene_file <- file.path(der_dir, "der_gene_summary.csv")
+    if (file.exists(der_all_file)) {
+      der_all_regions <- read.csv(der_all_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        filter_primary_chr_df() %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "gene_name"), c("gene_name", "gene_label", "gene_id_clean")) %>%
+        {
+          .x <- .
+          .x$der_effect <- coalesce_num_columns(.x, c("der_effect", "logFC"))
+          .x$significant_der <- coalesce_lgl_columns(.x, c("significant_der"))
+          missing_sig <- is.na(.x$significant_der)
+          der_pvalue_num <- coalesce_num_columns(.x, c("P.Value"))
+          .x$significant_der[missing_sig] <- is.finite(der_pvalue_num[missing_sig]) & der_pvalue_num[missing_sig] < 0.05
+          .x$significant_der[is.na(.x$significant_der)] <- FALSE
+          .x
+        } %>%
+        arrange(P.Value, desc(abs(der_effect)))
+    }
+    if (file.exists(der_sig_file)) {
+      der_sig_regions <- read.csv(der_sig_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        filter_primary_chr_df() %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "gene_name"), c("gene_name", "gene_label", "gene_id_clean")) %>%
+        {
+          .x <- .
+          .x$der_effect <- coalesce_num_columns(.x, c("der_effect", "logFC"))
+          .x
+        } %>%
+        arrange(P.Value, desc(abs(der_effect)))
+      der_sig_ids <- unique(stats::na.omit(der_sig_regions$gene_id_clean))
+    }
+    if (file.exists(der_gene_file)) {
+      der_gene_summary_tbl <- read.csv(der_gene_file, check.names = FALSE, stringsAsFactors = FALSE) %>%
+        with_gene_id_fields(c("gene_id_clean", "gene_id", "gene_name"), c("gene_name", "gene_label", "gene_id_clean")) %>%
+        {
+          .x <- .
+          .x$best_der_pvalue <- coalesce_num_columns(.x, c("best_der_pvalue"))
+          .x$best_der_padj <- coalesce_num_columns(.x, c("best_der_padj"))
+          .x$max_abs_der_effect <- coalesce_num_columns(.x, c("max_abs_der_effect"))
+          .x
+        } %>%
+        arrange(best_der_pvalue, desc(max_abs_der_effect))
+      if (nrow(der_all_regions) > 0) {
+        der_gene_summary_tbl <- der_gene_summary_tbl %>%
+          filter(gene_id_clean %in% unique(stats::na.omit(der_all_regions$gene_id_clean)))
+      }
+    }
+  }
+
+  preferred_count_mode <- if ("JCEC" %in% unique(rmats_combined$count_mode)) "JCEC" else sort(unique(rmats_combined$count_mode))[1]
+  rmats_sig <- rmats_combined %>%
+    filter(significant_as) %>%
+    arrange(event_pvalue, desc(abs_delta_psi))
+
+  write.csv(rmats_file_index, step10_event_table_path("15_0_rMATS_file_index.csv"), row.names = FALSE)
+  write.csv(rmats_combined, step10_event_table_path("15_1_rMATS_all_events.csv"), row.names = FALSE)
+  write.csv(rmats_sig, step10_event_table_path("15_2_significant_rMATS_events.csv"), row.names = FALSE)
+}
+```
+
+## 15.2 事件层统计与核心图
+
+```{r}
+if (nrow(rmats_combined) > 0) {
+  rmats_summary <- rmats_combined %>%
+    group_by(event_type, count_mode) %>%
+    summarise(
+      total_events = n(),
+      significant_events = sum(significant_as, na.rm = TRUE),
+      higher_in_group2 = sum(splice_direction == paste0("higher_in_", group2_label), na.rm = TRUE),
+      higher_in_group1 = sum(splice_direction == paste0("higher_in_", group1_label), na.rm = TRUE),
+      median_abs_delta_psi = ifelse(sum(significant_as, na.rm = TRUE) > 0, median(abs_delta_psi[significant_as], na.rm = TRUE), 0),
+      .groups = "drop"
+    )
+
+  write.csv(rmats_summary, step10_event_table_path("15_3_rMATS_event_summary.csv"), row.names = FALSE)
+
+  event_barplot <- ggplot(rmats_summary, aes(x = event_type, y = significant_events, fill = count_mode)) +
+    geom_col(position = "dodge", width = 0.7) +
+    labs(title = "显著 AS 事件数量", x = "Event type", y = "Significant events") +
+    theme_rnaseq_minimal()
+  save_plot_versions(event_barplot, step10_event_plot_path("15_4_rMATS_event_barplot.pdf"), width = 8, height = 5)
+
+  direction_summary <- rmats_sig %>%
+    group_by(count_mode, event_type, splice_direction) %>%
+    summarise(event_count = n(), .groups = "drop")
+  write.csv(direction_summary, step10_event_table_path("15_4b_rMATS_direction_summary.csv"), row.names = FALSE)
+
+  direction_plot <- ggplot(direction_summary, aes(x = event_type, y = event_count, fill = splice_direction)) +
+    geom_col(position = "stack", width = 0.7) +
+    facet_wrap(~ count_mode) +
+    labs(title = "显著 AS 事件方向分布", x = "Event type", y = "Event count") +
+    theme_rnaseq_minimal()
+  save_plot_versions(direction_plot, step10_event_plot_path("15_4c_rMATS_direction_barplot.pdf"), width = 10, height = 5)
+
+  delta_scatter <- ggplot(rmats_combined, aes(x = IncLevelDifference, y = -log10(event_pvalue + 1e-300), color = event_type)) +
+    geom_point(alpha = 0.6, size = 1.3) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+    geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed") +
+    facet_wrap(~ count_mode) +
+    labs(title = "rMATS 事件显著性分布", x = "Delta PSI", y = "-log10(PValue)") +
+    theme_rnaseq_bw()
+  save_plot_versions(delta_scatter, step10_event_plot_path("15_5_rMATS_deltaPSI_scatter.pdf"), width = 11, height = 6)
+
+  delta_violin <- ggplot(rmats_sig, aes(x = event_type, y = IncLevelDifference, fill = count_mode)) +
+    geom_violin(trim = TRUE, scale = "width", alpha = 0.7) +
+    geom_boxplot(width = 0.15, outlier.size = 0.3, position = position_dodge(width = 0.9)) +
+    labs(title = "显著 AS 事件 delta PSI 分布", x = "Event type", y = "Delta PSI") +
+    theme_rnaseq_minimal()
+  save_plot_versions(delta_violin, step10_event_plot_path("15_5b_rMATS_deltaPSI_violin.pdf"), width = 9, height = 5)
+
+  top_rmats_events <- rmats_sig %>%
+    transmute(
+      event_type,
+      count_mode,
+      gene_id_clean,
+      gene_label,
+      event_label,
+      PValue = event_pvalue,
+      FDR = event_fdr,
+      IncLevelDifference,
+      abs_delta_psi,
+      event_priority,
+      splice_direction,
+      de_log2FoldChange,
+      de_pvalue
+    ) %>%
+    slice_head(n = 50)
+  write.csv(top_rmats_events, step10_event_table_path("15_6_top_rMATS_events.csv"), row.names = FALSE)
+}
+```
+
+## 15.3 事件一致性与 DE-DAS 重叠
+
+```{r}
+if (nrow(rmats_combined) > 0) {
+  high_confidence_events <- rmats_sig %>% filter(count_mode == preferred_count_mode)
+
+  if (all(c("JC", "JCEC") %in% unique(rmats_combined$count_mode))) {
+    jc_tbl <- rmats_sig %>%
+      filter(count_mode == "JC") %>%
+      dplyr::select(event_key, event_type, gene_label, jc_delta_psi = IncLevelDifference, jc_pvalue = event_pvalue, jc_fdr = event_fdr, jc_direction = splice_direction)
+    jcec_tbl <- rmats_sig %>%
+      filter(count_mode == "JCEC") %>%
+      dplyr::select(event_key, event_type, gene_label, jcec_delta_psi = IncLevelDifference, jcec_pvalue = event_pvalue, jcec_fdr = event_fdr, jcec_direction = splice_direction)
+
+    concordance_tbl <- inner_join(jc_tbl, jcec_tbl, by = c("event_key", "event_type", "gene_label")) %>%
+      mutate(
+        same_direction = sign(jc_delta_psi) == sign(jcec_delta_psi),
+        delta_psi_cor = safe_cor(jc_delta_psi, jcec_delta_psi),
+        high_confidence = same_direction &
+          abs(jc_delta_psi) >= 0.1 &
+          abs(jcec_delta_psi) >= 0.1 &
+          jc_pvalue < 0.05 &
+          jcec_pvalue < 0.05
+      )
+
+    write.csv(concordance_tbl, step10_event_table_path("15_6b_JC_JCEC_event_concordance.csv"), row.names = FALSE)
+
+    concordance_summary <- concordance_tbl %>%
+      group_by(event_type) %>%
+      summarise(
+        common_events = n(),
+        same_direction_events = sum(same_direction, na.rm = TRUE),
+        high_confidence_events = sum(high_confidence, na.rm = TRUE),
+        delta_psi_cor = safe_cor(jc_delta_psi, jcec_delta_psi),
+        pvalue_cor = safe_cor(-log10(jc_pvalue + 1e-300), -log10(jcec_pvalue + 1e-300)),
+        .groups = "drop"
+      )
+    write.csv(concordance_summary, step10_event_table_path("15_6c_JC_JCEC_concordance_summary.csv"), row.names = FALSE)
+
+    concordance_plot <- ggplot(concordance_tbl, aes(x = jc_delta_psi, y = jcec_delta_psi, color = event_type)) +
+      geom_point(alpha = 0.55, size = 1.2) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+      scale_color_manual(values = resolve_named_colors(viz_pal$accent, concordance_tbl$event_type)) +
+      labs(title = "JC 与 JCEC 的 delta PSI 一致性", x = "JC delta PSI", y = "JCEC delta PSI") +
+      theme_rnaseq_bw()
+    save_plot_versions(concordance_plot, step10_event_plot_path("15_6d_JC_JCEC_deltaPSI_concordance.pdf"), width = 8.5, height = 6)
+
+    high_confidence_events <- concordance_tbl %>%
+      filter(high_confidence) %>%
+      mutate(
+        count_mode = "JC_and_JCEC",
+        PValue = pmin(jc_pvalue, jcec_pvalue),
+        IncLevelDifference = ifelse(abs(jcec_delta_psi) >= abs(jc_delta_psi), jcec_delta_psi, jc_delta_psi),
+        abs_delta_psi = abs(IncLevelDifference),
+        splice_direction = ifelse(abs(jcec_delta_psi) >= abs(jc_delta_psi), jcec_direction, jc_direction)
+      ) %>%
+      arrange(PValue, desc(abs_delta_psi))
+  }
+
+  write.csv(high_confidence_events, step10_event_table_path("15_6e_high_confidence_AS_events.csv"), row.names = FALSE)
+
+  de_sig_ids <- unique(de_result$ensembl_id[de_result$direction != "ns"])
+  das_ids <- unique(rmats_sig$gene_id_clean[!is.na(rmats_sig$gene_id_clean) & rmats_sig$gene_id_clean != ""])
+
+  overlap_summary <- data.frame(
+    category = c("DAS_only", "DE_only", "DE_and_DAS"),
+    count = c(
+      length(setdiff(das_ids, de_sig_ids)),
+      length(setdiff(de_sig_ids, das_ids)),
+      length(intersect(das_ids, de_sig_ids))
+    ),
+    stringsAsFactors = FALSE
+  )
+  write.csv(overlap_summary, step10_event_table_path("15_7_DE_DAS_overlap_summary.csv"), row.names = FALSE)
+
+  overlap_plot <- ggplot(overlap_summary, aes(x = category, y = count, fill = category)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = viz_pal$overlap) +
+    labs(title = "差异表达与差异剪切重叠", x = NULL, y = "Gene count") +
+    theme_rnaseq_minimal() +
+    theme(legend.position = "none")
+  save_plot_versions(overlap_plot, step10_event_plot_path("15_8_DE_DAS_overlap_barplot.pdf"), width = 7, height = 4.5)
+}
+```
+
+## 15.3b 差异剪接频率分析（DSFA）
+
+```{r}
+if (nrow(rmats_combined) > 0) {
+  dsfa_source <- rmats_combined %>%
+    filter(count_mode == preferred_count_mode) %>%
+    distinct(event_key, .keep_all = TRUE)
+
+  infer_group_sample_names <- function(event_tbl) {
+    n1 <- if ("IncLevel1" %in% colnames(event_tbl) && nrow(event_tbl) > 0) {
+      max(vapply(event_tbl$IncLevel1, function(x) length(split_numeric_string(x)), integer(1)), 0)
+    } else {
+      0
+    }
+    n2 <- if ("IncLevel2" %in% colnames(event_tbl) && nrow(event_tbl) > 0) {
+      max(vapply(event_tbl$IncLevel2, function(x) length(split_numeric_string(x)), integer(1)), 0)
+    } else {
+      0
+    }
+    group1_names <- sample_name_info$group1
+    group2_names <- sample_name_info$group2
+    if (length(group1_names) != n1) group1_names <- paste0(group1_label, "_", seq_len(n1))
+    if (length(group2_names) != n2) group2_names <- paste0(group2_label, "_", seq_len(n2))
+    list(group1 = group1_names, group2 = group2_names)
+  }
+
+  sample_name_map <- infer_group_sample_names(dsfa_source)
+  min_group_n <- min(length(sample_name_map$group1), length(sample_name_map$group2))
+  dsfa_min_freq_diff <- if (is.finite(min_group_n) && min_group_n > 0) 1 / min_group_n else 0.34
+
+  calc_binary_freq <- function(x) {
+    vals <- split_numeric_string(x)
+    if (length(vals) == 0) {
+      return(list(freq = NA_real_, included = 0L, total = 0L, binary = integer(0)))
+    }
+    binary <- as.integer(vals >= 0.5)
+    list(freq = mean(binary), included = sum(binary), total = length(binary), binary = binary)
+  }
+
+  dsfa_event_table <- dsfa_source %>%
+    mutate(
+      group1_freq_obj = purrr::map(IncLevel1, calc_binary_freq),
+      group2_freq_obj = purrr::map(IncLevel2, calc_binary_freq),
+      group1_included = purrr::map_int(group1_freq_obj, "included"),
+      group1_total = purrr::map_int(group1_freq_obj, "total"),
+      group2_included = purrr::map_int(group2_freq_obj, "included"),
+      group2_total = purrr::map_int(group2_freq_obj, "total"),
+      group1_freq = purrr::map_dbl(group1_freq_obj, "freq"),
+      group2_freq = purrr::map_dbl(group2_freq_obj, "freq"),
+      freq_diff = group2_freq - group1_freq,
+      dsfa_pvalue = purrr::pmap_dbl(
+        list(group1_included, group1_total, group2_included, group2_total),
+        function(g1_inc, g1_total, g2_inc, g2_total) {
+          tryCatch(
+            fisher.test(matrix(c(g1_inc, g1_total - g1_inc, g2_inc, g2_total - g2_inc), nrow = 2))$p.value,
+            error = function(e) NA_real_
+          )
+        }
+      ),
+      significant_dsfa = is.finite(dsfa_pvalue) & dsfa_pvalue < 0.05 & is.finite(freq_diff) & abs(freq_diff) >= dsfa_min_freq_diff,
+      dsfa_direction = case_when(
+        !significant_dsfa ~ "ns",
+        freq_diff > 0 ~ paste0("higher_in_", group2_label),
+        TRUE ~ paste0("higher_in_", group1_label)
+      )
+    ) %>%
+    dplyr::select(-group1_freq_obj, -group2_freq_obj) %>%
+    mutate(dsfa_priority = -log10(dsfa_pvalue + 1e-300) * pmax(abs(freq_diff), 0.001)) %>%
+    arrange(dsfa_pvalue, desc(abs(freq_diff)))
+
+  dsfa_sig_events <- dsfa_event_table %>%
+    filter(significant_dsfa) %>%
+    arrange(dsfa_pvalue, desc(abs(freq_diff)))
+  dsfa_sig_ids <- unique(stats::na.omit(dsfa_sig_events$gene_id_clean))
+
+  dsfa_gene_burden <- dsfa_event_table %>%
+    group_by(gene_id_clean, gene_label) %>%
+    summarise(
+      dsfa_event_count = n(),
+      significant_dsfa_event_count = sum(significant_dsfa, na.rm = TRUE),
+      best_dsfa_pvalue = if (all(!is.finite(dsfa_pvalue))) NA_real_ else min(dsfa_pvalue, na.rm = TRUE),
+      max_abs_freq_diff = if (all(!is.finite(freq_diff))) NA_real_ else max(abs(freq_diff), na.rm = TRUE),
+      dsfa_event_types = paste(sort(unique(event_type)), collapse = ";"),
+      .groups = "drop"
+    ) %>%
+    arrange(best_dsfa_pvalue, desc(max_abs_freq_diff))
+
+  write.csv(dsfa_event_table, step10_event_table_path("15_8b_DSFA_event_table.csv"), row.names = FALSE)
+  write.csv(dsfa_sig_events, step10_event_table_path("15_8c_significant_DSFA_events.csv"), row.names = FALSE)
+  write.csv(dsfa_gene_burden, step10_event_table_path("15_8d_DSFA_gene_burden.csv"), row.names = FALSE)
+
+  if (nrow(dsfa_event_table) > 0) {
+    dsfa_scatter_plot <- dsfa_event_table %>%
+      mutate(dsfa_status = ifelse(significant_dsfa, "significant", "ns")) %>%
+      ggplot(aes(x = freq_diff, y = -log10(dsfa_pvalue + 1e-300), color = dsfa_status)) +
+      geom_point(alpha = 0.65, size = 1.2) +
+      geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+      geom_vline(xintercept = c(-dsfa_min_freq_diff, dsfa_min_freq_diff), linetype = "dashed") +
+      scale_color_manual(values = viz_pal$sig_status) +
+      labs(title = "DSFA frequency-difference landscape", x = paste0("Included frequency difference (", group2_label, " - ", group1_label, ")"), y = "-log10(PValue)") +
+      theme_rnaseq_bw()
+    save_plot_versions(dsfa_scatter_plot, step10_event_plot_path("15_8e_DSFA_frequency_scatter.pdf"), width = 8.5, height = 6)
+  }
+
+  if (nrow(dsfa_sig_events) > 0) {
+    dsfa_type_summary <- dsfa_sig_events %>%
+      count(event_type, name = "event_count") %>%
+      arrange(desc(event_count), event_type)
+    write.csv(dsfa_type_summary, step10_event_table_path("15_8f_DSFA_event_type_summary.csv"), row.names = FALSE)
+
+    dsfa_bar_plot <- ggplot(dsfa_type_summary, aes(x = reorder(event_type, event_count), y = event_count, fill = event_type)) +
+      geom_col(width = 0.75) +
+      coord_flip() +
+      scale_fill_manual(values = resolve_named_colors(viz_pal$accent, dsfa_type_summary$event_type)) +
+      labs(title = "DSFA event-type burden", x = NULL, y = "Significant DSFA events") +
+      theme_rnaseq_minimal() +
+      theme(legend.position = "none")
+    save_plot_versions(dsfa_bar_plot, step10_event_plot_path("15_8g_DSFA_event_type_burden.pdf"), width = 7.5, height = 5)
+
+    das_dsfa_overlap <- data.frame(
+      gene_id_clean = sort(unique(c(das_ids, dsfa_sig_ids))),
+      DAS = sort(unique(c(das_ids, dsfa_sig_ids))) %in% das_ids,
+      DSFA = sort(unique(c(das_ids, dsfa_sig_ids))) %in% dsfa_sig_ids,
+      stringsAsFactors = FALSE
+    )
+    write.csv(das_dsfa_overlap, step10_event_table_path("15_8h_DAS_DSFA_gene_membership.csv"), row.names = FALSE)
+    build_membership_upset(das_dsfa_overlap, c("DAS", "DSFA"), step10_event_plot_path("15_8i_DAS_DSFA_overlap_upset.pdf"), width = 7.5, height = 5)
+
+    psi_freq_mat <- dsfa_sig_events %>%
+      slice_head(n = 30) %>%
+      {
+        event_tbl <- .
+        sample_names <- c(sample_name_map$group1, sample_name_map$group2)
+        freq_mat <- matrix(NA_real_, nrow = nrow(event_tbl), ncol = length(sample_names), dimnames = list(event_tbl$event_key, sample_names))
+        for (i in seq_len(nrow(event_tbl))) {
+          vals <- c(split_numeric_string(event_tbl$IncLevel1[i]), split_numeric_string(event_tbl$IncLevel2[i]))
+          if (length(vals) > 0) {
+            freq_mat[i, seq_len(min(length(vals), ncol(freq_mat)))] <- as.integer(vals[seq_len(min(length(vals), ncol(freq_mat)))] >= 0.5)
+          }
+        }
+        freq_mat
+      }
+
+    if (!is.null(psi_freq_mat) && nrow(psi_freq_mat) >= 2 && ncol(psi_freq_mat) >= 2) {
+      rownames(psi_freq_mat) <- paste0(dsfa_sig_events$gene_label[seq_len(nrow(psi_freq_mat))], " | ", dsfa_sig_events$event_type[seq_len(nrow(psi_freq_mat))])
+      save_base_pdf_versions(
+        primary = step10_event_plot_path("15_8j_DSFA_sample_frequency_heatmap.pdf"),
+        width = 8.5,
+        height = 10,
+        expr = ComplexHeatmap::draw(
+          ComplexHeatmap::Heatmap(
+            psi_freq_mat,
+            name = "Included",
+            col = heatmap_binary_col_fun(),
+            top_annotation = heatmap_group_annotation(
+              c(rep(group1_label, length(sample_name_map$group1)), rep(group2_label, length(sample_name_map$group2)))
+            ),
+            cluster_rows = TRUE,
+            cluster_columns = TRUE,
+            column_names_rot = 45
+          )
+        )
+      )
+    }
+  }
+}
+```
+
+## 15.4 基因层优先级与 DE-AS 整合
+
+```{r}
+if (nrow(rmats_sig) > 0) {
+  preferred_sig_events <- rmats_sig %>%
+    filter(count_mode == preferred_count_mode) %>%
+    arrange(event_pvalue, desc(abs_delta_psi))
+
+  as_gene_priority <- preferred_sig_events %>%
+    group_by(gene_id_clean, gene_label) %>%
+    summarise(
+      significant_event_count = n(),
+      event_type_count = n_distinct(event_type),
+      event_types = paste(sort(unique(event_type)), collapse = ";"),
+      best_event_pvalue = min(event_pvalue, na.rm = TRUE),
+      best_event_fdr = if (all(!is.finite(event_fdr))) NA_real_ else min(event_fdr, na.rm = TRUE),
+      max_abs_delta_psi = max(abs_delta_psi, na.rm = TRUE),
+      mean_abs_delta_psi = mean(abs_delta_psi, na.rm = TRUE),
+      de_log2FoldChange = first_non_missing_num(de_log2FoldChange),
+      de_pvalue = first_non_missing_num(de_pvalue),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      de_status = ifelse(gene_id_clean %in% unique(de_result$ensembl_id[de_result$direction != "ns"]), "DE_and_DAS", "DAS_only"),
+      priority = -log10(best_event_pvalue + 1e-300) * max_abs_delta_psi * ifelse(de_status == "DE_and_DAS", 1.5, 1)
+    ) %>%
+    arrange(desc(priority), best_event_pvalue)
+
+  write.csv(as_gene_priority, step10_gene_table_path("15_9_DAS_gene_priority_table.csv"), row.names = FALSE)
+
+  save_das_gene_burden_plot(
+    as_gene_priority,
+    step10_gene_plot_path("15_10_DAS_gene_burden_barplot.pdf"),
+    width = 8.5,
+    height = 6
+  )
+  save_de_das_gene_scatter(
+    as_gene_priority,
+    step10_gene_plot_path("15_11_DE_DAS_gene_scatter.pdf"),
+    width = 8,
+    height = 6
+  )
+}
+```
+
+## 15.5 DEU、PSI 结构与多方法整合
+
+```{r}
+if (nrow(rmats_combined) > 0) {
+  de_sig_ids <- unique(de_result$ensembl_id[de_result$direction != "ns"])
+  das_ids <- unique(rmats_sig$gene_id_clean[!is.na(rmats_sig$gene_id_clean) & rmats_sig$gene_id_clean != ""])
+  dsfa_ids <- unique(dsfa_sig_ids[!is.na(dsfa_sig_ids) & dsfa_sig_ids != ""])
+  is_sig_ids <- unique(isoform_sig_ids[!is.na(isoform_sig_ids) & isoform_sig_ids != ""])
+  apa_ids <- unique(apa_sig_ids[!is.na(apa_sig_ids) & apa_sig_ids != ""])
+  der_ids <- unique(der_sig_ids[!is.na(der_sig_ids) & der_sig_ids != ""])
+
+  if (nrow(exon_gene_simes) > 0) {
+    deu_gene_priority <- exon_gene_simes %>%
+      mutate(
+        gene_label = gene_id_clean,
+        priority = -log10(P.Value + 1e-300) * ifelse(is.finite(FDR), pmax(1 - FDR, 0.001), 1)
+      ) %>%
+      arrange(P.Value, FDR)
+    write.csv(deu_gene_priority, step10_gene_table_path("15_28b_DEU_gene_priority_table.csv"), row.names = FALSE)
+
+    deu_overlap_summary <- data.frame(
+      category = c("DEU_only", "DE_only", "DE_and_DEU"),
+      count = c(
+        length(setdiff(deu_sig_ids, de_sig_ids)),
+        length(setdiff(de_sig_ids, deu_sig_ids)),
+        length(intersect(deu_sig_ids, de_sig_ids))
+      ),
+      stringsAsFactors = FALSE
+    )
+    write.csv(deu_overlap_summary, step10_integr_table_path("15_28_DE_DEU_overlap_summary.csv"), row.names = FALSE)
+
+    top_deu_genes_plot <- exon_gene_simes %>%
+      filter(is.finite(P.Value)) %>%
+      arrange(P.Value, FDR) %>%
+      slice_head(n = 20) %>%
+      mutate(
+        gene_label = factor(gene_id_clean, levels = rev(unique(gene_id_clean))),
+        significant = ifelse(significant_deu, "significant", "ns")
+      ) %>%
+      ggplot(aes(x = gene_label, y = -log10(P.Value + 1e-300), fill = significant)) +
+      geom_col(width = 0.75) +
+      coord_flip() +
+      scale_fill_manual(values = viz_pal$sig_status) +
+      labs(title = "Top genes from exon-usage validation", x = NULL, y = "-log10(PValue)") +
+      theme_rnaseq_minimal() +
+      theme(legend.position = "none")
+    save_plot_versions(top_deu_genes_plot, step10_gene_plot_path("15_29_exon_usage_top_genes.pdf"), width = 8.5, height = 6)
+  }
+
+  if (nrow(exon_exon_results) > 0) {
+    exon_scatter_plot <- exon_exon_results %>%
+      filter(is.finite(P.Value), is.finite(logFC)) %>%
+      mutate(significant = ifelse(significant_exon, "significant", "ns")) %>%
+      ggplot(aes(x = logFC, y = -log10(P.Value + 1e-300), color = significant)) +
+      geom_point(alpha = 0.55, size = 1.2) +
+      geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+      scale_color_manual(values = viz_pal$sig_status) +
+      labs(title = "Exon-usage validation at exon level", x = "Exon logFC", y = "-log10(PValue)") +
+      theme_rnaseq_bw()
+    save_plot_versions(exon_scatter_plot, step10_gene_plot_path("15_30_exon_usage_exon_scatter.pdf"), width = 8.5, height = 6)
+  }
+
+  if (length(is_sig_ids) > 0) {
+    is_overlap_summary <- data.frame(
+      category = c("IS_only", "DE_only", "DE_and_IS"),
+      count = c(
+        length(setdiff(is_sig_ids, de_sig_ids)),
+        length(setdiff(de_sig_ids, is_sig_ids)),
+        length(intersect(is_sig_ids, de_sig_ids))
+      ),
+      stringsAsFactors = FALSE
+    )
+    write.csv(is_overlap_summary, step10_integr_table_path("15_28c_DE_IS_overlap_summary.csv"), row.names = FALSE)
+  }
+
+  if (length(apa_ids) > 0) {
+    apa_overlap_summary <- make_overlap_summary(apa_ids, de_sig_ids, "APA", "DE")
+    write.csv(apa_overlap_summary, step10_integr_table_path("15_28d_DE_APA_overlap_summary.csv"), row.names = FALSE)
+  }
+
+  if (length(der_ids) > 0) {
+    der_overlap_summary <- make_overlap_summary(der_ids, de_sig_ids, "DER", "DE")
+    write.csv(der_overlap_summary, step10_integr_table_path("15_28e_DE_DER_overlap_summary.csv"), row.names = FALSE)
+  }
+
+  membership_from_file <- file.path(integrated_as_dir, "gene_method_membership.csv")
+  evidence_from_file <- file.path(integrated_as_dir, "as_gene_evidence_table.csv")
+  top_candidates_from_file <- file.path(integrated_as_dir, "top_as_candidates.csv")
+
+  rmats_gene_summary <- rmats_sig %>%
+    group_by(gene_id_clean) %>%
+    summarise(
+      significant_event_count = n(),
+      max_abs_delta_psi = max(abs_delta_psi, na.rm = TRUE),
+      best_event_pvalue = min(event_pvalue, na.rm = TRUE),
+      representative_gene_label = dplyr::first(gene_label),
+      .groups = "drop"
+    )
+
+  exon_gene_summary <- if (nrow(exon_exon_results) > 0 && all(c("gene_id_clean", "P.Value", "abs_logFC") %in% colnames(exon_exon_results))) {
+    exon_exon_results %>%
+      filter(significant_exon) %>%
+      group_by(gene_id_clean) %>%
+      summarise(
+        significant_exon_count = n(),
+        best_exon_pvalue = min(P.Value, na.rm = TRUE),
+        max_abs_exon_logFC = max(abs_logFC, na.rm = TRUE),
+        representative_exon = if ("exon_id" %in% colnames(cur_data_all())) first_non_missing_chr(exon_id) else NA_character_,
+        .groups = "drop"
+      )
+  } else {
+    data.frame()
+  }
+
+  isoform_gene_summary <- if (nrow(isoform_switch_genes) > 0 && "gene_id_clean" %in% colnames(isoform_switch_genes)) {
+    isoform_switch_genes %>%
+      mutate(
+        gene_switch_q_value = suppressWarnings(as.numeric(gene_switch_q_value)),
+        max_abs_dIF = suppressWarnings(as.numeric(max_abs_dIF))
+      ) %>%
+      group_by(gene_id_clean) %>%
+      summarise(
+        switching_isoform_count = max(dplyr::coalesce(switching_isoform_count, 0), na.rm = TRUE),
+        gene_switch_q_value = min(gene_switch_q_value, na.rm = TRUE),
+        max_abs_dIF = max(max_abs_dIF, na.rm = TRUE),
+        representative_isoform = first_non_missing_chr(representative_isoform),
+        isoform_gene_label = first_non_missing_chr(gene_name),
+        .groups = "drop"
+      )
+  } else {
+    data.frame()
+  }
+  if (nrow(isoform_gene_summary) > 0) {
+    isoform_gene_summary$gene_switch_q_value[!is.finite(isoform_gene_summary$gene_switch_q_value)] <- NA_real_
+    isoform_gene_summary$max_abs_dIF[!is.finite(isoform_gene_summary$max_abs_dIF)] <- NA_real_
+  }
+
+  isoform_pair_summary <- if (nrow(isoform_switch_pairs) > 0 && "gene_id_clean" %in% colnames(isoform_switch_pairs)) {
+    isoform_switch_pairs %>%
+      group_by(gene_id_clean) %>%
+      summarise(
+        consequence_count = max(dplyr::coalesce(consequence_count, 0), na.rm = TRUE),
+        consequence_types = first_non_missing_chr(consequence_types),
+        isoform_up = first_non_missing_chr(isoform_up),
+        isoform_down = first_non_missing_chr(isoform_down),
+        .groups = "drop"
+      )
+  } else {
+    data.frame()
+  }
+
+  if (file.exists(membership_from_file)) {
+    as_gene_membership <- read.csv(membership_from_file, check.names = FALSE, stringsAsFactors = FALSE)
+  } else {
+    as_gene_membership <- data.frame(
+      gene_id_clean = sort(unique(c(de_sig_ids, das_ids, deu_sig_ids, is_sig_ids, apa_ids, der_ids))),
+      stringsAsFactors = FALSE
+    )
+  }
+  for (nm in c("DE", "DAS", "DEU", "IS", "APA", "DER")) {
+    if (!nm %in% colnames(as_gene_membership)) {
+      as_gene_membership[[nm]] <- FALSE
+    }
+  }
+  as_gene_membership <- as_gene_membership %>%
+    mutate(
+      gene_id_clean = sub("\\.[0-9]+$", "", gene_id_clean),
+      DE = dplyr::coalesce(as.logical(DE), gene_id_clean %in% de_sig_ids, FALSE),
+      DAS = dplyr::coalesce(as.logical(DAS), gene_id_clean %in% das_ids, FALSE),
+      DEU = dplyr::coalesce(as.logical(DEU), gene_id_clean %in% deu_sig_ids, FALSE),
+      IS = dplyr::coalesce(as.logical(IS), gene_id_clean %in% is_sig_ids, FALSE),
+      APA = dplyr::coalesce(as.logical(APA), gene_id_clean %in% apa_ids, FALSE),
+      DER = dplyr::coalesce(as.logical(DER), gene_id_clean %in% der_ids, FALSE)
+    ) %>%
+    distinct(gene_id_clean, .keep_all = TRUE)
+
+  if (file.exists(evidence_from_file)) {
+    as_gene_evidence <- read.csv(evidence_from_file, check.names = FALSE, stringsAsFactors = FALSE)
+  } else {
+    as_gene_evidence <- as_gene_membership
+  }
+
+  if (!"gene_id_clean" %in% colnames(as_gene_evidence)) {
+    as_gene_evidence$gene_id_clean <- as_gene_membership$gene_id_clean[match(seq_len(nrow(as_gene_evidence)), seq_len(nrow(as_gene_membership)))]
+  }
+
+  for (nm in c("DE", "DAS", "DEU", "IS", "APA", "DER")) {
+    if (!nm %in% colnames(as_gene_evidence)) {
+      as_gene_evidence[[nm]] <- FALSE
+    }
+  }
+
+  as_gene_evidence <- as_gene_evidence %>%
+    mutate(gene_id_clean = sub("\\.[0-9]+$", "", gene_id_clean)) %>%
+    left_join(as_gene_membership %>% dplyr::select(gene_id_clean, DE, DAS, DEU, IS, APA, DER), by = "gene_id_clean", suffix = c("", "_membership")) %>%
+    mutate(
+      DE = dplyr::coalesce(as.logical(DE), as.logical(DE_membership), FALSE),
+      DAS = dplyr::coalesce(as.logical(DAS), as.logical(DAS_membership), FALSE),
+      DEU = dplyr::coalesce(as.logical(DEU), as.logical(DEU_membership), FALSE),
+      IS = dplyr::coalesce(as.logical(IS), as.logical(IS_membership), FALSE),
+      APA = dplyr::coalesce(as.logical(APA), as.logical(APA_membership), FALSE),
+      DER = dplyr::coalesce(as.logical(DER), as.logical(DER_membership), FALSE)
+    ) %>%
+    dplyr::select(-matches("_membership$")) %>%
+    left_join(rmats_gene_summary, by = "gene_id_clean") %>%
+    left_join(exon_gene_summary, by = "gene_id_clean") %>%
+    left_join(
+      exon_gene_simes %>%
+        dplyr::select(gene_id_clean, gene_simes_pvalue = P.Value, gene_simes_fdr = FDR, NExons),
+      by = "gene_id_clean"
+    ) %>%
+    left_join(isoform_gene_summary, by = "gene_id_clean") %>%
+    left_join(isoform_pair_summary, by = "gene_id_clean") %>%
+    left_join(apa_gene_summary_tbl, by = "gene_id_clean", suffix = c("", "_apa")) %>%
+    left_join(der_gene_summary_tbl, by = "gene_id_clean", suffix = c("", "_der")) %>%
+    left_join(
+      de_result %>%
+        mutate(gene_id_clean = ensembl_id) %>%
+        dplyr::select(gene_id_clean, gene_label, de_log2FoldChange = log2FoldChange, de_pvalue = pvalue, de_padj = padj),
+      by = "gene_id_clean"
+    ) %>%
+    ensure_columns(list(
+      representative_label = NA_character_,
+      representative_gene_label = NA_character_,
+      isoform_gene_label = NA_character_,
+      gene_label = NA_character_,
+      significant_event_count = 0L,
+      significant_exon_count = 0L,
+      switching_isoform_count = 0L,
+      significant_apa_event_count = 0L,
+      significant_der_region_count = 0L,
+      max_abs_delta_psi = 0,
+      max_abs_exon_logFC = 0,
+      max_abs_dIF = 0,
+      max_abs_delta_PAU = 0,
+      max_abs_der_effect = 0,
+      de_log2FoldChange = NA_real_,
+      gene_switch_q_value = NA_real_,
+      gene_simes_pvalue = NA_real_,
+      best_event_pvalue = NA_real_,
+      de_pvalue = NA_real_
+    )) %>%
+    mutate(
+      representative_label = dplyr::coalesce(representative_label, representative_gene_label, isoform_gene_label, gene_label, gene_id_clean),
+      significant_event_count = dplyr::coalesce(significant_event_count, 0L),
+      significant_exon_count = dplyr::coalesce(significant_exon_count, 0L),
+      switching_isoform_count = dplyr::coalesce(switching_isoform_count, 0L),
+      significant_apa_event_count = dplyr::coalesce(significant_apa_event_count, 0L),
+      significant_der_region_count = dplyr::coalesce(significant_der_region_count, 0L),
+      max_abs_delta_psi = dplyr::coalesce(max_abs_delta_psi, 0),
+      max_abs_exon_logFC = dplyr::coalesce(max_abs_exon_logFC, 0),
+      max_abs_dIF = dplyr::coalesce(max_abs_dIF, 0),
+      max_abs_delta_PAU = dplyr::coalesce(max_abs_delta_PAU, 0),
+      max_abs_der_effect = dplyr::coalesce(max_abs_der_effect, 0),
+      method_count = as.integer(DE) + as.integer(DAS) + as.integer(DEU) + as.integer(IS) + as.integer(APA) + as.integer(DER),
+      evidence_score =
+        method_count +
+        significant_event_count / 10 +
+        significant_exon_count / 10 +
+        switching_isoform_count / 10 +
+        significant_apa_event_count / 10 +
+        significant_der_region_count / 10 +
+        pmin(max_abs_delta_psi, 1) +
+        pmin(max_abs_exon_logFC, 2) / 2 +
+        pmin(max_abs_dIF, 1) +
+        pmin(max_abs_delta_PAU, 1) +
+        pmin(max_abs_der_effect, 2) / 2
+    ) %>%
+    arrange(desc(evidence_score), gene_switch_q_value, gene_simes_pvalue, best_event_pvalue, de_pvalue)
+
+  if (file.exists(top_candidates_from_file)) {
+    top_as_candidates <- read.csv(top_candidates_from_file, check.names = FALSE, stringsAsFactors = FALSE)
+  } else {
+    top_as_candidates <- as_gene_evidence %>% slice_head(n = 50)
+  }
+
+  if (nrow(top_as_candidates) > 0) {
+    candidate_defaults <- list(
+      DE = FALSE,
+      DAS = FALSE,
+      DEU = FALSE,
+      IS = FALSE,
+      APA = FALSE,
+      DER = FALSE,
+      method_count = NA_integer_,
+      representative_label = NA_character_,
+      evidence_score = NA_real_,
+      significant_event_count = 0,
+      significant_exon_count = 0,
+      switching_isoform_count = 0,
+      significant_apa_event_count = 0,
+      significant_der_region_count = 0,
+      max_abs_delta_psi = 0,
+      max_abs_exon_logFC = 0,
+      max_abs_dIF = 0,
+      max_abs_delta_PAU = 0,
+      max_abs_der_effect = 0,
+      gene_simes_pvalue = NA_real_,
+      gene_switch_q_value = NA_real_,
+      best_event_pvalue = NA_real_,
+      de_pvalue = NA_real_,
+      gene_id_clean = NA_character_
+    )
+    for (nm in names(candidate_defaults)) {
+      if (!nm %in% colnames(top_as_candidates)) {
+        top_as_candidates[[nm]] <- candidate_defaults[[nm]]
+      }
+    }
+    top_as_candidates <- top_as_candidates %>%
+      mutate(
+        gene_id_clean = sub("\\.[0-9]+$", "", gene_id_clean),
+        DE = dplyr::coalesce(as.logical(DE), FALSE),
+        DAS = dplyr::coalesce(as.logical(DAS), FALSE),
+        DEU = dplyr::coalesce(as.logical(DEU), FALSE),
+        IS = dplyr::coalesce(as.logical(IS), FALSE),
+        APA = dplyr::coalesce(as.logical(APA), FALSE),
+        DER = dplyr::coalesce(as.logical(DER), FALSE),
+        representative_label = dplyr::coalesce(representative_label, gene_id_clean),
+        significant_event_count = dplyr::coalesce(significant_event_count, 0L),
+        significant_exon_count = dplyr::coalesce(significant_exon_count, 0L),
+        switching_isoform_count = dplyr::coalesce(switching_isoform_count, 0L),
+        significant_apa_event_count = dplyr::coalesce(significant_apa_event_count, 0L),
+        significant_der_region_count = dplyr::coalesce(significant_der_region_count, 0L),
+        max_abs_delta_psi = dplyr::coalesce(max_abs_delta_psi, 0),
+        max_abs_exon_logFC = dplyr::coalesce(max_abs_exon_logFC, 0),
+        max_abs_dIF = dplyr::coalesce(max_abs_dIF, 0),
+        max_abs_delta_PAU = dplyr::coalesce(max_abs_delta_PAU, 0),
+        max_abs_der_effect = dplyr::coalesce(max_abs_der_effect, 0),
+        method_count = as.integer(DE) + as.integer(DAS) + as.integer(DEU) + as.integer(IS) + as.integer(APA) + as.integer(DER),
+        evidence_score =
+          method_count +
+          significant_event_count / 10 +
+          significant_exon_count / 10 +
+          switching_isoform_count / 10 +
+          significant_apa_event_count / 10 +
+          significant_der_region_count / 10 +
+          pmin(max_abs_delta_psi, 1) +
+          pmin(max_abs_exon_logFC, 2) / 2 +
+          pmin(max_abs_dIF, 1) +
+          pmin(max_abs_delta_PAU, 1) +
+          pmin(max_abs_der_effect, 2) / 2
+      ) %>%
+      arrange(desc(evidence_score), gene_switch_q_value, gene_simes_pvalue, best_event_pvalue, de_pvalue)
+  }
+
+  write.csv(as_gene_membership, step10_integr_table_path("15_31_gene_method_membership.csv"), row.names = FALSE)
+  write.csv(as_gene_evidence, step10_integr_table_path("15_32_as_gene_evidence_table.csv"), row.names = FALSE)
+  write.csv(top_as_candidates, step10_integr_table_path("15_32b_top_as_candidates.csv"), row.names = FALSE)
+
+  build_psi_matrix_step6 <- function(event_df) {
+    if (!all(c("IncLevel1", "IncLevel2") %in% colnames(event_df)) || nrow(event_df) == 0) {
+      return(NULL)
+    }
+    n1 <- max(vapply(event_df$IncLevel1, function(x) length(split_numeric_string(x)), integer(1)), 0)
+    n2 <- max(vapply(event_df$IncLevel2, function(x) length(split_numeric_string(x)), integer(1)), 0)
+    group1_names <- sample_name_info$group1
+    group2_names <- sample_name_info$group2
+    if (length(group1_names) != n1) group1_names <- paste0(group1_label, "_", seq_len(n1))
+    if (length(group2_names) != n2) group2_names <- paste0(group2_label, "_", seq_len(n2))
+    sample_names <- c(group1_names, group2_names)
+    psi_mat <- matrix(NA_real_, nrow = nrow(event_df), ncol = length(sample_names), dimnames = list(event_df$event_key, sample_names))
+    for (i in seq_len(nrow(event_df))) {
+      vals <- c(split_numeric_string(event_df$IncLevel1[i]), split_numeric_string(event_df$IncLevel2[i]))
+      if (length(vals) > 0) {
+        psi_mat[i, seq_len(min(length(vals), ncol(psi_mat)))] <- vals[seq_len(min(length(vals), ncol(psi_mat)))]
+      }
+    }
+    psi_mat
+  }
+
+  preferred_sig_events_step6 <- rmats_sig %>%
+    filter(count_mode == preferred_count_mode) %>%
+    arrange(event_pvalue, desc(abs_delta_psi))
+
+  psi_mat_step6 <- build_psi_matrix_step6(preferred_sig_events_step6 %>% slice_head(n = 60))
+  if (!is.null(psi_mat_step6) && nrow(psi_mat_step6) >= 3 && ncol(psi_mat_step6) >= 3) {
+    psi_imputed <- psi_mat_step6
+    row_means <- rowMeans(psi_imputed, na.rm = TRUE)
+    for (i in seq_len(nrow(psi_imputed))) {
+      psi_imputed[i, is.na(psi_imputed[i, ])] <- row_means[i]
+    }
+
+    psi_pca <- prcomp(t(psi_imputed), scale. = TRUE)
+    psi_pca_df <- as.data.frame(psi_pca$x[, 1:2, drop = FALSE])
+    psi_pca_df$sample <- rownames(psi_pca_df)
+    psi_pca_df$group <- ifelse(psi_pca_df$sample %in% sample_name_info$group1, group1_label, group2_label)
+
+    psi_pca_plot <- ggplot(psi_pca_df, aes(PC1, PC2, color = group, label = sample)) +
+      geom_point(size = 3.2) +
+      geom_text_repel(size = 3, show.legend = FALSE) +
+      scale_color_manual(values = group_colors) +
+      labs(
+        title = "PSI-level PCA of top AS events",
+        x = paste0("PC1 (", round(100 * summary(psi_pca)$importance[2, 1], 1), "%)"),
+        y = paste0("PC2 (", round(100 * summary(psi_pca)$importance[2, 2], 1), "%)")
+      ) +
+      theme_rnaseq_bw()
+    save_plot_versions(psi_pca_plot, step10_event_plot_path("15_33_PSI_sample_pca.pdf"), width = 8.5, height = 6)
+
+    psi_cor <- cor(psi_imputed, use = "pairwise.complete.obs")
+    psi_cor_df <- expand.grid(sample_x = colnames(psi_cor), sample_y = colnames(psi_cor), stringsAsFactors = FALSE)
+    psi_cor_df$correlation <- as.vector(psi_cor)
+    psi_cor_plot <- ggplot(psi_cor_df, aes(sample_x, sample_y, fill = correlation)) +
+      geom_tile(color = viz_pal$neutral["light"]) +
+      geom_text(aes(label = sprintf("%.2f", correlation)), size = 3) +
+      scale_fill_heatmap_diverging(midpoint = 0.5, limits = c(-1, 1)) +
+      labs(title = "PSI sample correlation heatmap", x = NULL, y = NULL, fill = "Pearson r") +
+      theme_rnaseq_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    save_plot_versions(psi_cor_plot, step10_event_plot_path("15_34_PSI_sample_correlation_heatmap.pdf"), width = 7.5, height = 6.5)
+  }
+
+  event_type_scatter <- rmats_combined %>%
+    filter(is.finite(IncLevelDifference), is.finite(event_pvalue)) %>%
+    mutate(significant = ifelse(significant_as, "significant", "ns")) %>%
+    ggplot(aes(x = IncLevelDifference, y = -log10(event_pvalue + 1e-300), color = significant)) +
+    geom_point(alpha = 0.55, size = 1.1) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+    geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed") +
+    facet_grid(event_type ~ count_mode, scales = "free_y") +
+    scale_color_manual(values = viz_pal$sig_status) +
+    labs(title = "Event-type stratified AS significance landscape", x = "Delta PSI", y = "-log10(PValue)") +
+    theme_rnaseq_bw(base_size = viz_style$compact_size)
+  save_plot_versions(event_type_scatter, step10_event_plot_path("15_35_event_type_faceted_scatter.pdf"), width = 11, height = 9)
+
+  if (nrow(as_gene_membership) > 0) {
+    upset_input <- as_gene_membership %>%
+      transmute(
+        DE = as.integer(dplyr::coalesce(DE, FALSE)),
+        DAS = as.integer(dplyr::coalesce(DAS, FALSE)),
+        DEU = as.integer(dplyr::coalesce(DEU, FALSE)),
+        IS = as.integer(dplyr::coalesce(IS, FALSE)),
+        APA = as.integer(dplyr::coalesce(APA, FALSE)),
+        DER = as.integer(dplyr::coalesce(DER, FALSE))
+      )
+    active_sets <- names(upset_input)[colSums(upset_input, na.rm = TRUE) > 0]
+    if (length(active_sets) >= 1) {
+      save_base_pdf_versions(
+        primary = step10_integr_plot_path("15_31_DE_DAS_DEU_IS_APA_DER_upset.pdf"),
+        width = 11,
+        height = 6,
+        expr = UpSetR::upset(
+          upset_input,
+          nsets = length(active_sets),
+          keep.order = TRUE,
+          sets = active_sets,
+          mb.ratio = c(0.6, 0.4),
+          order.by = "freq"
+        )
+      )
+    }
+  }
+
+  method_overlap_tbl <- as_gene_membership %>%
+    rowwise() %>%
+    mutate(
+      method_pattern = {
+        active <- c("DE", "DAS", "DEU", "IS", "APA", "DER")[c(DE, DAS, DEU, IS, APA, DER)]
+        if (length(active) == 0) "none" else paste(active, collapse = "+")
+      }
+    ) %>%
+    ungroup() %>%
+    count(method_pattern, name = "gene_count") %>%
+    arrange(desc(gene_count), method_pattern)
+  write.csv(method_overlap_tbl, step10_integr_table_path("15_36_method_overlap_summary.csv"), row.names = FALSE)
+
+  if (nrow(top_as_candidates) > 0) {
+    evidence_rank_plot <- top_as_candidates %>%
+      slice_head(n = 30) %>%
+      mutate(representative_label = factor(representative_label, levels = rev(unique(representative_label)))) %>%
+      ggplot(aes(x = representative_label, y = evidence_score, fill = factor(method_count))) +
+      geom_col(width = 0.75) +
+      coord_flip() +
+      scale_fill_manual(values = viz_pal$method_count) +
+      labs(title = "Integrated AS evidence ranking", x = NULL, y = "Evidence score", fill = "Method count") +
+      theme_rnaseq_minimal()
+    save_plot_versions(evidence_rank_plot, step10_integr_plot_path("15_32c_integrated_as_evidence_ranking.pdf"), width = 9, height = 9)
+  }
+
+  if (nrow(as_gene_evidence) > 0) {
+    evidence_heatmap_tbl <- as_gene_evidence %>%
+      mutate(
+        representative_label = dplyr::coalesce(representative_label, gene_id_clean),
+        method_count = dplyr::coalesce(method_count, as.integer(DE) + as.integer(DAS) + as.integer(DEU) + as.integer(IS) + as.integer(APA) + as.integer(DER))
+      ) %>%
+      slice_head(n = 30)
+    evidence_mat <- evidence_heatmap_tbl %>%
+      dplyr::select(DE, DAS, DEU, IS, APA, DER, significant_event_count, significant_exon_count, switching_isoform_count, significant_apa_event_count, significant_der_region_count, max_abs_delta_psi, max_abs_exon_logFC, max_abs_dIF, max_abs_delta_PAU, max_abs_der_effect, de_log2FoldChange) %>%
+      mutate(across(c(DE, DAS, DEU, IS, APA, DER), ~ as.numeric(.x))) %>%
+      as.matrix()
+    rownames(evidence_mat) <- evidence_heatmap_tbl$representative_label
+    evidence_mat <- scale(evidence_mat)
+    evidence_mat[!is.finite(evidence_mat)] <- 0
+    save_base_pdf_versions(
+      primary = step10_integr_plot_path("15_37_integrated_as_evidence_heatmap.pdf"),
+      width = 9,
+      height = 9.5,
+      expr = ComplexHeatmap::draw(
+        ComplexHeatmap::Heatmap(
+          evidence_mat,
+          name = "z-score",
+          col = heatmap_diverging_col_fun(evidence_mat),
+          cluster_rows = TRUE,
+          cluster_columns = FALSE,
+          column_names_rot = 45
+        )
+      )
+    )
+
+    evidence_scatter_df <- as_gene_evidence %>%
+      filter(is.finite(de_log2FoldChange)) %>%
+      mutate(
+        max_abs_delta_psi = dplyr::coalesce(max_abs_delta_psi, 0),
+        max_abs_exon_logFC = dplyr::coalesce(max_abs_exon_logFC, 0),
+        max_abs_dIF = dplyr::coalesce(max_abs_dIF, 0),
+        max_abs_delta_PAU = dplyr::coalesce(max_abs_delta_PAU, 0),
+        max_abs_der_effect = dplyr::coalesce(max_abs_der_effect, 0)
+      )
+    evidence_scatter_df$method_group <- apply(
+      evidence_scatter_df[, c("DE", "DAS", "DEU", "IS", "APA", "DER"), drop = FALSE],
+      1,
+      function(x) {
+        active <- c("DE", "DAS", "DEU", "IS", "APA", "DER")[as.logical(x)]
+          if (length(active) == 0) "other" else paste(active, collapse = "+")
+      }
+    )
+
+    if (nrow(evidence_scatter_df) > 0) {
+      joint_scatter <- ggplot(evidence_scatter_df, aes(x = de_log2FoldChange, y = pmax(max_abs_delta_psi, max_abs_exon_logFC, max_abs_dIF, max_abs_delta_PAU, max_abs_der_effect), color = method_group, size = pmax(method_count, 1))) +
+        geom_point(alpha = 0.75) +
+        labs(title = "Joint DE-DAS-DEU-IS-APA-DER evidence landscape", x = "Gene log2FC", y = "Max effect size", color = "Evidence class", size = "Method count") +
+        theme_rnaseq_bw()
+      save_plot_versions(joint_scatter, step10_integr_plot_path("15_38_DE_DAS_DEU_IS_APA_DER_joint_scatter.pdf"), width = 9, height = 6)
+
+      ribbon_tbl <- evidence_scatter_df %>%
+        arrange(desc(evidence_score), gene_switch_q_value, gene_simes_pvalue, best_event_pvalue, de_pvalue) %>%
+        slice_head(n = 20) %>%
+        mutate(representative_label = factor(representative_label, levels = rev(unique(representative_label)))) %>%
+        dplyr::select(representative_label, DE, DAS, DEU, IS, APA, DER) %>%
+        pivot_longer(cols = c(DE, DAS, DEU, IS, APA, DER), names_to = "method", values_to = "present") %>%
+        mutate(present = ifelse(present, 1, 0))
+
+      ribbon_plot <- ggplot(ribbon_tbl, aes(x = method, y = representative_label, fill = present)) +
+        geom_tile(color = viz_pal$neutral["light"]) +
+        scale_fill_heatmap_binary() +
+        labs(title = "Top candidate evidence summary", x = NULL, y = NULL, fill = "Present") +
+        theme_rnaseq_minimal()
+      save_plot_versions(ribbon_plot, step10_integr_plot_path("15_39_top_candidate_evidence_summary.pdf"), width = 8, height = 8.5)
+    }
+  }
+}
+```
+
+## 15.6 扩展图与真实 sashimi 可视验证
+
+```{r}
+if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
+  preferred_sig_events <- rmats_sig %>%
+    filter(count_mode == preferred_count_mode) %>%
+    arrange(event_pvalue, desc(abs_delta_psi))
+
+  guess_sample_names <- function(event_df) {
+    n1 <- if ("IncLevel1" %in% colnames(event_df) && nrow(event_df) > 0) {
+      max(vapply(event_df$IncLevel1, function(x) length(split_numeric_string(x)), integer(1)), 0)
+    } else 0
+    n2 <- if ("IncLevel2" %in% colnames(event_df) && nrow(event_df) > 0) {
+      max(vapply(event_df$IncLevel2, function(x) length(split_numeric_string(x)), integer(1)), 0)
+    } else 0
+
+    group1_names <- sample_name_info$group1
+    group2_names <- sample_name_info$group2
+    if (length(group1_names) != n1) group1_names <- paste0(group1_label, "_", seq_len(n1))
+    if (length(group2_names) != n2) group2_names <- paste0(group2_label, "_", seq_len(n2))
+    c(group1_names, group2_names)
+  }
+
+  build_psi_matrix <- function(event_df) {
+    if (!all(c("IncLevel1", "IncLevel2") %in% colnames(event_df)) || nrow(event_df) == 0) {
+      return(NULL)
+    }
+    sample_names <- guess_sample_names(event_df)
+    if (length(sample_names) == 0) {
+      return(NULL)
+    }
+    heatmap_labels <- paste0(event_df$gene_label, " | ", event_df$event_type, " | dPSI=", sprintf("%.2f", event_df$IncLevelDifference))
+    psi_mat <- matrix(NA_real_, nrow = nrow(event_df), ncol = length(sample_names), dimnames = list(heatmap_labels, sample_names))
+    for (i in seq_len(nrow(event_df))) {
+      psi_vals <- c(split_numeric_string(event_df$IncLevel1[i]), split_numeric_string(event_df$IncLevel2[i]))
+      if (length(psi_vals) > 0) {
+        psi_mat[i, seq_len(min(length(psi_vals), ncol(psi_mat)))] <- psi_vals[seq_len(min(length(psi_vals), ncol(psi_mat)))]
+      }
+    }
+    psi_mat
+  }
+
+  das_annotated <- as_gene_priority %>%
+    left_join(
+      de_result %>%
+        dplyr::select(ensembl_id, gene_label, ENTREZID, gene_id, log2FoldChange, pvalue, direction) %>%
+        distinct(ensembl_id, .keep_all = TRUE),
+      by = c("gene_id_clean" = "ensembl_id"),
+      suffix = c("", "_de")
+    ) %>%
+    mutate(
+      ENTREZID_final = as.character(ENTREZID),
+      SYMBOL_final = dplyr::coalesce(gene_label_de, gene_label, gene_id_clean),
+      de_id_final = gene_id
+    )
+
+  das_entrez <- unique(as.character(stats::na.omit(das_annotated$ENTREZID_final)))
+  das_entrez <- das_entrez[das_entrez != ""]
+  das_universe_entrez <- rmats_combined %>%
+    filter(count_mode == preferred_count_mode, !is.na(ENTREZID), ENTREZID != "") %>%
+    pull(ENTREZID) %>%
+    as.character() %>%
+    unique()
+  das_universe_entrez <- unique(c(das_universe_entrez, das_entrez))
+  if (length(das_entrez) >= 10) {
+    das_go <- tryCatch({
+      res <- enrichGO(
+        gene = das_entrez,
+        OrgDb = annotation_orgdb,
+        keyType = "ENTREZID",
+        ont = "ALL",
+        universe = das_universe_entrez,
+        pvalueCutoff = 1,
+        qvalueCutoff = 1,
+        readable = TRUE
+      )
+      res@result <- res@result[res@result$pvalue < 0.05, , drop = FALSE]
+      res
+    }, error = function(e) NULL)
+    write.csv(make_result_df(das_go), step10_gene_table_path("15_12_DAS_GO_enrichment.csv"), row.names = FALSE)
+    if (nrow(make_result_df(das_go)) > 0) {
+      save_ora_dotplot_df(
+        make_result_df(das_go),
+        primary = step10_gene_plot_path("15_13_DAS_GO_dotplot.pdf"),
+        title_prefix = "DAS genes: GO enrichment",
+        top_n = 6,
+        facet_col = "ONTOLOGY"
+      )
+    }
+
+    das_kegg <- run_clusterprofiler_with_retry(
+      label = "DAS KEGG",
+      fn = function() enrichKEGG(gene = das_entrez, universe = das_universe_entrez, organism = kegg_organism_code, pvalueCutoff = 1, qvalueCutoff = 1),
+      attempts = 3,
+      sleep_seconds = 5
+    )
+    das_kegg <- filter_result_by_pvalue(das_kegg, threshold = 0.05)
+    if (nrow(make_result_df(das_kegg)) > 0) {
+      das_kegg <- tryCatch(setReadable(das_kegg, OrgDb = annotation_orgdb, keyType = "ENTREZID"), error = function(e) das_kegg)
+    }
+    write.csv(make_result_df(das_kegg), step10_gene_table_path("15_14_DAS_KEGG_enrichment.csv"), row.names = FALSE)
+    if (nrow(make_result_df(das_kegg)) > 0) {
+      save_ora_dotplot_df(
+        make_result_df(das_kegg),
+        primary = step10_gene_plot_path("15_15_DAS_KEGG_dotplot.pdf"),
+        title_prefix = "DAS genes: KEGG enrichment",
+        top_n = 15
+      )
+    }
+  }
+
+  top_events_by_type <- preferred_sig_events %>%
+    group_by(event_type) %>%
+    slice_head(n = 10) %>%
+    ungroup() %>%
+    mutate(integrated_priority = event_priority * ifelse(!is.na(de_direction) & de_direction != "ns", 1.5, 1))
+  write.csv(top_events_by_type, step10_gene_table_path("15_16_top_events_by_type.csv"), row.names = FALSE)
+
+  top_heatmap_events <- preferred_sig_events %>% slice_head(n = 30)
+  psi_mat <- build_psi_matrix(top_heatmap_events)
+  if (!is.null(psi_mat) && nrow(psi_mat) >= 2) {
+    sample_groups <- c(rep(group1_label, length(sample_name_info$group1)), rep(group2_label, length(sample_name_info$group2)))
+    if (length(sample_groups) != ncol(psi_mat)) {
+      sample_groups <- c(rep(group1_label, floor(ncol(psi_mat) / 2)), rep(group2_label, ceiling(ncol(psi_mat) / 2)))
+    }
+    psi_ha <- heatmap_group_annotation(sample_groups, palette = group_colors)
+    save_base_pdf_versions(
+      primary = step10_gene_plot_path("15_17_top_AS_event_PSI_heatmap.pdf"),
+      width = 9,
+      height = 11,
+      expr = ComplexHeatmap::draw(
+        ComplexHeatmap::Heatmap(
+          psi_mat,
+          name = "PSI",
+          col = heatmap_diverging_col_fun(breaks = c(0, 0.5, 1)),
+          top_annotation = psi_ha,
+          cluster_rows = TRUE,
+          cluster_columns = TRUE,
+          show_row_names = TRUE,
+          column_names_rot = 45
+        )
+      )
+    )
+  }
+
+  sashimi_output_dir <- step10_table_dir("sashimi_inputs")
+  dir.create(sashimi_output_dir, recursive = TRUE, showWarnings = FALSE)
+
+  sashimi_top_n_local <- suppressWarnings(as.integer(Sys.getenv("SASHIMI_TOP_N", "8")))
+  if (!is.finite(sashimi_top_n_local) || sashimi_top_n_local <= 0) {
+    sashimi_top_n_local <- 8
+  }
+
+  select_sashimi_events <- function(event_tbl, top_n = 8) {
+    if (nrow(event_tbl) == 0) {
+      return(event_tbl)
+    }
+    pool <- event_tbl %>%
+      arrange(event_pvalue, desc(abs_delta_psi)) %>%
+      distinct(event_key, .keep_all = TRUE)
+    se_tbl <- pool %>% filter(event_type == "SE") %>% slice_head(n = min(3, top_n))
+    other_tbl <- pool %>%
+      filter(event_type != "SE") %>%
+      group_by(event_type) %>%
+      slice_head(n = 2) %>%
+      ungroup()
+    picked <- bind_rows(se_tbl, other_tbl) %>%
+      arrange(event_pvalue, desc(abs_delta_psi)) %>%
+      distinct(event_key, .keep_all = TRUE)
+    if (nrow(picked) < top_n) {
+      picked <- bind_rows(
+        picked,
+        pool %>% filter(!event_key %in% picked$event_key)
+      ) %>%
+        distinct(event_key, .keep_all = TRUE)
+    }
+    picked %>% slice_head(n = top_n)
+  }
+
+  sashimi_candidates <- select_sashimi_events(preferred_sig_events, top_n = sashimi_top_n_local)
+  sashimi_manifest <- list()
+  if (nrow(sashimi_candidates) > 0) {
+    for (i in seq_len(nrow(sashimi_candidates))) {
+      one_row <- sashimi_candidates[i, , drop = FALSE]
+      one_mode <- one_row$count_mode[[1]]
+      one_event_type <- one_row$event_type[[1]]
+      source_file <- one_row$source_file[[1]]
+      if (!file.exists(source_file)) next
+
+      source_df <- read.delim(source_file, check.names = FALSE)
+      source_df_processed <- load_rmats_table(source_file, one_event_type, one_mode)
+      source_df_processed$row_index__ <- seq_len(nrow(source_df_processed))
+      matched_row_idx <- source_df_processed$row_index__[source_df_processed$event_key == one_row$event_key[[1]]]
+      if (length(matched_row_idx) == 0) next
+
+      mode_dir <- file.path(sashimi_output_dir, one_mode, one_event_type)
+      dir.create(mode_dir, recursive = TRUE, showWarnings = FALSE)
+      event_stub <- sprintf(
+        "%02d_%s_%s_%s",
+        i,
+        one_event_type,
+        sanitize_filename(one_row$gene_label[[1]] %||% one_row$gene_id_clean[[1]] %||% "gene"),
+        sanitize_filename(substr(one_row$event_key[[1]], 1, 80))
+      )
+      event_file <- file.path(mode_dir, paste0(event_stub, ".txt"))
+      write.table(source_df[matched_row_idx, , drop = FALSE], event_file, sep = "\t", quote = FALSE, row.names = FALSE)
+
+      sashimi_manifest[[length(sashimi_manifest) + 1]] <- data.frame(
+        sashimi_rank = i,
+        event_key = one_row$event_key[[1]],
+        count_mode = one_mode,
+        event_type = one_event_type,
+        gene_id_clean = one_row$gene_id_clean[[1]],
+        gene_label = one_row$gene_label[[1]],
+        event_pvalue = one_row$event_pvalue[[1]],
+        IncLevelDifference = one_row$IncLevelDifference[[1]],
+        abs_delta_psi = one_row$abs_delta_psi[[1]],
+        event_priority = one_row$event_priority[[1]],
+        source_file = source_file,
+        event_file = normalizePath(event_file, mustWork = FALSE),
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+
+  if (length(sashimi_manifest) > 0) {
+    sashimi_manifest <- bind_rows(sashimi_manifest)
+    write.csv(sashimi_manifest, step10_visual_table_path("15_18_sashimi_manifest.csv"), row.names = FALSE)
+
+    group1_bams <- normalizePath(file.path("1.Mapping", paste0(sample_name_info$group1, ".bam")), mustWork = FALSE)
+    group2_bams <- normalizePath(file.path("1.Mapping", paste0(sample_name_info$group2, ".bam")), mustWork = FALSE)
+    sashimi_cmd <- detect_sashimi_cmd()
+
+    sashimi_commands <- sashimi_manifest %>%
+      mutate(
+        output_dir = step10_visual_plot_path(sprintf("%02d_%s_%s", sashimi_rank, count_mode, event_type)),
+        command = sprintf(
+          "%s --b1 \"%s\" --b2 \"%s\" --event-type %s -e \"%s\" --l1 %s --l2 %s --group-info <generated> --exon_s 1 --intron_s 20 --min-counts 1 --fig-width 9 --fig-height 7 --font-size 8 --color \"%s\" -o \"%s\"",
+          paste(sashimi_cmd %||% "rmats2sashimiplot", collapse = " "),
+          paste(group1_bams, collapse = ","),
+          paste(group2_bams, collapse = ","),
+          event_type,
+          event_file,
+          group1_label,
+          group2_label,
+          rna_sashimi_color_string,
+          output_dir
+        )
+      )
+    write.csv(sashimi_commands, step10_visual_table_path("15_19_sashimi_commands.csv"), row.names = FALSE)
+
+    render_status <- sashimi_commands %>%
+      transmute(
+        sashimi_rank,
+        event_key,
+        status = "skipped_by_policy_no_real_sashimi_render",
+        reason = "按本次结果补图计划仅导出候选事件和命令清单，不调用 rMATS2Sashimiplot。",
+        pdf_file = NA_character_,
+        png_file = NA_character_
+      )
+    write.csv(render_status, step10_visual_table_path("15_19b_sashimi_render_status.csv"), row.names = FALSE)
+  }
+
+  splicing_go_terms <- c("GO:0008380", "GO:0000398", "GO:0006397", "GO:0048024", "GO:0000375", "GO:0005681")
+  splicing_go_catalog <- tryCatch({
+    AnnotationDbi::select(annotation_orgdb, keys = splicing_go_terms, keytype = "GOALL", columns = c("SYMBOL", "GENENAME", "ENTREZID", "GOALL", "ONTOLOGYALL"))
+  }, error = function(e) data.frame())
+
+  if (nrow(splicing_go_catalog) > 0) {
+    splicing_go_catalog <- splicing_go_catalog %>%
+      filter(!is.na(SYMBOL), SYMBOL != "") %>%
+      transmute(
+        SYMBOL,
+        GENENAME,
+        ENTREZID = as.character(ENTREZID),
+        matched_go_terms = GOALL,
+        ontology = ONTOLOGYALL,
+        annotation_source = "GO"
+      )
+  }
+
+  pattern_catalog <- de_result %>%
+    filter(!is.na(gene_label), grepl("^(Srsf|Hnrnp|Rbm|Sf3b|U2af|Snrnp|Prpf|Ddx|Tra2|Clk|Srrm|Ptbp|Mbnl|Nova|Celf|Rbfox|Lsm|Eftud|Dhx)", gene_label)) %>%
+    transmute(
+      SYMBOL = gene_label,
+      GENENAME,
+      ENTREZID = as.character(ENTREZID),
+      matched_go_terms = NA_character_,
+      ontology = NA_character_,
+      annotation_source = "Pattern"
+    )
+
+  splicing_gene_catalog <- bind_rows(splicing_go_catalog, pattern_catalog) %>%
+    filter(!is.na(SYMBOL), SYMBOL != "") %>%
+    group_by(SYMBOL) %>%
+    summarise(
+      GENENAME = first_non_missing_chr(GENENAME),
+      ENTREZID = first_non_missing_chr(ENTREZID),
+      matched_go_terms = paste(sort(unique(na.omit(matched_go_terms))), collapse = ";"),
+      ontology = paste(sort(unique(na.omit(ontology))), collapse = ";"),
+      annotation_source = paste(sort(unique(annotation_source)), collapse = ";"),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      matched_go_terms = ifelse(matched_go_terms == "", NA_character_, matched_go_terms),
+      ontology = ifelse(ontology == "", NA_character_, ontology)
+    )
+
+  write.csv(splicing_gene_catalog, step10_gene_table_path("15_20_splicing_related_gene_catalog.csv"), row.names = FALSE)
+
+  if (nrow(splicing_gene_catalog) > 0) {
+    de_symbol_tbl <- de_result %>%
+      filter(!is.na(gene_label), gene_label != "") %>%
+      arrange(pvalue, desc(abs(log2FoldChange))) %>%
+      distinct(gene_label, .keep_all = TRUE) %>%
+      dplyr::select(gene_id, ensembl_id, gene_label, baseMean, log2FoldChange, pvalue, direction, ENTREZID)
+
+    das_symbol_tbl <- das_annotated %>%
+      filter(!is.na(SYMBOL_final), SYMBOL_final != "") %>%
+      group_by(SYMBOL = SYMBOL_final) %>%
+      slice_max(order_by = priority, n = 1, with_ties = FALSE) %>%
+      ungroup() %>%
+      dplyr::select(
+        SYMBOL,
+        as_event_count = significant_event_count,
+        as_event_types = event_types,
+        max_abs_delta_psi,
+        das_priority = priority
+      )
+
+    splicing_regulator_tbl <- splicing_gene_catalog %>%
+      left_join(de_symbol_tbl, by = c("SYMBOL" = "gene_label")) %>%
+      left_join(das_symbol_tbl, by = "SYMBOL") %>%
+      mutate(
+        is_splicing_de = !is.na(direction) & direction != "ns",
+        has_das = !is.na(as_event_count) & as_event_count > 0,
+        candidate_status = case_when(
+          is_splicing_de & has_das ~ "DE_and_DAS_splicing",
+          is_splicing_de ~ "DE_splicing",
+          has_das ~ "DAS_splicing",
+          TRUE ~ "Background_splicing"
+        ),
+        splicing_priority = ifelse(!is.na(pvalue), -log10(pvalue + 1e-300) * pmax(abs(log2FoldChange), 0.001), 0),
+        candidate_priority = splicing_priority * ifelse(has_das, 1.5, 1)
+      ) %>%
+      arrange(desc(candidate_priority), pvalue)
+
+    candidate_splicing_regulators <- splicing_regulator_tbl %>%
+      filter(!is.na(log2FoldChange), !is.na(pvalue))
+    write.csv(candidate_splicing_regulators, step10_gene_table_path("15_21_candidate_splicing_regulators.csv"), row.names = FALSE)
+
+    if (nrow(candidate_splicing_regulators) > 0) {
+      label_tbl <- candidate_splicing_regulators %>% slice_head(n = 15)
+      splicing_regulator_plot <- ggplot(candidate_splicing_regulators, aes(x = log2FoldChange, y = -log10(pvalue + 1e-300), color = candidate_status)) +
+        geom_point(size = 2, alpha = 0.8) +
+        geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+        geom_vline(xintercept = c(-0.58, 0.58), linetype = "dashed") +
+        geom_text_repel(data = label_tbl, aes(label = SYMBOL), size = 3, show.legend = FALSE) +
+        scale_color_manual(values = viz_pal$candidate_status) +
+        labs(title = "剪切调控候选基因概览", x = "Gene log2FC", y = "-log10(PValue)") +
+        theme_rnaseq_bw()
+      save_plot_versions(splicing_regulator_plot, step10_gene_plot_path("15_22_splicing_regulator_volcano.pdf"), width = 8.5, height = 6)
+
+      top_splicing_ids <- candidate_splicing_regulators %>%
+        filter(!is.na(gene_id), gene_id %in% rownames(gene_exp)) %>%
+        distinct(gene_id, .keep_all = TRUE) %>%
+        slice_head(n = 30) %>%
+        pull(gene_id)
+      if (length(top_splicing_ids) >= 2) {
+        splicing_heatmap_mat <- log2(gene_exp[top_splicing_ids, , drop = FALSE] + 1)
+        splicing_heatmap_mat <- safe_scale_rows(splicing_heatmap_mat)
+        row_labels <- candidate_splicing_regulators$SYMBOL[match(rownames(splicing_heatmap_mat), candidate_splicing_regulators$gene_id)]
+        row_labels[is.na(row_labels) | row_labels == ""] <- rownames(splicing_heatmap_mat)[is.na(row_labels) | row_labels == ""]
+        save_base_pdf_versions(
+          primary = step10_gene_plot_path("15_23_top_splicing_regulator_heatmap.pdf"),
+          width = 8.5,
+          height = 10,
+          expr = ComplexHeatmap::draw(
+            ComplexHeatmap::Heatmap(
+              splicing_heatmap_mat,
+              name = "z-score",
+              col = heatmap_diverging_col_fun(splicing_heatmap_mat),
+              top_annotation = heatmap_group_annotation(sample_info$group),
+              show_row_names = TRUE,
+              row_labels = row_labels,
+              cluster_rows = TRUE,
+              cluster_columns = TRUE,
+              column_names_rot = 45
+            )
+          )
+        )
+      }
+    }
+  }
+}
+```
+
+## 15.7 Isoform switch 与功能后果
+
+```{r}
+if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
+  write.csv(isoform_switch_genes, step10_isoform_table_path("15_40_significant_switch_genes.csv"), row.names = FALSE)
+  write.csv(isoform_switch_isoforms, step10_isoform_table_path("15_41_significant_switch_isoforms.csv"), row.names = FALSE)
+  write.csv(isoform_switch_summary, step10_isoform_table_path("15_42_switch_summary.csv"), row.names = FALSE)
+  write.csv(isoform_consequence_summary, step10_isoform_table_path("15_43_consequence_summary.csv"), row.names = FALSE)
+  write.csv(isoform_switch_pairs, step10_isoform_table_path("15_44_representative_switch_pairs.csv"), row.names = FALSE)
+
+  if (nrow(isoform_switch_genes) > 0) {
+    isoform_gene_rank <- isoform_switch_genes %>%
+      mutate(
+        gene_name = dplyr::coalesce(gene_name, gene_id_clean),
+        gene_switch_q_value = suppressWarnings(as.numeric(gene_switch_q_value)),
+        max_abs_dIF = suppressWarnings(as.numeric(max_abs_dIF)),
+        priority = -log10(gene_switch_q_value + 1e-300) * pmax(max_abs_dIF, 0.001)
+      ) %>%
+      arrange(gene_switch_q_value, desc(max_abs_dIF))
+
+    isoform_gene_plot <- isoform_gene_rank %>%
+      slice_head(n = 20) %>%
+      mutate(gene_name = factor(gene_name, levels = rev(unique(gene_name)))) %>%
+      ggplot(aes(x = gene_name, y = priority, fill = max_abs_dIF)) +
+      geom_col(width = 0.75) +
+      coord_flip() +
+      scale_fill_heatmap_sequential() +
+      labs(title = "Top isoform-switch genes", x = NULL, y = "Switch priority", fill = "Max |dIF|") +
+      theme_rnaseq_minimal()
+    save_plot_versions(isoform_gene_plot, step10_isoform_plot_path("15_45_isoform_switch_gene_ranking.pdf"), width = 8.5, height = 6)
+  }
+
+  if (nrow(isoform_switch_isoforms) > 0) {
+    isoform_scatter <- isoform_switch_isoforms %>%
+      mutate(
+        isoform_switch_q_value = suppressWarnings(as.numeric(isoform_switch_q_value)),
+        dIF_value = suppressWarnings(as.numeric(dIF_value)),
+        significant = ifelse(is.finite(isoform_switch_q_value) & isoform_switch_q_value < 0.05 & is.finite(dIF_value) & abs(dIF_value) >= 0.1, "significant", "ns")
+      ) %>%
+      ggplot(aes(x = dIF_value, y = -log10(isoform_switch_q_value + 1e-300), color = significant)) +
+      geom_point(alpha = 0.6, size = 1.3) +
+      geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+      geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed") +
+      scale_color_manual(values = viz_pal$sig_status) +
+      labs(title = "Isoform switch significance landscape", x = "dIF", y = "-log10(switch q-value)") +
+      theme_rnaseq_bw()
+    save_plot_versions(isoform_scatter, step10_isoform_plot_path("15_46_isoform_switch_isoform_scatter.pdf"), width = 8.5, height = 6)
+  }
+
+  if (nrow(isoform_fraction_df) > 0) {
+    sample_cols <- intersect(colnames(isoform_fraction_df), colnames(gene_exp))
+    id_col <- intersect(c("isoform_id", "iso_ref", "isoformID"), colnames(isoform_fraction_df))[1]
+    gene_label_col <- intersect(c("gene_name", "gene_label"), colnames(isoform_fraction_df))[1]
+    if (length(sample_cols) >= 4 && !is.na(id_col)) {
+      top_isoforms <- isoform_switch_isoforms %>%
+        arrange(isoform_switch_q_value, desc(abs(dIF_value))) %>%
+        distinct(isoform_id, .keep_all = TRUE) %>%
+        slice_head(n = 20) %>%
+        pull(isoform_id)
+      heat_df <- isoform_fraction_df %>%
+        filter(.data[[id_col]] %in% top_isoforms)
+      if (nrow(heat_df) >= 2) {
+        heat_mat <- as.matrix(heat_df[, sample_cols, drop = FALSE])
+        heat_mat <- safe_scale_rows(heat_mat)
+        row_labels <- heat_df[[id_col]]
+        if (!is.na(gene_label_col)) {
+          row_labels <- paste0(dplyr::coalesce(heat_df[[gene_label_col]], heat_df[[id_col]]), " | ", heat_df[[id_col]])
+        }
+        rownames(heat_mat) <- row_labels
+        save_base_pdf_versions(
+          primary = step10_isoform_plot_path("15_47_isoform_fraction_heatmap.pdf"),
+          width = 9,
+          height = 10,
+          expr = ComplexHeatmap::draw(
+            ComplexHeatmap::Heatmap(
+              heat_mat,
+              name = "z-score",
+              col = heatmap_diverging_col_fun(heat_mat),
+              top_annotation = heatmap_group_annotation(sample_info$group),
+              cluster_rows = TRUE,
+              cluster_columns = TRUE,
+              column_names_rot = 45
+            )
+          )
+        )
+      }
+    }
+  }
+
+  isoform_summary_tbl <- data.frame(
+    metric = c("switch_genes", "switch_isoforms", "genes_with_pair_summary"),
+    count = c(nrow(isoform_switch_genes), nrow(isoform_switch_isoforms), nrow(isoform_switch_pairs)),
+    stringsAsFactors = FALSE
+  )
+  write.csv(isoform_summary_tbl, step10_isoform_table_path("15_48_isoform_switch_summary_table.csv"), row.names = FALSE)
+  isoform_summary_plot <- ggplot(isoform_summary_tbl, aes(x = metric, y = count, fill = metric)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = resolve_named_colors(viz_pal$accent, isoform_summary_tbl$metric)) +
+    labs(title = "Isoform switch summary", x = NULL, y = "Count") +
+    theme_rnaseq_minimal() +
+    theme(legend.position = "none")
+  save_plot_versions(isoform_summary_plot, step10_isoform_plot_path("15_48_isoform_switch_summary_barplot.pdf"), width = 7.5, height = 4.5)
+
+  consequence_plot_tbl <- data.frame()
+  if (nrow(isoform_switch_pairs) > 0 && "consequence_types" %in% colnames(isoform_switch_pairs)) {
+    consequence_plot_tbl <- isoform_switch_pairs %>%
+      tidyr::separate_rows(consequence_types, sep = ";") %>%
+      filter(!is.na(consequence_types), consequence_types != "") %>%
+      count(consequence_types, name = "count") %>%
+      arrange(desc(count))
+  } else if (nrow(isoform_consequence_summary) > 0) {
+    char_cols <- names(isoform_consequence_summary)[vapply(isoform_consequence_summary, is.character, logical(1))]
+    num_cols <- names(isoform_consequence_summary)[vapply(isoform_consequence_summary, is.numeric, logical(1))]
+    if (length(char_cols) >= 1 && length(num_cols) >= 1) {
+      consequence_plot_tbl <- isoform_consequence_summary %>%
+        transmute(consequence_types = .data[[char_cols[1]]], count = .data[[num_cols[1]]]) %>%
+        filter(!is.na(consequence_types), consequence_types != "", is.finite(count))
+    }
+  }
+
+  if (nrow(consequence_plot_tbl) > 0) {
+    consequence_plot_tbl <- consequence_plot_tbl %>%
+      arrange(desc(count)) %>%
+      slice_head(n = 15) %>%
+      mutate(consequence_types = factor(consequence_types, levels = rev(unique(consequence_types))))
+    consequence_plot <- ggplot(consequence_plot_tbl, aes(x = consequence_types, y = count, fill = count)) +
+      geom_col(width = 0.75) +
+      coord_flip() +
+      scale_fill_heatmap_sequential() +
+      labs(title = "Isoform switch consequence summary", x = NULL, y = "Count") +
+      theme_rnaseq_minimal() +
+      theme(legend.position = "none")
+    save_plot_versions(consequence_plot, step10_isoform_plot_path("15_49_isoform_consequence_summary_barplot.pdf"), width = 8.5, height = 6)
+  }
+}
+```
+
+## 15.8 module-DAS 整合
+
+```{r}
+if (nrow(as_gene_priority) > 0 && nrow(module_df_annotated) > 0) {
+  gene_priority_tbl <- as_gene_priority %>%
+    left_join(
+      module_df_annotated %>%
+        dplyr::select(gene_id, ensembl_id, module_label, gene_label, ENTREZID) %>%
+        distinct(ensembl_id, .keep_all = TRUE),
+      by = c("gene_id_clean" = "ensembl_id"),
+      suffix = c("", "_module")
+    ) %>%
+    mutate(
+      ensembl_id_final = gene_id_clean,
+      de_id_final = gene_id,
+      SYMBOL_final = dplyr::coalesce(gene_label, gene_label_module, gene_id_clean),
+      ENTREZID_final = ENTREZID
+    )
+
+  module_universe_ids <- unique(module_df_annotated$gene_id)
+  das_ids_in_universe <- unique(module_df_annotated$gene_id[module_df_annotated$ensembl_id %in% gene_priority_tbl$ensembl_id_final])
+
+  if (length(das_ids_in_universe) > 0 && nrow(module_trait_tbl) > 0) {
+    das_module_enrichment <- bind_rows(lapply(sort(unique(module_df_annotated$module_label)), function(one_module) {
+      module_genes <- unique(module_df_annotated$gene_id[module_df_annotated$module_label == one_module])
+      in_module_das <- sum(module_genes %in% das_ids_in_universe)
+      in_module_non_das <- length(module_genes) - in_module_das
+      out_module_das <- length(das_ids_in_universe) - in_module_das
+      out_module_non_das <- length(module_universe_ids) - length(module_genes) - out_module_das
+      fisher_res <- fisher.test(matrix(c(in_module_das, in_module_non_das, out_module_das, out_module_non_das), nrow = 2), alternative = "greater")
+      bg_ratio <- length(das_ids_in_universe) / length(module_universe_ids)
+      module_ratio <- if (length(module_genes) > 0) in_module_das / length(module_genes) else 0
+      data.frame(
+        Module = one_module,
+        module_size = length(module_genes),
+        das_gene_count = in_module_das,
+        das_gene_ratio = module_ratio,
+        background_ratio = bg_ratio,
+        fold_enrichment = ifelse(bg_ratio > 0, module_ratio / bg_ratio, NA_real_),
+        odds_ratio = unname(fisher_res$estimate),
+        pvalue = fisher_res$p.value,
+        stringsAsFactors = FALSE
+      )
+    })) %>%
+      left_join(
+        module_trait_tbl %>%
+          dplyr::select(Module, module_trait_correlation = correlation, module_trait_pvalue = pvalue),
+        by = "Module"
+      ) %>%
+      arrange(pvalue, desc(fold_enrichment))
+
+    write.csv(das_module_enrichment, step10_integr_table_path("15_24_DAS_module_enrichment.csv"), row.names = FALSE)
+    das_module_plot <- ggplot(das_module_enrichment, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = das_gene_count, color = -log10(pvalue + 1e-300))) +
+      geom_point(alpha = 0.9) +
+      scale_color_heatmap_sequential() +
+      labs(title = "DAS 与共表达模块整合", x = "Module-trait correlation", y = NULL, size = "DAS genes", color = "-log10(pvalue)") +
+      theme_rnaseq_bw()
+    save_plot_versions(
+      das_module_plot,
+      primary = step10_integr_plot_path("15_25_DAS_module_enrichment_bubble.pdf"),
+      width = 8.5,
+      height = max(4.5, 0.8 * nrow(das_module_enrichment))
+    )
+  }
+
+  if (nrow(rmats_sig) > 0) {
+    preferred_sig_events <- rmats_sig %>%
+      filter(count_mode == preferred_count_mode) %>%
+      arrange(event_pvalue, desc(abs_delta_psi))
+
+    event_type_burden <- preferred_sig_events %>%
+      group_by(gene_label, event_type) %>%
+      summarise(event_count = n(), .groups = "drop")
+
+    top_burden_genes <- gene_priority_tbl %>%
+      arrange(desc(significant_event_count), best_event_pvalue) %>%
+      slice_head(n = 30) %>%
+      pull(SYMBOL_final)
+
+    event_type_burden_mat <- event_type_burden %>%
+      filter(gene_label %in% top_burden_genes) %>%
+      pivot_wider(names_from = event_type, values_from = event_count, values_fill = 0) %>%
+      as.data.frame()
+
+    if (nrow(event_type_burden_mat) >= 2) {
+      rownames(event_type_burden_mat) <- event_type_burden_mat$gene_label
+      event_type_burden_mat$gene_label <- NULL
+      event_burden_max <- max(event_type_burden_mat, na.rm = TRUE)
+      event_burden_breaks <- if (is.finite(event_burden_max) && event_burden_max > 1) {
+        c(0, floor(event_burden_max / 2), event_burden_max)
+      } else {
+        c(0, 0.5, 1)
+      }
+      save_base_pdf_versions(
+        primary = step10_integr_plot_path("15_26_DAS_gene_eventtype_heatmap.pdf"),
+        width = 7.5,
+        height = 9,
+        expr = ComplexHeatmap::draw(
+          ComplexHeatmap::Heatmap(
+            as.matrix(event_type_burden_mat),
+            name = "Events",
+            col = heatmap_sequential_col_fun(breaks = event_burden_breaks),
+            cluster_rows = TRUE,
+            cluster_columns = FALSE,
+            column_names_rot = 45
+          )
+        )
+      )
+    }
+
+    module_burden_tbl <- gene_priority_tbl %>%
+      filter(!is.na(module_label), module_label != "") %>%
+      mutate(de_status = ifelse(gene_id_clean %in% unique(de_result$ensembl_id[de_result$direction != "ns"]), "DE_and_DAS", "DAS_only")) %>%
+      group_by(module_label, de_status) %>%
+      summarise(total_as_events = sum(significant_event_count), das_gene_count = n(), .groups = "drop")
+
+    save_das_module_burden_plot(
+      module_burden_tbl,
+      primary = step10_integr_plot_path("15_27_DAS_module_burden_barplot.pdf"),
+      width = 8.5,
+      height = max(5, 0.7 * nrow(module_burden_tbl))
+    )
+  }
+}
+```
+
+## 15.9 module-DEU / module-IS 与多证据模块汇总
+
+```{r}
+if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0 && nrow(as_gene_membership) > 0) {
+  module_universe_ids <- unique(module_df_annotated$gene_id)
+  deu_ids_in_universe <- unique(module_df_annotated$gene_id[module_df_annotated$ensembl_id %in% deu_sig_ids])
+  is_ids_in_universe <- unique(module_df_annotated$gene_id[module_df_annotated$ensembl_id %in% isoform_sig_ids])
+
+  if (length(deu_ids_in_universe) > 0) {
+    module_deu_enrichment <- bind_rows(lapply(sort(unique(module_df_annotated$module_label)), function(one_module) {
+      module_genes <- unique(module_df_annotated$gene_id[module_df_annotated$module_label == one_module])
+      in_module_deu <- sum(module_genes %in% deu_ids_in_universe)
+      in_module_non_deu <- length(module_genes) - in_module_deu
+      out_module_deu <- length(deu_ids_in_universe) - in_module_deu
+      out_module_non_deu <- length(module_universe_ids) - length(module_genes) - out_module_deu
+      fisher_res <- fisher.test(matrix(c(in_module_deu, in_module_non_deu, out_module_deu, out_module_non_deu), nrow = 2), alternative = "greater")
+      bg_ratio <- length(deu_ids_in_universe) / length(module_universe_ids)
+      module_ratio <- if (length(module_genes) > 0) in_module_deu / length(module_genes) else 0
+      data.frame(
+        Module = one_module,
+        module_size = length(module_genes),
+        deu_gene_count = in_module_deu,
+        deu_gene_ratio = module_ratio,
+        background_ratio = bg_ratio,
+        fold_enrichment = ifelse(bg_ratio > 0, module_ratio / bg_ratio, NA_real_),
+        odds_ratio = unname(fisher_res$estimate),
+        pvalue = fisher_res$p.value,
+        stringsAsFactors = FALSE
+      )
+    })) %>%
+      left_join(
+        module_trait_tbl %>% dplyr::select(Module, module_trait_correlation = correlation, module_trait_pvalue = pvalue),
+        by = "Module"
+      ) %>%
+      arrange(pvalue, desc(fold_enrichment))
+
+    write.csv(module_deu_enrichment, step10_integr_table_path("15_50_Module_DEU_Enrichment.csv"), row.names = FALSE)
+
+    module_deu_plot <- ggplot(module_deu_enrichment, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = deu_gene_count, color = -log10(pvalue + 1e-300))) +
+      geom_point(alpha = 0.85) +
+      scale_color_heatmap_sequential() +
+      labs(title = "模块-分组相关性与 DEU 富集整合", x = "Module-trait correlation", y = NULL, size = "DEU genes", color = "-log10(pvalue)") +
+      theme_rnaseq_bw()
+    save_plot_versions(
+      module_deu_plot,
+      primary = step10_integr_plot_path("15_51_Module_DEU_Enrichment_Bubble.pdf"),
+      width = 8,
+      height = max(4.5, 0.8 * nrow(module_deu_enrichment))
+    )
+  }
+
+  if (length(is_ids_in_universe) > 0) {
+    module_is_enrichment <- bind_rows(lapply(sort(unique(module_df_annotated$module_label)), function(one_module) {
+      module_genes <- unique(module_df_annotated$gene_id[module_df_annotated$module_label == one_module])
+      in_module_is <- sum(module_genes %in% is_ids_in_universe)
+      in_module_non_is <- length(module_genes) - in_module_is
+      out_module_is <- length(is_ids_in_universe) - in_module_is
+      out_module_non_is <- length(module_universe_ids) - length(module_genes) - out_module_is
+      fisher_res <- fisher.test(matrix(c(in_module_is, in_module_non_is, out_module_is, out_module_non_is), nrow = 2), alternative = "greater")
+      bg_ratio <- length(is_ids_in_universe) / length(module_universe_ids)
+      module_ratio <- if (length(module_genes) > 0) in_module_is / length(module_genes) else 0
+      data.frame(
+        Module = one_module,
+        module_size = length(module_genes),
+        is_gene_count = in_module_is,
+        is_gene_ratio = module_ratio,
+        background_ratio = bg_ratio,
+        fold_enrichment = ifelse(bg_ratio > 0, module_ratio / bg_ratio, NA_real_),
+        odds_ratio = unname(fisher_res$estimate),
+        pvalue = fisher_res$p.value,
+        stringsAsFactors = FALSE
+      )
+    })) %>%
+      left_join(
+        module_trait_tbl %>% dplyr::select(Module, module_trait_correlation = correlation, module_trait_pvalue = pvalue),
+        by = "Module"
+      ) %>%
+      arrange(pvalue, desc(fold_enrichment))
+
+    write.csv(module_is_enrichment, step10_integr_table_path("15_52_Module_IS_Enrichment.csv"), row.names = FALSE)
+
+    module_is_plot <- ggplot(module_is_enrichment, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = is_gene_count, color = -log10(pvalue + 1e-300))) +
+      geom_point(alpha = 0.85) +
+      scale_color_heatmap_sequential() +
+      labs(title = "模块-分组相关性与 Isoform Switch 富集整合", x = "Module-trait correlation", y = NULL, size = "IS genes", color = "-log10(pvalue)") +
+      theme_rnaseq_bw()
+    save_plot_versions(
+      module_is_plot,
+      primary = step10_integr_plot_path("15_53_Module_IS_Enrichment_Bubble.pdf"),
+      width = 8,
+      height = max(4.5, 0.8 * nrow(module_is_enrichment))
+    )
+  }
+
+  module_evidence_summary <- module_df_annotated %>%
+    mutate(gene_id_clean = ensembl_id) %>%
+    left_join(as_gene_membership, by = "gene_id_clean") %>%
+    mutate(
+      DE = dplyr::coalesce(DE, FALSE),
+      DAS = dplyr::coalesce(DAS, FALSE),
+      DEU = dplyr::coalesce(DEU, FALSE),
+      IS = dplyr::coalesce(IS, FALSE)
+    ) %>%
+    group_by(module_label) %>%
+    summarise(
+      module_size = n(),
+      de_genes = sum(DE, na.rm = TRUE),
+      das_genes = sum(DAS, na.rm = TRUE),
+      deu_genes = sum(DEU, na.rm = TRUE),
+      is_genes = sum(IS, na.rm = TRUE),
+      multi_evidence_genes = sum((DE + DAS + DEU + IS) >= 2, na.rm = TRUE),
+      triple_support_genes = sum((DE + DAS + DEU + IS) >= 3, na.rm = TRUE),
+      four_way_support_genes = sum((DE + DAS + DEU + IS) == 4, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    left_join(module_trait_tbl %>% dplyr::select(Module, module_trait_correlation = correlation, module_trait_pvalue = pvalue), by = c("module_label" = "Module")) %>%
+    arrange(desc(multi_evidence_genes), desc(four_way_support_genes), desc(abs(module_trait_correlation)))
+
+  write.csv(module_evidence_summary, step10_integr_table_path("15_54_Module_MultiEvidence_Summary.csv"), row.names = FALSE)
+
+  module_evidence_long <- module_evidence_summary %>%
+    pivot_longer(cols = c(de_genes, das_genes, deu_genes, is_genes, multi_evidence_genes, triple_support_genes, four_way_support_genes), names_to = "evidence_type", values_to = "gene_count")
+
+  module_evidence_plot <- ggplot(module_evidence_long, aes(x = module_trait_correlation, y = reorder(module_label, module_trait_correlation), size = gene_count, color = evidence_type)) +
+    geom_point(alpha = 0.85) +
+    labs(title = "模块层面的 DE/DAS/DEU/IS 证据总览", x = "Module-trait correlation", y = NULL, size = "Gene count", color = "Evidence") +
+    theme_rnaseq_bw()
+  save_plot_versions(
+    module_evidence_plot,
+    primary = step10_integr_plot_path("15_55_Module_MultiEvidence_Bubble.pdf"),
+    width = 9,
+    height = max(5, 0.8 * nrow(module_evidence_summary))
+  )
+
+  module_evidence_heatmap_mat <- module_evidence_summary %>%
+    dplyr::select(de_genes, das_genes, deu_genes, is_genes, multi_evidence_genes, triple_support_genes, four_way_support_genes, module_trait_correlation) %>%
+    as.matrix()
+  rownames(module_evidence_heatmap_mat) <- module_evidence_summary$module_label
+  module_evidence_heatmap_scaled <- scale(module_evidence_heatmap_mat)
+  module_evidence_heatmap_scaled[!is.finite(module_evidence_heatmap_scaled)] <- 0
+
+  save_base_pdf_versions(
+    primary = step10_integr_plot_path("15_56_Module_MultiEvidence_Heatmap.pdf"),
+    width = 8,
+    height = max(5, 0.5 * nrow(module_evidence_summary) + 2),
+    expr = ComplexHeatmap::draw(
+      ComplexHeatmap::Heatmap(
+        module_evidence_heatmap_scaled,
+        name = "z-score",
+        col = heatmap_diverging_col_fun(module_evidence_heatmap_scaled),
+        cluster_rows = TRUE,
+        cluster_columns = FALSE,
+        column_names_rot = 45
+      )
+    )
+  )
+}
+```
+
+## 15.10 splicing 状态缓存
+
+```{r}
+splicing_state <- list(
+  as_gene_priority = as_gene_priority,
+  as_gene_membership = as_gene_membership,
+  dsfa_sig_ids = unique(stats::na.omit(dsfa_sig_ids)),
+  deu_sig_ids = unique(stats::na.omit(deu_sig_ids)),
+  isoform_sig_ids = unique(stats::na.omit(isoform_sig_ids)),
+  apa_sig_ids = unique(stats::na.omit(apa_sig_ids)),
+  der_sig_ids = unique(stats::na.omit(der_sig_ids)),
+  top_as_candidates = top_as_candidates,
+  dsfa_gene_burden = dsfa_gene_burden,
+  apa_gene_summary_tbl = apa_gene_summary_tbl,
+  der_gene_summary_tbl = der_gene_summary_tbl,
+  generated_at = as.character(Sys.time())
+)
+saveRDS(splicing_state, cache_15_splicing_state_path)
+
+splicing_manifest <- data.frame(
+  key = c(
+    "cache_path",
+    "as_gene_priority_rows",
+    "as_gene_membership_rows",
+    "top_as_candidates_rows",
+    "dsfa_sig_ids_n",
+    "deu_sig_ids_n",
+    "isoform_sig_ids_n",
+    "apa_sig_ids_n",
+    "der_sig_ids_n"
+  ),
+  value = c(
+    cache_15_splicing_state_path,
+    nrow(as_gene_priority),
+    nrow(as_gene_membership),
+    nrow(top_as_candidates),
+    length(unique(stats::na.omit(dsfa_sig_ids))),
+    length(unique(stats::na.omit(deu_sig_ids))),
+    length(unique(stats::na.omit(isoform_sig_ids))),
+    length(unique(stats::na.omit(apa_sig_ids))),
+    length(unique(stats::na.omit(der_sig_ids)))
+  ),
+  stringsAsFactors = FALSE
+)
+write.csv(splicing_manifest, step10_event_table_path("15_0_splicing_state_manifest.csv"), row.names = FALSE)
+```

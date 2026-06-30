@@ -1,0 +1,661 @@
+# Step 4: PCA 与组合选样诊断
+
+## 4.1 选中样本 PCA
+
+```{r}
+ensure_module_result_layout("04_pca")
+
+log2_tmm_mat <- if (!is.null(gene_logcpm) && identical(colnames(gene_logcpm), colnames(gene_exp))) {
+  gene_logcpm
+} else {
+  log2(gene_exp + 1)
+}
+top_pca_genes <- select_top_variable_genes(log2_tmm_mat, top_n = 5000)
+gene_exp_pca <- log2_tmm_mat[top_pca_genes, , drop = FALSE]
+
+pca_res <- prcomp(t(gene_exp_pca), scale. = TRUE)
+pca_df <- as.data.frame(pca_res$x[, 1:2, drop = FALSE])
+pca_df$sample <- rownames(pca_df)
+pca_df$group <- sample_info[pca_df$sample, "group"]
+
+pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = group, label = sample)) +
+  geom_point(size = 3.5) +
+  geom_text_repel(size = 3.2, show.legend = FALSE) +
+  scale_color_manual(values = group_colors) +
+  labs(
+    title = "选中样本 PCA",
+    x = paste0("PC1 (", round(100 * summary(pca_res)$importance[2, 1], 1), "%)"),
+    y = paste0("PC2 (", round(100 * summary(pca_res)$importance[2, 2], 1), "%)")
+  ) +
+  theme_rnaseq_bw()
+
+save_plot_versions(
+  pca_plot,
+  primary = "result/04_pca/4_1_selected_sample_pca.pdf",
+  width = 8,
+  height = 6
+)
+
+best_combo_pca_plot <- pca_plot +
+  stat_ellipse(aes(group = group), linewidth = 0.6, linetype = "dashed", show.legend = FALSE) +
+  labs(title = "最终入选组合的增强版 PCA")
+save_plot_versions(
+  best_combo_pca_plot,
+  primary = "result/04_pca/4_4_best_combination_enhanced_pca.pdf",
+  width = 8.5,
+  height = 6.5
+)
+
+pca_scree <- data.frame(
+  PC = paste0("PC", seq_len(min(10, ncol(pca_res$x)))),
+  variance = 100 * summary(pca_res)$importance[2, 1:min(10, ncol(pca_res$x))]
+)
+
+scree_plot <- ggplot(pca_scree, aes(x = factor(PC, levels = PC), y = variance)) +
+  geom_col(fill = viz_pal$sig_gradient["low"], width = 0.7) +
+  geom_text(aes(label = sprintf("%.1f%%", variance)), vjust = -0.25, size = 3.2) +
+  labs(title = "PCA 解释方差", x = NULL, y = "Explained variance (%)") +
+  theme_rnaseq_minimal()
+
+save_plot_versions(
+  scree_plot,
+  primary = "result/04_pca/4_2_selected_sample_pca_scree.pdf",
+  width = 7,
+  height = 4.5
+)
+
+loading_tbl <- bind_rows(
+  tibble(
+    PC = "PC1",
+    gene_id = names(sort(abs(pca_res$rotation[, "PC1"]), decreasing = TRUE))[1:min(30, nrow(pca_res$rotation))],
+    loading = pca_res$rotation[names(sort(abs(pca_res$rotation[, "PC1"]), decreasing = TRUE))[1:min(30, nrow(pca_res$rotation))], "PC1"]
+  ),
+  tibble(
+    PC = "PC2",
+    gene_id = names(sort(abs(pca_res$rotation[, "PC2"]), decreasing = TRUE))[1:min(30, nrow(pca_res$rotation))],
+    loading = pca_res$rotation[names(sort(abs(pca_res$rotation[, "PC2"]), decreasing = TRUE))[1:min(30, nrow(pca_res$rotation))], "PC2"]
+  )
+)
+write.csv(loading_tbl, "result/04_pca/4_3_top_pca_loading_genes.csv", row.names = FALSE)
+```
+
+## 4.2 UMAP 与 t-SNE 样本嵌入
+
+```{r}
+dimensionality_pkgs <- try_install_and_load(c("uwot", "Rtsne", "cluster"), bioc = FALSE)
+if (length(dimensionality_pkgs$missing) > 0) {
+  message("降维/聚类扩展包未全部加载: ", paste(dimensionality_pkgs$missing, collapse = ", "))
+}
+
+analysis_seed <- 20260609
+sample_n <- ncol(gene_exp_pca)
+pca_feature_count <- min(10, ncol(pca_res$x), max(1, sample_n - 1))
+cluster_feature_mat <- pca_res$x[, seq_len(pca_feature_count), drop = FALSE]
+cluster_feature_mat <- scale(cluster_feature_mat)
+cluster_feature_mat[!is.finite(cluster_feature_mat)] <- 0
+
+embedding_base_df <- tibble::tibble(sample = rownames(cluster_feature_mat))
+embedding_base_df$group <- as.character(sample_info[embedding_base_df$sample, "group"])
+
+plot_sample_embedding <- function(embed_df, x_col, y_col, title, subtitle = NULL) {
+  ggplot(embed_df, aes(x = .data[[x_col]], y = .data[[y_col]], color = group, label = sample)) +
+    geom_point(size = 3.5) +
+    geom_text_repel(size = 3.2, show.legend = FALSE) +
+    scale_color_manual(values = group_colors) +
+    labs(title = title, subtitle = subtitle, x = x_col, y = y_col, color = "Group") +
+    theme_rnaseq_bw()
+}
+
+umap_df <- tibble::tibble(
+  sample = character(),
+  group = character(),
+  UMAP1 = numeric(),
+  UMAP2 = numeric(),
+  n_neighbors = integer(),
+  min_dist = numeric(),
+  feature_pcs = integer()
+)
+
+if (!requireNamespace("uwot", quietly = TRUE)) {
+  save_placeholder_plot(
+    "result/04_pca/4_5_sample_umap.pdf",
+    title = "UMAP skipped",
+    reason = "uwot 包不可用",
+    width = 8,
+    height = 6,
+    input_rows = sample_n
+  )
+} else if (sample_n < 3) {
+  save_placeholder_plot(
+    "result/04_pca/4_5_sample_umap.pdf",
+    title = "UMAP skipped",
+    reason = "样本数少于 3，无法稳定计算 UMAP",
+    width = 8,
+    height = 6,
+    input_rows = sample_n
+  )
+} else {
+  umap_neighbors <- max(2, min(15, sample_n - 1))
+  umap_embedding <- tryCatch(
+    uwot::umap(
+      cluster_feature_mat,
+      n_neighbors = umap_neighbors,
+      n_components = 2,
+      metric = "euclidean",
+      min_dist = 0.1,
+      scale = FALSE,
+      n_threads = 1,
+      seed = analysis_seed,
+      verbose = FALSE
+    ),
+    error = function(e) {
+      message("UMAP skipped: ", conditionMessage(e))
+      NULL
+    }
+  )
+
+  if (is.null(umap_embedding)) {
+    save_placeholder_plot(
+      "result/04_pca/4_5_sample_umap.pdf",
+      title = "UMAP skipped",
+      reason = "UMAP 计算失败，详见日志",
+      width = 8,
+      height = 6,
+      input_rows = sample_n
+    )
+  } else {
+    umap_df <- embedding_base_df %>%
+      dplyr::mutate(
+        UMAP1 = umap_embedding[, 1],
+        UMAP2 = umap_embedding[, 2],
+        n_neighbors = umap_neighbors,
+        min_dist = 0.1,
+        feature_pcs = pca_feature_count
+      )
+    umap_plot <- plot_sample_embedding(
+      umap_df,
+      x_col = "UMAP1",
+      y_col = "UMAP2",
+      title = "选中样本 UMAP",
+      subtitle = paste0("n_neighbors = ", umap_neighbors, "; 基于前 ", pca_feature_count, " 个 PCA 维度")
+    )
+    save_plot_versions(
+      umap_plot,
+      primary = "result/04_pca/4_5_sample_umap.pdf",
+      width = 8,
+      height = 6
+    )
+  }
+}
+write.csv(umap_df, "result/04_pca/4_5_sample_umap_coordinates.csv", row.names = FALSE)
+
+tsne_df <- tibble::tibble(
+  sample = character(),
+  group = character(),
+  tSNE1 = numeric(),
+  tSNE2 = numeric(),
+  perplexity = numeric(),
+  feature_pcs = integer()
+)
+
+if (!requireNamespace("Rtsne", quietly = TRUE)) {
+  save_placeholder_plot(
+    "result/04_pca/4_6_sample_tsne.pdf",
+    title = "t-SNE skipped",
+    reason = "Rtsne 包不可用",
+    width = 8,
+    height = 6,
+    input_rows = sample_n
+  )
+} else if (sample_n < 5) {
+  save_placeholder_plot(
+    "result/04_pca/4_6_sample_tsne.pdf",
+    title = "t-SNE skipped",
+    reason = "样本数少于 5，无法设置稳定的整数 perplexity",
+    width = 8,
+    height = 6,
+    input_rows = sample_n
+  )
+} else {
+  tsne_perplexity <- min(30, max(1, floor((sample_n - 2) / 3)))
+  set.seed(analysis_seed)
+  tsne_result <- tryCatch(
+    Rtsne::Rtsne(
+      cluster_feature_mat,
+      dims = 2,
+      perplexity = tsne_perplexity,
+      pca = FALSE,
+      check_duplicates = FALSE,
+      theta = 0.5,
+      max_iter = 1000,
+      num_threads = 1,
+      verbose = FALSE
+    ),
+    error = function(e) {
+      message("t-SNE skipped: ", conditionMessage(e))
+      NULL
+    }
+  )
+
+  if (is.null(tsne_result)) {
+    save_placeholder_plot(
+      "result/04_pca/4_6_sample_tsne.pdf",
+      title = "t-SNE skipped",
+      reason = "t-SNE 计算失败，详见日志",
+      width = 8,
+      height = 6,
+      input_rows = sample_n
+    )
+  } else {
+    tsne_df <- embedding_base_df %>%
+      dplyr::mutate(
+        tSNE1 = tsne_result$Y[, 1],
+        tSNE2 = tsne_result$Y[, 2],
+        perplexity = tsne_perplexity,
+        feature_pcs = pca_feature_count
+      )
+    tsne_plot <- plot_sample_embedding(
+      tsne_df,
+      x_col = "tSNE1",
+      y_col = "tSNE2",
+      title = "选中样本 t-SNE",
+      subtitle = paste0("perplexity = ", tsne_perplexity, "; 基于前 ", pca_feature_count, " 个 PCA 维度")
+    )
+    save_plot_versions(
+      tsne_plot,
+      primary = "result/04_pca/4_6_sample_tsne.pdf",
+      width = 8,
+      height = 6
+    )
+  }
+}
+write.csv(tsne_df, "result/04_pca/4_6_sample_tsne_coordinates.csv", row.names = FALSE)
+```
+
+## 4.3 无监督聚类与方法一致性
+
+```{r}
+cluster_method_labels <- c(
+  hclust_average = "Hierarchical average",
+  hclust_complete = "Hierarchical complete",
+  hclust_wardD2 = "Hierarchical ward.D2",
+  kmeans = "k-means",
+  pam = "PAM"
+)
+
+calc_mean_silhouette <- function(labels, dist_obj) {
+  label_int <- as.integer(factor(labels))
+  n_labels <- length(unique(label_int))
+  if (n_labels < 2 || n_labels >= length(label_int)) {
+    return(NA_real_)
+  }
+  sil <- tryCatch(
+    cluster::silhouette(label_int, dist_obj),
+    error = function(e) {
+      message("Silhouette skipped: ", conditionMessage(e))
+      NULL
+    }
+  )
+  if (is.null(sil)) {
+    return(NA_real_)
+  }
+  mean(sil[, "sil_width"], na.rm = TRUE)
+}
+
+normalize_cluster_labels <- function(labels, sample_ids) {
+  if (is.null(names(labels)) || !all(sample_ids %in% names(labels))) {
+    labels <- labels[seq_along(sample_ids)]
+    names(labels) <- sample_ids
+  } else {
+    labels <- labels[sample_ids]
+  }
+  labels
+}
+
+cluster_long <- tibble::tibble()
+cluster_wide <- embedding_base_df
+silhouette_tbl <- tibble::tibble()
+cluster_group_tbl <- tibble::tibble()
+best_cluster_meta <- tibble::tibble()
+best_cluster_df <- tibble::tibble()
+agreement_tbl <- tibble::tibble()
+
+if (sample_n < 3) {
+  save_placeholder_plot(
+    "result/04_pca/4_8_unsupervised_cluster_silhouette.pdf",
+    title = "Clustering skipped",
+    reason = "样本数少于 3，无法进行 k >= 2 的聚类评估",
+    width = 8.5,
+    height = 5.5,
+    input_rows = sample_n
+  )
+  save_placeholder_plot(
+    "result/04_pca/4_9_unsupervised_cluster_dendrogram.pdf",
+    title = "Dendrogram skipped",
+    reason = "样本数少于 3",
+    width = 8,
+    height = 5.5,
+    input_rows = sample_n
+  )
+} else {
+  sample_ids <- rownames(cluster_feature_mat)
+  cluster_dist <- dist(cluster_feature_mat, method = "euclidean")
+  candidate_k <- seq(2, min(6, sample_n - 1))
+  hclust_average_obj <- hclust(cluster_dist, method = "average")
+  assignment_parts <- list()
+  silhouette_parts <- list()
+
+  add_cluster_assignment <- function(method_id, one_k, labels) {
+    if (is.null(labels)) {
+      return(invisible(NULL))
+    }
+    labels <- normalize_cluster_labels(labels, sample_ids)
+    labels_chr <- paste0("C", as.integer(factor(labels)))
+    assignment_parts[[length(assignment_parts) + 1]] <<- tibble::tibble(
+      sample = sample_ids,
+      group = as.character(sample_info[sample_ids, "group"]),
+      method = method_id,
+      method_label = unname(cluster_method_labels[method_id]),
+      k = one_k,
+      cluster = labels_chr
+    )
+    silhouette_parts[[length(silhouette_parts) + 1]] <<- tibble::tibble(
+      method = method_id,
+      method_label = unname(cluster_method_labels[method_id]),
+      k = one_k,
+      avg_silhouette = calc_mean_silhouette(labels_chr, cluster_dist)
+    )
+    invisible(NULL)
+  }
+
+  for (one_k in candidate_k) {
+    add_cluster_assignment("hclust_average", one_k, cutree(hclust_average_obj, k = one_k))
+    add_cluster_assignment("hclust_complete", one_k, cutree(hclust(cluster_dist, method = "complete"), k = one_k))
+    add_cluster_assignment("hclust_wardD2", one_k, cutree(hclust(cluster_dist, method = "ward.D2"), k = one_k))
+
+    set.seed(analysis_seed + one_k)
+    kmeans_labels <- tryCatch(
+      kmeans(cluster_feature_mat, centers = one_k, nstart = 50, iter.max = 200)$cluster,
+      error = function(e) {
+        message("k-means skipped for k=", one_k, ": ", conditionMessage(e))
+        NULL
+      }
+    )
+    add_cluster_assignment("kmeans", one_k, kmeans_labels)
+
+    pam_labels <- tryCatch(
+      cluster::pam(cluster_dist, k = one_k, diss = TRUE, cluster.only = TRUE, pamonce = 5),
+      error = function(e) {
+        message("PAM skipped for k=", one_k, ": ", conditionMessage(e))
+        NULL
+      }
+    )
+    add_cluster_assignment("pam", one_k, pam_labels)
+  }
+
+  cluster_long <- dplyr::bind_rows(assignment_parts) %>%
+    dplyr::arrange(method, k, cluster, sample)
+  silhouette_tbl <- dplyr::bind_rows(silhouette_parts) %>%
+    dplyr::arrange(dplyr::desc(avg_silhouette), method, k)
+
+  if (nrow(cluster_long) > 0) {
+    cluster_wide <- cluster_long %>%
+      dplyr::mutate(method_k = paste0(method, "_k", k)) %>%
+      dplyr::select(sample, group, method_k, cluster) %>%
+      tidyr::pivot_wider(names_from = method_k, values_from = cluster) %>%
+      dplyr::arrange(match(sample, sample_ids))
+
+    cluster_group_tbl <- cluster_long %>%
+      dplyr::count(method, method_label, k, cluster, group, name = "sample_count") %>%
+      dplyr::arrange(method, k, cluster, group)
+  }
+
+  if (nrow(silhouette_tbl) > 0 && any(is.finite(silhouette_tbl$avg_silhouette))) {
+    best_cluster_meta <- silhouette_tbl %>%
+      dplyr::filter(is.finite(avg_silhouette)) %>%
+      dplyr::arrange(dplyr::desc(avg_silhouette), k, method) %>%
+      dplyr::slice(1)
+    best_cluster_col <- paste0(best_cluster_meta$method, "_k", best_cluster_meta$k)
+    best_cluster_df <- cluster_wide %>%
+      dplyr::select(sample, group, best_cluster = tidyselect::all_of(best_cluster_col))
+
+    silhouette_plot <- silhouette_tbl %>%
+      dplyr::filter(is.finite(avg_silhouette)) %>%
+      ggplot(aes(x = factor(k), y = avg_silhouette, color = method_label, group = method_label)) +
+      geom_hline(yintercept = 0, linewidth = 0.35, linetype = "dashed", color = viz_pal$neutral["mid"]) +
+      geom_line(linewidth = 0.8) +
+      geom_point(size = 2.8) +
+      labs(
+        title = "无监督聚类 silhouette 评估",
+        subtitle = paste0("最佳: ", best_cluster_meta$method_label, ", k = ", best_cluster_meta$k),
+        x = "Cluster number (k)",
+        y = "Mean silhouette width",
+        color = "Method"
+      ) +
+      theme_rnaseq_minimal()
+    save_plot_versions(
+      silhouette_plot,
+      primary = "result/04_pca/4_8_unsupervised_cluster_silhouette.pdf",
+      width = 8.5,
+      height = 5.5
+    )
+  } else {
+    save_placeholder_plot(
+      "result/04_pca/4_8_unsupervised_cluster_silhouette.pdf",
+      title = "Silhouette skipped",
+      reason = "无可用聚类评估结果",
+      width = 8.5,
+      height = 5.5,
+      input_rows = sample_n
+    )
+  }
+
+  dend_k <- if (nrow(best_cluster_meta) > 0) best_cluster_meta$k else 2
+  dend_clusters <- paste0("C", as.integer(factor(cutree(hclust_average_obj, k = dend_k))))
+  names(dend_clusters) <- sample_ids
+  dend_data <- ggdendro::dendro_data(as.dendrogram(hclust_average_obj), type = "rectangle")
+  dend_label_df <- dend_data$labels %>%
+    dplyr::mutate(
+      sample = label,
+      group = as.character(sample_info[sample, "group"]),
+      cluster = dend_clusters[sample],
+      label = paste0(sample, " (", cluster, ")")
+    )
+  dend_plot <- ggplot() +
+    geom_segment(
+      data = dend_data$segments,
+      aes(x = x, y = y, xend = xend, yend = yend),
+      linewidth = 0.55,
+      color = viz_pal$neutral["dark"]
+    ) +
+    geom_text(
+      data = dend_label_df,
+      aes(x = x, y = y, label = label, color = group),
+      angle = 45,
+      hjust = 1,
+      vjust = 1,
+      size = 3.1,
+      show.legend = TRUE
+    ) +
+    scale_color_manual(values = group_colors) +
+    labs(
+      title = "样本层次聚类树",
+      subtitle = paste0("Average linkage; shown cut k = ", dend_k),
+      x = NULL,
+      y = "Distance",
+      color = "Group"
+    ) +
+    theme_rnaseq_minimal() +
+    theme(
+      axis.text.x = element_blank(),
+      axis.ticks.x = element_blank(),
+      panel.grid.major.x = element_blank(),
+      panel.grid.minor = element_blank()
+    )
+  save_plot_versions(
+    dend_plot,
+    primary = "result/04_pca/4_9_unsupervised_cluster_dendrogram.pdf",
+    width = 8,
+    height = 5.5
+  )
+}
+
+write.csv(cluster_long, "result/04_pca/4_7_unsupervised_cluster_assignments_long.csv", row.names = FALSE)
+write.csv(cluster_wide, "result/04_pca/4_7_unsupervised_cluster_assignments.csv", row.names = FALSE)
+write.csv(silhouette_tbl, "result/04_pca/4_8_unsupervised_cluster_silhouette.csv", row.names = FALSE)
+write.csv(cluster_group_tbl, "result/04_pca/4_12_unsupervised_cluster_group_contingency.csv", row.names = FALSE)
+write.csv(best_cluster_meta, "result/04_pca/4_14_best_unsupervised_cluster_model.csv", row.names = FALSE)
+
+best_cluster_subtitle <- if (nrow(best_cluster_meta) > 0) {
+  paste0(
+    best_cluster_meta$method_label,
+    ", k = ",
+    best_cluster_meta$k,
+    ", mean silhouette = ",
+    sprintf("%.3f", best_cluster_meta$avg_silhouette)
+  )
+} else {
+  "无可用最佳聚类模型"
+}
+
+if (nrow(best_cluster_df) > 0) {
+  pca_best_cluster_df <- pca_df %>%
+    dplyr::left_join(best_cluster_df %>% dplyr::select(sample, best_cluster), by = "sample")
+  pca_cluster_plot <- ggplot(pca_best_cluster_df, aes(x = PC1, y = PC2, color = group, shape = best_cluster, label = sample)) +
+    geom_point(size = 3.8) +
+    geom_text_repel(size = 3.2, show.legend = FALSE) +
+    scale_color_manual(values = group_colors) +
+    labs(
+      title = "PCA 与最佳无监督聚类叠加",
+      subtitle = best_cluster_subtitle,
+      x = paste0("PC1 (", round(100 * summary(pca_res)$importance[2, 1], 1), "%)"),
+      y = paste0("PC2 (", round(100 * summary(pca_res)$importance[2, 2], 1), "%)"),
+      color = "Group",
+      shape = "Cluster"
+    ) +
+    theme_rnaseq_bw()
+  save_plot_versions(
+    pca_cluster_plot,
+    primary = "result/04_pca/4_10_best_cluster_pca_overlay.pdf",
+    width = 8.5,
+    height = 6.5
+  )
+} else {
+  save_placeholder_plot(
+    "result/04_pca/4_10_best_cluster_pca_overlay.pdf",
+    title = "PCA cluster overlay skipped",
+    reason = "无可用最佳聚类模型",
+    width = 8.5,
+    height = 6.5,
+    input_rows = sample_n
+  )
+}
+
+embedding_cluster_parts <- list()
+if (nrow(umap_df) > 0) {
+  embedding_cluster_parts[[length(embedding_cluster_parts) + 1]] <- umap_df %>%
+    dplyr::transmute(sample, group, Dim1 = UMAP1, Dim2 = UMAP2, embedding = "UMAP")
+}
+if (nrow(tsne_df) > 0) {
+  embedding_cluster_parts[[length(embedding_cluster_parts) + 1]] <- tsne_df %>%
+    dplyr::transmute(sample, group, Dim1 = tSNE1, Dim2 = tSNE2, embedding = "t-SNE")
+}
+embedding_cluster_df <- dplyr::bind_rows(embedding_cluster_parts)
+
+if (nrow(embedding_cluster_df) > 0 && nrow(best_cluster_df) > 0) {
+  embedding_cluster_df <- embedding_cluster_df %>%
+    dplyr::left_join(best_cluster_df %>% dplyr::select(sample, best_cluster), by = "sample")
+  embedding_cluster_plot <- ggplot(
+    embedding_cluster_df,
+    aes(x = Dim1, y = Dim2, color = group, shape = best_cluster, label = sample)
+  ) +
+    geom_point(size = 3.6) +
+    geom_text_repel(size = 3.0, show.legend = FALSE) +
+    facet_wrap(~embedding, scales = "free") +
+    scale_color_manual(values = group_colors) +
+    labs(
+      title = "非线性嵌入与最佳无监督聚类叠加",
+      subtitle = best_cluster_subtitle,
+      x = "Dimension 1",
+      y = "Dimension 2",
+      color = "Group",
+      shape = "Cluster"
+    ) +
+    theme_rnaseq_bw()
+  save_plot_versions(
+    embedding_cluster_plot,
+    primary = "result/04_pca/4_11_best_cluster_embedding_overlay.pdf",
+    width = 10,
+    height = 6.2
+  )
+} else {
+  save_placeholder_plot(
+    "result/04_pca/4_11_best_cluster_embedding_overlay.pdf",
+    title = "Embedding cluster overlay skipped",
+    reason = "UMAP/t-SNE 或最佳聚类模型不可用",
+    width = 10,
+    height = 6.2,
+    input_rows = sample_n
+  )
+}
+
+assignment_cols <- setdiff(names(cluster_wide), c("sample", "group"))
+if (length(assignment_cols) >= 2) {
+  agreement_mat <- matrix(
+    NA_real_,
+    nrow = length(assignment_cols),
+    ncol = length(assignment_cols),
+    dimnames = list(assignment_cols, assignment_cols)
+  )
+  for (row_col in assignment_cols) {
+    for (col_col in assignment_cols) {
+      row_pairs <- outer(cluster_wide[[row_col]], cluster_wide[[row_col]], FUN = "==")
+      col_pairs <- outer(cluster_wide[[col_col]], cluster_wide[[col_col]], FUN = "==")
+      pair_mask <- upper.tri(row_pairs)
+      agreement_mat[row_col, col_col] <- mean(row_pairs[pair_mask] == col_pairs[pair_mask], na.rm = TRUE)
+    }
+  }
+  agreement_tbl <- as.data.frame(agreement_mat) %>%
+    tibble::rownames_to_column("method_k")
+  agreement_long <- as.data.frame(as.table(agreement_mat)) %>%
+    dplyr::rename(method_a = Var1, method_b = Var2, agreement = Freq)
+  write.csv(agreement_tbl, "result/04_pca/4_13_unsupervised_cluster_agreement_matrix.csv", row.names = FALSE)
+
+  agreement_heatmap <- ggplot(agreement_long, aes(x = method_a, y = method_b, fill = agreement)) +
+    geom_tile(color = "white", linewidth = 0.25) +
+    geom_text(aes(label = sprintf("%.2f", agreement)), size = 2.4) +
+    scale_fill_gradient(
+      low = viz_pal$sig_gradient["low"],
+      high = viz_pal$sig_gradient["high"],
+      limits = c(0, 1),
+      name = "Pair agreement"
+    ) +
+    labs(
+      title = "无监督聚类方法一致性",
+      subtitle = "基于样本两两是否同簇的一致比例",
+      x = NULL,
+      y = NULL
+    ) +
+    theme_rnaseq_minimal(base_size = viz_style$compact_size) +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      panel.grid = element_blank()
+    )
+  save_plot_versions(
+    agreement_heatmap,
+    primary = "result/04_pca/4_13_unsupervised_cluster_agreement_heatmap.pdf",
+    width = 10.5,
+    height = 9
+  )
+} else {
+  write.csv(agreement_tbl, "result/04_pca/4_13_unsupervised_cluster_agreement_matrix.csv", row.names = FALSE)
+  save_placeholder_plot(
+    "result/04_pca/4_13_unsupervised_cluster_agreement_heatmap.pdf",
+    title = "Cluster agreement skipped",
+    reason = "可比较的聚类方法少于 2 个",
+    width = 10.5,
+    height = 9,
+    input_rows = sample_n
+  )
+}
+```

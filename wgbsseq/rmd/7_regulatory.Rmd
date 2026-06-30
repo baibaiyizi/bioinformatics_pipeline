@@ -1,0 +1,317 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 7: 特定区域与调控注释分析
+# ==============================================================================
+# 这一节专门放更容易转成"生物学解释"的入口：差异 CGI、motif、印记基因、重复序列。
+
+ensure_step_dirs("result/7_regulatory/plots/1", "result/7_regulatory/tables/1")
+
+ensure_dmr_outputs_loaded()
+
+if(!exists("txdb", inherits = FALSE)) {
+  txdb <- load_main_chr_txdb(config$gtf_file)
+}
+
+# 1 显著差异 CpG Island (Differential CGI)
+# 和前面的 DMR-level CGI 视角不同，这里是在 Island 本身重新做差异检验。
+cgi_status_file <- "result/7_regulatory/tables/1/differential_cgi_status.csv"
+cgi_resources <- get_cgi_context_resources(config, target_gr = dmr_gr, required = FALSE)
+if(!is.null(cgi_resources)) {
+  ensure_obj_cpg_loaded()
+  cgi_counts <- tryCatch(
+    regionCounts(obj.cpg, cgi_resources$gr_island),
+    error = function(e) {
+      message("   CGI regionCounts 跳过: ", e$message)
+      write_csv(tibble(step = "regionCounts", status = "skipped", message = e$message), cgi_status_file)
+      NULL
+    }
+  )
+  cgi_meth <- if(!is.null(cgi_counts)) {
+    tryCatch(
+      methylKit::unite(cgi_counts, destrand = TRUE),
+      error = function(e) {
+        message("   CGI 差异分析跳过: ", e$message)
+        write_csv(tibble(step = "unite", status = "skipped", message = e$message), cgi_status_file)
+        NULL
+      }
+    )
+  } else {
+    NULL
+  }
+  
+  if(!is.null(cgi_meth) && nrow(cgi_meth) > 0) {
+    diff_cgi <- calculateDiffMeth(cgi_meth)
+    diff_cgi_sig <- getMethylDiff(diff_cgi, difference = config$cgi_diff_methyl_pct, qvalue = config$enrichment_adjust_threshold)
+    if(nrow(diff_cgi_sig) > 0) {
+      sig_anno <- annotatePeak(as(diff_cgi_sig, "GRanges"), TxDb = txdb, verbose = FALSE)
+      write_csv(as.data.frame(sig_anno), "result/7_regulatory/tables/1/differential_cgi_annotations.csv")
+      write_csv(tibble(step = "differential_cgi", status = "ok", message = paste(nrow(diff_cgi_sig), "significant CGI regions")), cgi_status_file)
+    } else {
+      write_csv(tibble(step = "differential_cgi", status = "ok", message = "no significant CGI regions"), cgi_status_file)
+    }
+  } else if(!file.exists(cgi_status_file)) {
+    write_csv(tibble(step = "unite", status = "skipped", message = "no CGI regions available after unite"), cgi_status_file)
+  }
+} else {
+  write_csv(tibble(step = "reference", status = "skipped", message = "CpG Island reference file is missing"), cgi_status_file)
+}
+
+# 2 Motif 富集分析
+# motif 只取效应最大的 top DMR，目的是更聚焦地看潜在 TF 偏好而不是追求覆盖全部位点。
+if(all(vapply(
+  c("motifmatchr", "BSgenome.Mmusculus.UCSC.mm39", "JASPAR2020", "TFBSTools", "GenomeInfoDb"),
+  requireNamespace,
+  logical(1),
+  quietly = TRUE
+))) {
+  message("   分析 Motif 富集...")
+  
+  # 准备 Motif 数据库
+  opts <- list(); opts["species"] <- 10090
+  motifs <- TFBSTools::getMatrixSet(JASPAR2020::JASPAR2020, opts)
+  
+  # 准备输入数据
+  top_dmrs <- dmr_gr[order(abs(dmr_gr$diffMethy), decreasing = TRUE)][seq_len(min(config$motif_top_n, length(dmr_gr)))]
+  
+  # ================= 【关键修改步骤】 =================
+  # 尝试统一命名风格为 UCSC (处理 chr1, chr2 等)
+  seqlevelsStyle(top_dmrs) <- "UCSC"
+  
+  # 【核心修复】过滤掉非标准染色体 (GLxxxx 等随机片段)
+  # pruning.mode = "coarse" 是必须的，表示直接丢弃这些染色体上的区间
+  top_dmrs <- keepStandardChromosomes(top_dmrs, pruning.mode = "coarse")
+  
+  # (可选) 再次确保只保留 BSgenome 中存在的层级，双重保险
+  top_dmrs <- top_dmrs[seqnames(top_dmrs) %in% seqnames(BSgenome.Mmusculus.UCSC.mm39)]
+  
+  message(paste("   保留用于分析的 DMR 数量:", length(top_dmrs)))
+  if(length(top_dmrs) == 0) stop("过滤后没有剩余 DMR，请检查染色体命名是否完全不匹配！")
+  # ====================================================
+  
+  # 运行 Motif 匹配
+  # 现在 top_dmrs 里只有 chr1...chr19, chrX, chrY 等标准名字，不会报错了
+  motif_ix <- motifmatchr::matchMotifs(motifs, top_dmrs, genome = BSgenome.Mmusculus.UCSC.mm39)
+  
+  # 整理结果
+  motif_df <- data.frame(
+    motif = names(colSums(motifmatchr::motifMatches(motif_ix))),
+    count = colSums(motifmatchr::motifMatches(motif_ix)),
+    name = sapply(motifs, TFBSTools::name)
+  ) %>% arrange(desc(count)) %>% head(20)
+
+  region_sequence_metrics <- function(gr, genome) {
+    seqs <- Biostrings::getSeq(genome, gr)
+    seq_width <- pmax(width(gr), 1)
+    gc_count <- rowSums(Biostrings::letterFrequency(seqs, letters = c("G", "C")))
+    cpg_count <- Biostrings::vcountPattern("CG", seqs)
+    tibble(
+      GC = gc_count / seq_width,
+      CpG_density = cpg_count / seq_width
+    )
+  }
+
+  make_gc_cpg_matched_background <- function(query_gr, genome, candidates_per_region = 8) {
+    if(length(query_gr) == 0) return(query_gr)
+    query_metrics <- region_sequence_metrics(query_gr, genome)
+    bg_list <- lapply(seq_along(query_gr), function(i) {
+      chr <- as.character(seqnames(query_gr)[i])
+      chr_len <- seqlengths(genome)[chr]
+      region_width <- width(query_gr)[i]
+      if(is.na(chr_len) || chr_len <= region_width) return(NULL)
+
+      candidate_starts <- sample.int(chr_len - region_width + 1, candidates_per_region)
+      candidate_gr <- GRanges(seqnames = chr, ranges = IRanges(start = candidate_starts, width = region_width))
+      candidate_metrics <- tryCatch(
+        region_sequence_metrics(candidate_gr, genome),
+        error = function(e) NULL
+      )
+      if(is.null(candidate_metrics) || nrow(candidate_metrics) == 0) return(candidate_gr[1])
+
+      score <- abs(candidate_metrics$GC - query_metrics$GC[[i]]) +
+        abs(candidate_metrics$CpG_density - query_metrics$CpG_density[[i]])
+      candidate_gr[which.min(score)]
+    })
+    bg_list <- bg_list[!vapply(bg_list, is.null, logical(1))]
+    if(length(bg_list) == 0) return(query_gr[0])
+    do.call(c, bg_list)
+  }
+
+  set.seed(config$motif_background_seed)
+  matched_background <- make_gc_cpg_matched_background(
+    top_dmrs,
+    BSgenome.Mmusculus.UCSC.mm39,
+    candidates_per_region = 8
+  )
+
+  if(length(matched_background) > 0) {
+    bg_ix <- motifmatchr::matchMotifs(motifs, matched_background, genome = BSgenome.Mmusculus.UCSC.mm39)
+    fg_hits <- colSums(motifmatchr::motifMatches(motif_ix))
+    bg_hits <- colSums(motifmatchr::motifMatches(bg_ix))
+    motif_ids <- names(fg_hits)
+    motif_names <- sapply(motifs[motif_ids], TFBSTools::name)
+
+    motif_enrich_df <- bind_rows(lapply(seq_along(motif_ids), function(j) {
+      fg_hit <- as.integer(fg_hits[[j]])
+      bg_hit <- as.integer(bg_hits[[j]])
+      test_mat <- matrix(
+        c(
+          fg_hit,
+          length(top_dmrs) - fg_hit,
+          bg_hit,
+          length(matched_background) - bg_hit
+        ),
+        nrow = 2,
+        byrow = TRUE
+      )
+      fisher_res <- tryCatch(fisher.test(test_mat), error = function(e) NULL)
+      tibble(
+        motif = motif_ids[[j]],
+        name = motif_names[[j]],
+        foreground_hits = fg_hit,
+        foreground_total = length(top_dmrs),
+        background_hits = bg_hit,
+        background_total = length(matched_background),
+        foreground_rate = fg_hit / length(top_dmrs),
+        background_rate = bg_hit / length(matched_background),
+        odds_ratio = if(!is.null(fisher_res)) unname(fisher_res$estimate) else NA_real_,
+        pvalue = if(!is.null(fisher_res)) fisher_res$p.value else NA_real_
+      )
+    })) %>%
+      mutate(p.adjust = p.adjust(pvalue, method = "BH")) %>%
+      arrange(p.adjust, pvalue, desc(odds_ratio))
+
+    write_csv(
+      motif_enrich_df,
+      "result/7_regulatory/tables/1/motif_enrichment_top500_matched_background.csv"
+    )
+
+    p_motif_enrich <- motif_enrich_df %>%
+      filter(is.finite(p.adjust), foreground_hits > background_hits) %>%
+      slice_head(n = 20) %>%
+      mutate(name = factor(name, levels = rev(unique(name)))) %>%
+      ggplot(aes(x = odds_ratio, y = name, color = -log10(p.adjust))) +
+      geom_point(size = 3, alpha = 0.88) +
+      scale_color_wgbs_ryb(name = "-log10(FDR)") +
+      theme_wgbs_classic(base_size = 12) +
+      labs(title = "Motif Enrichment in Top DMRs", x = "Odds Ratio", y = "TF Motif")
+
+    ggsave(
+      "result/7_regulatory/plots/1/motif_enrichment_top500_matched_background.pdf",
+      p_motif_enrich,
+      width = 7,
+      height = 8,
+      device = cairo_pdf
+    )
+  }
+  
+  # 绘图
+  p_motif <- ggplot(motif_df, aes(x = reorder(name, count), y = count)) +
+    geom_bar(stat = "identity", fill = viz_pal$motif) +
+    coord_flip() +
+    theme_wgbs_classic(base_size = 12) +
+    labs(title = "Top Motifs in DMRs", x = "TF Name", y = "Count")
+  
+  # 保存
+  ggsave("result/7_regulatory/plots/1/motif_top20.pdf", p_motif, width = 6, height = 8, device = cairo_pdf)
+  write_csv(motif_df, "result/7_regulatory/tables/1/motif_top20.csv")
+}
+
+# 3 印记基因 (Imprinted Genes) 分析
+imprinted_genes_list <- c("H19", "Igf2", "Peg3", "Snrpn", "Kcnq1ot1", "Mest", "Plagl1", "Grb10", "Meg3", "Gnas")
+imprint_res <- dmr_anno_df %>% filter(SYMBOL %in% imprinted_genes_list)
+
+if(nrow(imprint_res) > 0) {
+  write_csv(imprint_res, "result/7_regulatory/tables/1/imprinted_genes.csv")
+  p_imprint <- ggplot(imprint_res, aes(x = SYMBOL, y = diffMethy, fill = DMR_type)) +
+    geom_bar(stat = "identity") +
+    geom_hline(yintercept = 0, color = viz_pal$neutral_mid, linewidth = viz_style$line) +
+    scale_fill_manual(values = viz_pal$dmr) +
+    theme_wgbs_classic(base_size = 12) +
+    labs(title = "Affected Imprinted Genes", y = "Methylation Difference (%)")
+  ggsave("result/7_regulatory/plots/1/imprinted_genes_diff.pdf", p_imprint, width = 6, height = 4, device = cairo_pdf)
+}
+
+# 4 RepeatMasker 精细重复序列分析
+# 这一块把 DMR 映射到 LINE / SINE / LTR / satellite 等重复序列类别，适合精子 WGBS 解释。
+repeatmasker_file <- resolve_repeatmasker_file(config, required = FALSE)
+
+if(!is.na(repeatmasker_file) && file.exists(repeatmasker_file)) {
+  message("   分析 RepeatMasker 重复序列...")
+  rmsk_raw <- read_tsv(repeatmasker_file, col_names = FALSE, show_col_types = FALSE)
+  
+  if(ncol(rmsk_raw) >= 13) {
+    repeat_gr <- GRanges(
+      seqnames = rmsk_raw[[6]],
+      ranges = IRanges(start = rmsk_raw[[7]] + 1, end = rmsk_raw[[8]]),
+      repName = rmsk_raw[[11]],
+      repClass = rmsk_raw[[12]],
+      repFamily = rmsk_raw[[13]]
+    )
+    
+    tryCatch({
+      seqlevelsStyle(repeat_gr) <- seqlevelsStyle(dmr_gr)[1]
+    }, error = function(e) {
+      if(!grepl("^chr", as.character(seqnames(dmr_gr)[1])) && grepl("^chr", as.character(seqnames(repeat_gr)[1]))) {
+        seqlevels(repeat_gr) <- sub("^chr", "", seqlevels(repeat_gr))
+      }
+    })
+    
+    repeat_hits <- findOverlaps(dmr_gr, repeat_gr, ignore.strand = TRUE)
+    if(length(repeat_hits) > 0) {
+      repeat_dmr_df <- data.frame(
+        DMR_id = mcols(dmr_gr)$DMR_id[queryHits(repeat_hits)],
+        DMR_type = mcols(dmr_gr)$DMR_type[queryHits(repeat_hits)],
+        diffMethy = mcols(dmr_gr)$diffMethy[queryHits(repeat_hits)],
+        repName = mcols(repeat_gr)$repName[subjectHits(repeat_hits)],
+        repClass = mcols(repeat_gr)$repClass[subjectHits(repeat_hits)],
+        repFamily = mcols(repeat_gr)$repFamily[subjectHits(repeat_hits)]
+      ) %>%
+        mutate(repClassSimple = simplify_repeat_class(repClass, repFamily)) %>%
+        left_join(dmr_anno_df %>% select(DMR_id, SYMBOL, gene_id_clean, annotation), by = "DMR_id") %>%
+        distinct(DMR_id, repName, repClass, repFamily, repClassSimple, .keep_all = TRUE)
+      
+      write_csv(repeat_dmr_df, "result/7_regulatory/tables/1/repeatmasker_dmrs.csv")
+      
+      repeat_class_summary <- repeat_dmr_df %>%
+        count(repClassSimple, DMR_type, name = "count") %>%
+        group_by(repClassSimple) %>%
+        mutate(total = sum(count)) %>%
+        ungroup()
+      
+      repeat_family_summary <- repeat_dmr_df %>%
+        count(repFamily, DMR_type, name = "count") %>%
+        group_by(repFamily) %>%
+        mutate(total = sum(count)) %>%
+        ungroup() %>%
+        arrange(desc(total)) %>%
+        slice_head(n = 20)
+      
+      write_csv(repeat_class_summary, "result/7_regulatory/tables/1/repeatmasker_class_summary.csv")
+      write_csv(repeat_family_summary, "result/7_regulatory/tables/1/repeatmasker_family_top20.csv")
+      
+      p_repeat_class <- ggplot(repeat_class_summary, aes(x = reorder(repClassSimple, total), y = count, fill = DMR_type)) +
+        geom_col() +
+        coord_flip() +
+        scale_fill_manual(values = viz_pal$dmr) +
+        theme_wgbs_classic(base_size = 13) +
+        labs(title = "DMRs in RepeatMasker Classes", x = "Repeat Class", y = "DMR Count")
+      
+      p_repeat_family <- ggplot(repeat_family_summary, aes(x = reorder(repFamily, total), y = count, fill = DMR_type)) +
+        geom_col() +
+        coord_flip() +
+        scale_fill_manual(values = viz_pal$dmr) +
+        theme_wgbs_classic(base_size = 13) +
+        labs(title = "Top Repeat Families in DMRs", x = "Repeat Family", y = "DMR Count")
+      
+      ggsave("result/7_regulatory/plots/1/repeatmasker_class.pdf", p_repeat_class, width = 7, height = 5.5, device = cairo_pdf)
+      ggsave("result/7_regulatory/plots/1/repeatmasker_family_top20.pdf", p_repeat_family, width = 8, height = 7, device = cairo_pdf)
+    }
+  }
+} else {
+  write_csv(
+    tibble(step = "repeatmasker", status = "skipped", message = "RepeatMasker reference file is missing"),
+    "result/7_regulatory/tables/1/repeatmasker_status.csv"
+  )
+}
+
+```

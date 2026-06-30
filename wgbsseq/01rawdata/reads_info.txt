@@ -1,0 +1,5 @@
+group_stage	sample	group	stage	raw_fq1	raw_fq2
+WTsperm	WT_sperm1	WT	sperm	01rawdata/WT_sperm1_1.fastq.gz	01rawdata/WT_sperm1_2.fastq.gz
+WTsperm	WT_sperm2	WT	sperm	01rawdata/WT_sperm2_1.fastq.gz	01rawdata/WT_sperm2_2.fastq.gz
+PFOSsperm	PFOS_sperm1	PFOS	sperm	01rawdata/PFOS_sperm1_1.fastq.gz	01rawdata/PFOS_sperm1_2.fastq.gz
+PFOSsperm	PFOS_sperm2	PFOS	sperm	01rawdata/PFOS_sperm2_1.fastq.gz	01rawdata/PFOS_sperm2_2.fastq.gz

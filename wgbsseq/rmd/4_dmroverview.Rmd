@@ -1,0 +1,376 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 4: DMR 总览与染色体负担
+# ==============================================================================
+# 这一节偏"结果总览"，主要输出最适合快速浏览和放进主文的总览型图。
+message("⏳ 在 Stage1 生成 DMR 总览图与染色体 burden 统计...")
+
+ensure_dmr_outputs_loaded()
+
+dmr_overview_plot_dir <- "result/4_dmroverview/plots/1"
+dmr_overview_table_dir <- "result/4_dmroverview/tables/1"
+ensure_step_dirs(dmr_overview_plot_dir, dmr_overview_table_dir)
+
+# 1 甲基化水平散点图
+n_hyper <- sum(dmr_anno_df$DMR_type == "Hyper")
+n_hypo  <- sum(dmr_anno_df$DMR_type == "Hypo")
+
+p_scatter <- ggplot(dmr_anno_df, aes(x = meanMethy_group1, y = meanMethy_group2)) +
+  geom_point(aes(color = DMR_type), alpha = 0.65, size = viz_style$point_md) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.8)) +
+  scale_color_manual(values = viz_pal$dmr) +
+  annotate("text", x = 0.95, y = 0.05, label = paste0("Hypo: ", n_hypo),
+           color = viz_pal$neutral_dark, hjust = 1, vjust = 0, fontface = "bold") +
+  annotate("text", x = 0.05, y = 0.95, label = paste0("Hyper: ", n_hyper),
+           color = viz_pal$neutral_dark, hjust = 0, vjust = 1, fontface = "bold") +
+  theme_wgbs_classic(base_size = 14) +
+  coord_fixed(ratio = 1, xlim = c(0, 1), ylim = c(0, 1)) +
+  labs(title = "DMR Methylation Levels", x = paste(config$group1_name, "Meth"), y = paste(config$group2_name, "Meth"))
+
+ggsave(file.path(dmr_overview_plot_dir, "dmr_methylation_scatter.pdf"), p_scatter, width = 6, height = 6, device = cairo_pdf)
+
+# 2 基因组元件分布图
+# 这里不用默认注释图的原因是：默认配色会漂，难以和后面 gene-centric / heatmap 保持一致。
+anno_feature_counts <- dmr_anno_df %>%
+  mutate(annotation_simple = factor(annotation_simple, levels = feature_levels_main)) %>%
+  count(annotation_simple, sort = TRUE, name = "count")
+
+feature_cols_main <- resolve_named_colors(
+  anno_feature_counts$annotation_simple,
+  viz_pal$feature,
+  fallback_colors = viz_pal$feature_accent,
+  default_color = viz_pal$neutral_mid
+)
+
+p_anno_bar <- ggplot(
+  anno_feature_counts,
+  aes(x = reorder(annotation_simple, count), y = count, fill = annotation_simple)
+) +
+  geom_col(width = 0.72, color = alpha(viz_pal$neutral_dark, 0.18)) +
+  coord_flip() +
+  scale_fill_manual(values = feature_cols_main, guide = "none") +
+  theme_wgbs_classic(base_size = 12) +
+  labs(title = "Genomic Distribution of All DMRs", x = "", y = "DMR Count")
+
+ggsave(file.path(dmr_overview_plot_dir, "dmr_genomic_distribution.pdf"), p_anno_bar, width = 8, height = 6, device = cairo_pdf)
+
+ tss_plot_df <- dmr_anno_df %>%
+  mutate(
+    DMR_type = factor(DMR_type, levels = c("Hyper", "Hypo")),
+    distance_kb = distanceToTSS / 1000
+  ) %>%
+  filter(is.finite(distance_kb))
+
+p_dist_tss <- ggplot(tss_plot_df, aes(x = distance_kb, fill = DMR_type, color = DMR_type)) +
+  geom_histogram(position = "identity", bins = 80, alpha = 0.45, linewidth = 0.2) +
+  scale_fill_manual(values = viz_pal$dmr, drop = FALSE) +
+  scale_color_manual(values = viz_pal$dmr, drop = FALSE) +
+  coord_cartesian(xlim = c(-100, 100)) +
+  theme_wgbs_classic(base_size = 12) +
+  labs(
+    title = "DMR Distance to TSS",
+    x = "Distance to TSS (kb)",
+    y = "DMR Count",
+    fill = "DMR Type",
+    color = "DMR Type"
+  )
+ggsave(file.path(dmr_overview_plot_dir, "dmr_distribution_to_tss.pdf"), p_dist_tss, width = 8, height = 6, device = cairo_pdf)
+
+# 3 Hyper vs Hypo 分布对比图
+anno_df_summary <- dmr_anno_df %>%
+  mutate(annotation_simple = factor(annotation_simple, levels = feature_levels_main)) %>%
+  group_by(DMR_type, annotation_simple) %>%
+  summarise(count = n(), .groups = "drop")
+
+p_dist <- ggplot(anno_df_summary, aes(x = DMR_type, y = count, fill = annotation_simple)) +
+  geom_bar(stat = "identity", position = "fill") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = feature_cols_main, name = "Feature") +
+  theme_wgbs_classic(base_size = 12) +
+  labs(title = "Genomic Feature Distribution", y = "Percentage", x = "")
+
+ggsave(file.path(dmr_overview_plot_dir, "dmr_feature_distribution_compare.pdf"), p_dist, width = 6, height = 5, device = cairo_pdf)
+
+# 4 桑基图 (Alluvial Plot)
+dmr_clean <- dmr_anno_df %>%
+  filter(!is.na(meanMethy_group1), !is.na(meanMethy_group2))
+if(nrow(dmr_clean) > 0) {
+  breaks_seq <- c(0, 0.2, 0.4, 0.6, 0.8, 1.0)
+  labels_seq <- c("0-20%", "20-40%", "40-60%", "60-80%", "80-100%")
+
+  flow_df <- dmr_clean %>%
+    mutate(
+      group1_bin = cut(meanMethy_group1, breaks = breaks_seq, labels = labels_seq, include.lowest = TRUE),
+      group2_bin = cut(meanMethy_group2, breaks = breaks_seq, labels = labels_seq, include.lowest = TRUE)
+    ) %>%
+    count(group1_bin, group2_bin)
+
+  p_alluvial <- ggplot(flow_df, aes(axis1 = group1_bin, axis2 = group2_bin, y = n)) +
+    geom_alluvium(aes(fill = group1_bin), width = 1/4, alpha = 0.8) +
+    geom_stratum(aes(fill = after_stat(stratum)), width = 1/4, color = viz_pal$neutral_light) +
+    geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3) +
+    scale_fill_manual(values = setNames(viz_pal$meth_bin_fun(length(labels_seq)), labels_seq), name = "Meth Level") +
+    scale_x_discrete(limits = c(config$group1_name, config$group2_name), expand = c(0.05, 0.05)) +
+    theme_wgbs_minimal(base_size = 12) +
+    labs(title = "Methylation State Flow", x = "", y = "Count")
+
+  ggsave(file.path(dmr_overview_plot_dir, "dmr_methylation_flow.pdf"), p_alluvial, width = 8, height = 6, device = cairo_pdf)
+}
+
+# 5 染色体维度 DMR burden 分析
+if(exists("dmrs") && nrow(dmrs) > 0) {
+  dmr_burden_df <- dmrs %>%
+    mutate(
+      chr = as.character(chr),
+      DMR_length = end - start + 1
+    )
+
+  dmr_has_chr <- any(grepl("^chr", dmr_burden_df$chr))
+  chr_sizes <- get_mouse_main_chr_sizes(target_has_chr = dmr_has_chr)
+
+  chr_order <- chr_sizes$chr
+  chr_axis_labels <- strip_chr_prefix(chr_order)
+
+  dmr_burden_df <- dmr_burden_df %>%
+    mutate(chr = standardize_chr_style(chr, target_has_chr = dmr_has_chr))
+
+  dmr_chr_type <- dmr_burden_df %>%
+    filter(chr %in% chr_order) %>%
+    group_by(chr, DMR_type) %>%
+    summarise(
+      DMR_count = n(),
+      Total_length = sum(DMR_length, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    right_join(expand_grid(chr = chr_order, DMR_type = c("Hyper", "Hypo")), by = c("chr", "DMR_type")) %>%
+    mutate(
+      DMR_count = replace_na(DMR_count, 0L),
+      Total_length = replace_na(Total_length, 0)
+    )
+
+  dmr_chr_total <- dmr_burden_df %>%
+    filter(chr %in% chr_order) %>%
+    group_by(chr) %>%
+    summarise(
+      Total_DMRs = n(),
+      Total_length = sum(DMR_length, na.rm = TRUE),
+      Hyper_count = sum(DMR_type == "Hyper"),
+      Hypo_count = sum(DMR_type == "Hypo"),
+      .groups = "drop"
+    ) %>%
+    right_join(chr_sizes, by = "chr") %>%
+    mutate(
+      Total_DMRs = replace_na(Total_DMRs, 0L),
+      Total_length = replace_na(Total_length, 0),
+      Hyper_count = replace_na(Hyper_count, 0L),
+      Hypo_count = replace_na(Hypo_count, 0L),
+      DMR_per_Mb = Total_DMRs / (chr_length / 1e6),
+      Length_per_Mb = Total_length / (chr_length / 1e6),
+      Hyper_fraction = ifelse(Total_DMRs > 0, Hyper_count / Total_DMRs, NA_real_),
+      Hyper_Hypo_ratio = ifelse(Hypo_count > 0, Hyper_count / Hypo_count, NA_real_),
+      chr = factor(chr, levels = chr_order)
+    ) %>%
+    arrange(chr)
+
+  write_csv(dmr_chr_total, file.path(dmr_overview_table_dir, "dmr_chromosome_burden.csv"))
+  write_csv(dmr_chr_type, file.path(dmr_overview_table_dir, "dmr_chromosome_burden_by_type.csv"))
+
+  p_chr_count <- dmr_chr_type %>%
+    mutate(chr = factor(chr, levels = chr_order)) %>%
+    ggplot(aes(x = chr, y = DMR_count, fill = DMR_type)) +
+    geom_col(position = "stack") +
+    scale_fill_manual(values = viz_pal$dmr) +
+    scale_x_discrete(labels = chr_axis_labels) +
+    theme_wgbs_classic(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10, color = viz_pal$neutral_dark)) +
+    labs(title = "DMR Count by Chromosome", x = "Chromosome", y = "DMR Count")
+
+  p_chr_density <- ggplot(dmr_chr_total, aes(x = chr, y = DMR_per_Mb)) +
+    geom_col(fill = viz_pal$burden_density) +
+    scale_x_discrete(labels = chr_axis_labels) +
+    theme_wgbs_classic(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10, color = viz_pal$neutral_dark)) +
+    labs(title = "DMR Density by Chromosome", x = "Chromosome", y = "DMR / Mb")
+
+  p_chr_ratio <- ggplot(dmr_chr_total, aes(x = chr, y = Hyper_fraction)) +
+    geom_col(fill = viz_pal$burden_ratio) +
+    geom_hline(yintercept = 0.5, linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.8)) +
+    scale_y_continuous(labels = percent_format(accuracy = 1), limits = c(0, 1)) +
+    scale_x_discrete(labels = chr_axis_labels) +
+    theme_wgbs_classic(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 10, color = viz_pal$neutral_dark)) +
+    labs(title = "Hyper DMR Fraction by Chromosome", x = "Chromosome", y = "Hyper Fraction")
+
+  ggsave(file.path(dmr_overview_plot_dir, "dmr_burden_count.pdf"), p_chr_count, width = 10, height = 5.5, device = cairo_pdf)
+  ggsave(file.path(dmr_overview_plot_dir, "dmr_burden_density.pdf"), p_chr_density, width = 10, height = 5.5, device = cairo_pdf)
+  ggsave(file.path(dmr_overview_plot_dir, "dmr_burden_hyper_fraction.pdf"), p_chr_ratio, width = 10, height = 5.5, device = cairo_pdf)
+
+  p_chr_combo <- cowplot::plot_grid(p_chr_count, p_chr_density, p_chr_ratio, ncol = 1, align = "v")
+  ggsave(file.path(dmr_overview_plot_dir, "dmr_burden_combined.pdf"), p_chr_combo, width = 11, height = 14, device = cairo_pdf)
+}
+
+# 6 补充 DMR 可视化与 Promoter GSEA
+# 这组补充分析虽然更偏 supplementary，但逻辑上仍然属于 DMR overview 的延伸。
+# promoter-only GSEA 这里先做基因层汇总，再进行排序富集，避免同一基因重复计数。
+message("⏳ 在 Stage1 生成补充 DMR 可视化与 Promoter GSEA...")
+
+supp_plot_dir <- dmr_overview_plot_dir
+supp_table_dir <- dmr_overview_table_dir
+
+dmr_anno_supp <- dmr_anno_df %>%
+  mutate(
+    seqnames = as.character(seqnames),
+    start = as.numeric(start),
+    end = as.numeric(end),
+    width = as.numeric(width),
+    diffMethy = as.numeric(diffMethy)
+  )
+
+p_len_diff <- dmr_anno_supp %>%
+  filter(!is.na(diffMethy), !is.na(width), width > 0, !is.na(DMR_type)) %>%
+  ggplot(aes(x = diffMethy, y = log10(width), color = DMR_type)) +
+  geom_point(alpha = 0.52, size = viz_style$point_md) +
+  scale_color_manual(values = viz_pal$dmr) +
+  theme_wgbs_classic(base_size = 12) +
+  labs(title = "DMR Length vs Methylation Difference", x = group_diff_axis_label, y = "log10(DMR Length)")
+
+ggsave(file.path(supp_plot_dir, "dmr_length_vs_diff.pdf"),
+       p_len_diff, width = 6, height = 5, device = cairo_pdf)
+
+dmr_manhattan <- dmr_anno_supp %>%
+  mutate(seqnames = as.character(seqnames)) %>%
+  filter(!is.na(start), !is.na(end), !is.na(diffMethy))
+
+if(nrow(dmr_manhattan) > 0) {
+  dmr_has_chr <- any(grepl("^chr", dmr_manhattan$seqnames))
+  dmr_chr_sizes <- get_mouse_main_chr_sizes(target_has_chr = dmr_has_chr)
+
+  dmr_manhattan <- dmr_manhattan %>%
+    mutate(seqnames = standardize_chr_style(seqnames, target_has_chr = dmr_has_chr)) %>%
+    filter(seqnames %in% dmr_chr_sizes$chr) %>%
+    mutate(chr_order = match(seqnames, dmr_chr_sizes$chr)) %>%
+    arrange(chr_order, start)
+
+  dmr_offsets <- dmr_chr_sizes %>%
+    filter(chr %in% unique(dmr_manhattan$seqnames)) %>%
+    mutate(offset = lag(cumsum(as.numeric(chr_length)), default = 0))
+
+  if(nrow(dmr_offsets) > 0) {
+    dmr_manhattan_plot_df <- dmr_manhattan %>%
+      left_join(dmr_offsets, by = c("seqnames" = "chr")) %>%
+      arrange(chr_order, start) %>%
+      mutate(
+        seqnames = factor(seqnames, levels = dmr_offsets$chr),
+        BPcum = start + offset
+      )
+
+    axisdf <- dmr_offsets %>%
+      mutate(center = offset + chr_length / 2,
+             chr_label = strip_chr_prefix(chr))
+
+    p_dmr_manhattan <- ggplot(dmr_manhattan_plot_df, aes(x = BPcum, y = diffMethy)) +
+      geom_point(aes(color = seqnames), alpha = 0.8, size = viz_style$point_md) +
+      scale_color_manual(
+        values = setNames(rep(viz_pal$chr, length.out = nrow(axisdf)), axisdf$chr),
+        guide = "none"
+      ) +
+      scale_x_continuous(labels = axisdf$chr_label, breaks = axisdf$center) +
+      scale_y_continuous(expand = c(0, 0)) +
+      theme_wgbs_classic(base_size = 12) +
+      theme(
+        panel.border = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1, color = viz_pal$neutral_dark)
+      ) +
+      labs(title = "Manhattan Plot of DMRs", x = "Chromosome", y = group_diff_axis_label)
+
+    ggsave(file.path(supp_plot_dir, "dmr_manhattan_plot.pdf"),
+           p_dmr_manhattan, width = 12, height = 6, device = cairo_pdf)
+  }
+}
+
+promoter_dmrs <- dmr_anno_supp %>%
+  filter(!is.na(gene_id_clean), grepl("Promoter", annotation), !is.na(diffMethy)) %>%
+  group_by(gene_id_clean) %>%
+  summarise(diffMethy = mean(diffMethy, na.rm = TRUE), .groups = "drop")
+
+if(nrow(promoter_dmrs) > 0) {
+  promoter_gene_map <- tryCatch(
+    bitr(promoter_dmrs$gene_id_clean,
+         fromType = "ENSEMBL",
+         toType = c("ENTREZID", "SYMBOL"),
+         OrgDb = org.Mm.eg.db),
+    error = function(e) NULL
+  )
+
+  if(!is.null(promoter_gene_map) && nrow(promoter_gene_map) > 0) {
+    promoter_dmrs_mapped <- inner_join(promoter_dmrs, promoter_gene_map, by = c("gene_id_clean" = "ENSEMBL")) %>%
+      filter(!is.na(ENTREZID)) %>%
+      group_by(ENTREZID) %>%
+      summarise(
+        diffMethy = mean(diffMethy, na.rm = TRUE),
+        SYMBOL = dplyr::first(SYMBOL[!is.na(SYMBOL)], default = NA_character_),
+        .groups = "drop"
+      )
+
+    geneList_meth <- promoter_dmrs_mapped$diffMethy
+    names(geneList_meth) <- promoter_dmrs_mapped$ENTREZID
+    geneList_meth <- geneList_meth[!duplicated(names(geneList_meth))]
+    geneList_meth <- sort(geneList_meth, decreasing = TRUE)
+
+    if(length(geneList_meth) >= 10) {
+      gse_go_promoter <- tryCatch(
+        gseGO(
+          geneList = geneList_meth,
+          OrgDb = org.Mm.eg.db,
+          ont = "BP",
+          minGSSize = 10,
+          maxGSSize = 500,
+          pvalueCutoff = config$enrichment_p_threshold,
+          verbose = FALSE
+        ),
+        error = function(e) NULL
+      )
+
+      if(!is.null(gse_go_promoter) && nrow(as.data.frame(gse_go_promoter)) > 0) {
+        write_csv(as.data.frame(gse_go_promoter), file.path(supp_table_dir, "promoter_gsea_go_bp.csv"))
+
+        p_gsea_go_dot <- dotplot(gse_go_promoter, showCategory = 10, split = ".sign") +
+          facet_grid(. ~ .sign) +
+          labs(title = "Promoter-associated GO BP GSEA")
+
+        ggsave(file.path(supp_plot_dir, "promoter_gsea_go_dotplot.pdf"),
+               p_gsea_go_dot, width = 10, height = 8, device = cairo_pdf)
+
+        p_gsea_go_top1 <- gseaplot2(gse_go_promoter, geneSetID = 1, title = gse_go_promoter$Description[1])
+        ggsave(file.path(supp_plot_dir, "promoter_gsea_go_top1.pdf"),
+               p_gsea_go_top1, width = 8, height = 6, device = cairo_pdf)
+      }
+
+      gse_kegg_promoter <- tryCatch(
+        gseKEGG(
+          geneList = geneList_meth,
+          organism = "mmu",
+          minGSSize = 10,
+          pvalueCutoff = config$enrichment_p_threshold,
+          verbose = FALSE
+        ),
+        error = function(e) NULL
+      )
+
+      if(!is.null(gse_kegg_promoter) && nrow(as.data.frame(gse_kegg_promoter)) > 0) {
+        write_csv(as.data.frame(gse_kegg_promoter), file.path(supp_table_dir, "promoter_gsea_kegg.csv"))
+
+        p_gsea_kegg_dot <- dotplot(gse_kegg_promoter, showCategory = 10, split = ".sign") +
+          facet_grid(. ~ .sign) +
+          labs(title = "Promoter-associated KEGG GSEA")
+
+        ggsave(file.path(supp_plot_dir, "promoter_gsea_kegg_dotplot.pdf"),
+               p_gsea_kegg_dot, width = 10, height = 8, device = cairo_pdf)
+      }
+    }
+  }
+}
+
+```

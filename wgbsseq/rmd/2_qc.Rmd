@@ -1,0 +1,514 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 2: QC 与样本聚类
+# ==============================================================================
+qc_table_dir <- "result/2_qc/tables/1"
+qc_plot_dir <- "result/2_qc/plots/1"
+ensure_step_dirs(qc_table_dir, qc_plot_dir)
+
+# ==============================================================================
+# 1 上游测序与比对 QC 摘要
+# ==============================================================================
+# 这一节直接读取上游流程自动导出的 QC 汇总表，
+# 方便在最终报告里快速查看 raw/clean reads、比对率、coverage 阈值等关键指标。
+qc_read_alignment_file <- file.path(qc_table_dir, "qc_read_alignment_summary.csv")
+qc_coverage_file <- file.path(qc_table_dir, "cpg_coverage_threshold_summary.csv")
+qc_read_alignment_upstream_file <- file.path(config$work_dir, "01rawdata/qc_results_GRCm39/qc_read_alignment_summary.csv")
+qc_coverage_upstream_file <- file.path(config$work_dir, "04methykit/cpg_coverage_threshold_summary.csv")
+
+if(file.exists(qc_read_alignment_upstream_file) || file.exists(qc_read_alignment_file)) {
+  qc_read_alignment_source <- if(file.exists(qc_read_alignment_upstream_file)) qc_read_alignment_upstream_file else qc_read_alignment_file
+  qc_read_alignment <- read_csv(qc_read_alignment_source, show_col_types = FALSE)
+  write_csv(qc_read_alignment, qc_read_alignment_file)
+  qc_read_alignment_show <- qc_read_alignment %>%
+    mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+  print(
+    knitr::kable(
+      qc_read_alignment_show,
+      caption = "Sequencing and Alignment QC Summary"
+    )
+  )
+
+  alignment_rate_pct <- qc_read_alignment$alignment_rate_pct
+  if(any(is.na(alignment_rate_pct) | trimws(as.character(alignment_rate_pct)) == "")) {
+    cat("\n注：`alignment_rate_pct` 为空通常说明当前目录里还没有保留 Bismark 比对统计；下次按新的上游脚本完整运行后会自动补齐。\n")
+  }
+  if("bisulfite_conversion_lower_bound_pct" %in% colnames(qc_read_alignment)) {
+    cat("\n注：`bisulfite_conversion_lower_bound_pct` 由 Bismark CHG/CHH 非 CG 甲基化率估算，只能作为无 spike-in 时的转换率下界；有 lambda/phiX/M13 等 spike-in 时应优先报告 spike-in 转换率。\n")
+  }
+  if("mbias_report_available" %in% colnames(qc_read_alignment) && any(qc_read_alignment$mbias_report_available != "yes")) {
+    cat("\n注：部分样本未检测到 Bismark M-bias 报告；建议在完整上游重跑时保留 M-bias 图，用于判断是否需要 read 端 ignore/trim。\n")
+  }
+} else {
+  cat("未找到 `qc_read_alignment_summary.csv`，请先运行上游 `wgbs.sh` 的 QC 汇总步骤。\n")
+}
+
+if(file.exists(qc_coverage_upstream_file) || file.exists(qc_coverage_file)) {
+  qc_coverage_source <- if(file.exists(qc_coverage_upstream_file)) qc_coverage_upstream_file else qc_coverage_file
+  qc_coverage <- read_csv(qc_coverage_source, show_col_types = FALSE)
+  write_csv(qc_coverage, qc_coverage_file)
+  qc_coverage_show <- qc_coverage %>%
+    mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+  print(
+    knitr::kable(
+      qc_coverage_show,
+      caption = "CpG Coverage Threshold Summary"
+    )
+  )
+} else {
+  cat("未找到 `cpg_coverage_threshold_summary.csv`，请先运行上游 `wgbs.sh` 的 methylKit/QC 汇总步骤。\n")
+}
+# ==============================================================================
+# 2 原始数据加载与对象准备
+# ==============================================================================
+# 这里只做对象恢复和样本名对齐，不做统计检验。
+# 目标是把 `obj.cpg` 准备成一个后面每一步都能直接使用的干净输入。
+  rdata_full_path <- file.path(config$work_dir, config$input_rdata)
+
+  if(file.exists(rdata_full_path)){
+    message("⏳ 正在加载 RData: ", rdata_full_path)
+    load(rdata_full_path)
+    if(!exists("obj.cpg")) stop("❌ RData 加载成功但未找到 'obj.cpg' 对象")
+  } else {
+    stop("❌ 数据文件未找到: ", rdata_full_path)
+  }
+
+  obj.cpg <- assign_sample_ids_to_obj(obj.cpg, sample_ids)
+# ==============================================================================
+# 3 基础 QC 与样本聚类
+  meth <- methylKit::unite(obj.cpg, destrand = FALSE)
+  meth_common_cpg_summary <- tibble(
+    metric = c("strict_common_cpg_sites", "sample_count"),
+    value = c(nrow(meth), length(sample_ids))
+  )
+  write_csv(meth_common_cpg_summary, file.path(qc_table_dir, "strict_unite_cpg_summary.csv"))
+  if(nrow(meth) < 1000) {
+    message(
+      "   ⚠️ methylKit strict unite 仅保留 ", nrow(meth),
+      " 个所有样本共同 CpG；相关性/PCA 只能解释这部分共同覆盖位点。"
+    )
+  }
+
+  meth_raw_dt <- build_sample_methylation_dt(obj.cpg, sample_ids, config)
+  sample_cpg_summary <- meth_raw_dt %>%
+    group_by(Sample, Group) %>%
+    summarise(
+      n_cpg_records = n(),
+      n_cpg_sites = n_distinct(paste(chr, start, end, sep = ":")),
+      mean_methylation = mean(Methylation, na.rm = TRUE),
+      .groups = "drop"
+    )
+  write_csv(sample_cpg_summary, file.path(qc_table_dir, "sample_cpg_methylation_support.csv"))
+
+  if(requireNamespace("data.table", quietly = TRUE)) {
+    meth_pair_dt <- data.table::as.data.table(meth_raw_dt[, c("chr", "start", "end", "strand", "Sample", "Methylation")])
+    max_corr_sites <- config$qc_corr_max_sites %||% Inf
+    if(is.finite(max_corr_sites) && max_corr_sites > 0) {
+      site_dt <- unique(meth_pair_dt[, .(chr, start, end, strand)])
+      if(nrow(site_dt) > max_corr_sites) {
+        set.seed(config$qc_corr_seed)
+        site_dt <- site_dt[sample.int(nrow(site_dt), max_corr_sites)]
+        data.table::setkey(site_dt, chr, start, end, strand)
+        data.table::setkey(meth_pair_dt, chr, start, end, strand)
+        meth_pair_dt <- meth_pair_dt[site_dt, nomatch = 0]
+        message("   样本两两相关性抽样 ", max_corr_sites, " 个 CpG 位点；完整全量 join 可通过提高 config$qc_corr_max_sites 开启。")
+      }
+    }
+    pairwise_cor <- data.table::rbindlist(lapply(seq_len(length(sample_ids) - 1), function(i) {
+      data.table::rbindlist(lapply((i + 1):length(sample_ids), function(j) {
+        dt_i <- meth_pair_dt[Sample == sample_ids[[i]], .(chr, start, end, strand, Methylation_i = Methylation)]
+        dt_j <- meth_pair_dt[Sample == sample_ids[[j]], .(chr, start, end, strand, Methylation_j = Methylation)]
+        data.table::setkey(dt_i, chr, start, end, strand)
+        data.table::setkey(dt_j, chr, start, end, strand)
+        joined <- merge(dt_i, dt_j, by = c("chr", "start", "end", "strand"), allow.cartesian = FALSE)
+        tibble(
+          Sample1 = sample_ids[[i]],
+          Sample2 = sample_ids[[j]],
+          n_common_cpg = nrow(joined),
+          pearson = if(nrow(joined) >= 3) cor(joined$Methylation_i, joined$Methylation_j, method = "pearson") else NA_real_,
+          spearman = if(nrow(joined) >= 3) cor(joined$Methylation_i, joined$Methylation_j, method = "spearman") else NA_real_,
+          mean_abs_diff = if(nrow(joined) > 0) mean(abs(joined$Methylation_i - joined$Methylation_j), na.rm = TRUE) else NA_real_
+        )
+      }))
+    }))
+
+    pairwise_cor_df <- as_tibble(pairwise_cor)
+    write_csv(pairwise_cor_df, file.path(qc_table_dir, "sample_pairwise_methylation_correlation.csv"))
+
+    pairwise_plot_df <- bind_rows(
+      pairwise_cor_df %>% transmute(Sample1, Sample2, pearson),
+      pairwise_cor_df %>% transmute(Sample1 = Sample2, Sample2 = Sample1, pearson),
+      tibble(Sample1 = sample_ids, Sample2 = sample_ids, pearson = 1)
+    ) %>%
+      mutate(
+        Sample1 = factor(Sample1, levels = sample_ids),
+        Sample2 = factor(Sample2, levels = rev(sample_ids))
+      )
+
+    p_pairwise_cor <- ggplot(pairwise_plot_df, aes(x = Sample1, y = Sample2, fill = pearson)) +
+      geom_tile(color = viz_pal$neutral_light, linewidth = 0.35) +
+      geom_text(aes(label = ifelse(is.na(pearson), "NA", sprintf("%.2f", pearson))), size = 3.2) +
+      scale_fill_wgbs_ryb(limits = c(-1, 1), na.value = viz_pal$neutral_light, name = "Pearson") +
+      coord_fixed() +
+      theme_wgbs_classic(base_size = 12) +
+      theme(axis.title = element_blank(), axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(title = "Pairwise CpG Methylation Correlation")
+
+    ggsave(file.path(qc_plot_dir, "sample_pairwise_methylation_correlation.pdf"), p_pairwise_cor, width = 6, height = 5, device = cairo_pdf)
+  }
+
+  # ------------------------------------------------------------------
+  # 4 甲基化分布与覆盖度
+  # ------------------------------------------------------------------
+  for(i in seq_along(obj.cpg)) {
+    meth_stats_file <- file.path(qc_plot_dir, paste0("sample_methylation_stats_", i, ".pdf"))
+    cov_stats_file  <- file.path(qc_plot_dir, paste0("sample_coverage_stats_", i, ".pdf"))
+
+    cairo_pdf(meth_stats_file, width = 8, height = 6)
+    getMethylationStats(obj.cpg[[i]], plot = TRUE, both.strands = FALSE)
+    dev.off()
+
+    cairo_pdf(cov_stats_file, width = 8, height = 6)
+    getCoverageStats(obj.cpg[[i]], plot = TRUE, both.strands = FALSE)
+    dev.off()
+  }
+
+  # ------------------------------------------------------------------
+  # 5 相关性与 PCA
+  # ------------------------------------------------------------------
+  cairo_pdf(file.path(qc_plot_dir, "sample_correlation.pdf"), width = 8, height = 6)
+  getCorrelation(meth, plot = TRUE)
+  dev.off()
+
+  cairo_pdf(file.path(qc_plot_dir, "sample_clustering.pdf"), width = 8, height = 6)
+  clusterSamples(meth, dist = "correlation", method = "ward", plot = TRUE)
+  dev.off()
+
+  cairo_pdf(file.path(qc_plot_dir, "pca_screeplot.pdf"), width = 8, height = 6)
+  PCASamples(meth, screeplot = TRUE)
+  dev.off()
+
+  cairo_pdf(file.path(qc_plot_dir, "pca_sample_layout.pdf"), width = 8, height = 6)
+  PCASamples(meth, screeplot = FALSE)
+  dev.off()
+
+  # ------------------------------------------------------------------
+  # 6 全局甲基化水平 (Global Methylation Level)
+  # ------------------------------------------------------------------
+  global_meth <- data.frame(
+    Sample = sample_ids,
+    Group = sample_group_factor(sample_ids, config),
+    Methylation = sapply(obj.cpg, function(x) {
+      df <- getData(x)
+      sum(df$numCs) / sum(df$coverage) * 100
+    })
+  )
+
+  global_meth_summary <- global_meth %>%
+    group_by(Group) %>%
+    summarise(
+      N = sum(!is.na(Methylation)),
+      Mean = mean(Methylation, na.rm = TRUE),
+      SD = sd(Methylation, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      SD = ifelse(is.na(SD), 0, SD),
+      SE = ifelse(N > 0, SD / sqrt(N), NA_real_)
+    )
+
+  global_meth_base_values <- c(
+    global_meth$Methylation,
+    global_meth_summary$Mean - global_meth_summary$SE,
+    global_meth_summary$Mean + global_meth_summary$SE
+  )
+  global_meth_axis_initial <- auto_y_axis(global_meth_base_values, padding = 0.2, min_span = 1.5, bounds = c(0, 100))
+  global_meth_label_offset <- diff(global_meth_axis_initial$limits) * 0.03
+  global_meth_summary <- global_meth_summary %>%
+    mutate(LabelY = Mean + SE + global_meth_label_offset)
+  global_meth_axis <- auto_y_axis(
+    c(global_meth_base_values, global_meth_summary$LabelY),
+    padding = 0.2,
+    min_span = 1.5,
+    bounds = c(0, 100)
+  )
+
+  p_global <- ggplot(global_meth_summary, aes(x = Group, y = Mean, fill = Group)) +
+    geom_bar(stat = "identity", width = 0.5, color = viz_pal$neutral_dark) +
+    geom_errorbar(aes(ymin = Mean - SE, ymax = Mean + SE), width = 0.2) +
+    geom_jitter(data = global_meth, aes(x = Group, y = Methylation),
+                width = 0.1, size = viz_style$point_lg, alpha = 0.72) +
+    geom_text(aes(label = sprintf("%.2f", Mean), y = LabelY), vjust = 0, size = 4) +
+    scale_fill_manual(values = viz_pal$group) +
+    scale_y_continuous(breaks = global_meth_axis$breaks) +
+    coord_cartesian(ylim = global_meth_axis$limits) +
+    labs(title = "Global Methylation Level", y = "Methylation Level (%)", x = "") +
+    theme_wgbs_classic(base_size = 14, legend = "none")
+
+  ggsave(file.path(qc_plot_dir, "global_methylation_level.pdf"), p_global, width = 5, height = 6)
+
+  p_global_violin <- ggplot(global_meth, aes(x = Group, y = Methylation, fill = Group)) +
+    geom_violin(width = 0.9, alpha = 0.25, trim = FALSE, color = NA) +
+    geom_boxplot(width = 0.18, outlier.shape = NA, alpha = 0.55, color = viz_pal$neutral_dark) +
+    geom_jitter(width = 0.08, size = viz_style$point_lg, alpha = 0.82) +
+    stat_summary(fun = mean, geom = "point", shape = 23, size = 3.4,
+                 fill = viz_pal$neutral_light, color = viz_pal$neutral_dark) +
+    scale_fill_manual(values = viz_pal$group) +
+    scale_y_continuous(breaks = global_meth_axis$breaks) +
+    coord_cartesian(ylim = global_meth_axis$limits) +
+    theme_wgbs_classic(base_size = 14, legend = "none") +
+    labs(title = "Global Methylation Level", x = "", y = "Methylation Level (%)")
+
+  ggsave(file.path(qc_plot_dir, "global_methylation_level_violin.pdf"), p_global_violin, width = 5.5, height = 6, device = cairo_pdf)
+
+  # ------------------------------------------------------------------
+  # 7 染色体级别平均甲基化热图
+  # ------------------------------------------------------------------
+  chr_meth <- meth_raw_dt %>%
+    mutate(chr_clean = strip_chr_prefix(chr)) %>%
+    filter(chr_clean %in% as.character(1:19) | chr_clean %in% c("X", "Y")) %>%
+    mutate(chr_clean = paste0("chr", chr_clean)) %>%
+    group_by(Sample, Group, chr_clean) %>%
+    summarise(mean_meth = mean(Methylation, na.rm = TRUE), .groups = "drop") %>%
+    mutate(chr_clean = factor(chr_clean, levels = mouse_main_chr_levels(TRUE)))
+
+  if(nrow(chr_meth) > 0) {
+    chr_mat <- chr_meth %>%
+      select(Sample, chr_clean, mean_meth) %>%
+      pivot_wider(names_from = Sample, values_from = mean_meth) %>%
+      column_to_rownames("chr_clean") %>%
+      as.matrix()
+
+    # 按样本分组排序
+    col_order <- sample_ids[sample_ids %in% colnames(chr_mat)]
+    if(length(col_order) > 0) chr_mat <- chr_mat[, col_order, drop = FALSE]
+
+    draw_pheatmap_pdf(
+      mat = chr_mat,
+      out_pdf = file.path(qc_plot_dir, "chromosome_methylation_heatmap.pdf"),
+      width = 6, height = 8,
+      color = viz_pal$heat_meth,
+      title = "Mean Methylation per Chromosome",
+      cluster_rows = FALSE, cluster_cols = FALSE
+    )
+  }
+
+  # ------------------------------------------------------------------
+  # 8 CpG 密度分层甲基化比较 (Island / Shore / Shelf / Open Sea)
+  # ------------------------------------------------------------------
+  cpg_positions <- meth_raw_dt %>%
+    distinct(chr, start, end) %>%
+    mutate(gr_idx = row_number())
+  cpg_gr <- GRanges(
+    seqnames = cpg_positions$chr,
+    ranges = IRanges(start = cpg_positions$start, end = cpg_positions$end)
+  )
+  cgi_resources <- get_cgi_context_resources(config, target_gr = cpg_gr, required = FALSE)
+
+  if(!is.null(cgi_resources) && length(cgi_resources$gr_island) > 0) {
+    cpg_island_gr <- cgi_resources$gr_island
+    shore_gr <- c(cgi_resources$gr_n_shore, cgi_resources$gr_s_shore)
+    shelf_gr <- c(cgi_resources$gr_n_shelf, cgi_resources$gr_s_shelf)
+    # 标记每个 CpG 位点的 CGI 上下文
+    tryCatch({ seqlevelsStyle(cpg_gr) <- seqlevelsStyle(cpg_island_gr)[1] }, error = function(e) {})
+
+    cpg_positions$CGI_context <- "Open_Sea"
+    ov_island <- findOverlaps(cpg_gr, cpg_island_gr, ignore.strand = TRUE)
+    cpg_positions$CGI_context[queryHits(ov_island)] <- "Island"
+    ov_shore <- findOverlaps(cpg_gr, shore_gr, ignore.strand = TRUE)
+    cpg_positions$CGI_context[queryHits(ov_shore)] <- "Shore"
+    ov_shelf <- findOverlaps(cpg_gr, shelf_gr, ignore.strand = TRUE)
+    cpg_positions$CGI_context[queryHits(ov_shelf)] <- "Shelf"
+
+    cgi_meth <- meth_raw_dt %>%
+      left_join(cpg_positions %>% select(chr, start, end, CGI_context), by = c("chr", "start", "end")) %>%
+      filter(!is.na(CGI_context)) %>%
+      mutate(CGI_context = factor(CGI_context, levels = c("Island", "Shore", "Shelf", "Open_Sea")))
+
+    p_cgi_meth <- ggplot(cgi_meth, aes(x = CGI_context, y = Methylation, fill = Group)) +
+      geom_violin(alpha = 0.3, trim = FALSE, position = position_dodge(width = 0.8)) +
+      geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.5, position = position_dodge(width = 0.8)) +
+      scale_fill_manual(values = viz_pal$group) +
+      labs(title = "Methylation by CpG Density Context", x = "", y = "Methylation (%)") +
+      theme_wgbs_bw(base_size = 12)
+
+    ggsave(file.path(qc_plot_dir, "cgi_context_methylation_comparison.pdf"), p_cgi_meth, width = 8, height = 6, device = cairo_pdf)
+
+    cgi_meth_summary <- cgi_meth %>%
+      group_by(Group, CGI_context) %>%
+      summarise(mean_meth = mean(Methylation, na.rm = TRUE), n_cpg = n(), .groups = "drop")
+    write_csv(cgi_meth_summary, file.path(qc_table_dir, "cgi_context_methylation_summary.csv"))
+  }
+
+  # ------------------------------------------------------------------
+  # 9 BS 方向性检查可视化
+  # ------------------------------------------------------------------
+  bs_dir_files <- list.files(file.path(config$work_dir, "01rawdata", "qc_results_GRCm39"),
+                              pattern = "_bs_directionality\\.tsv$", full.names = TRUE)
+  if(length(bs_dir_files) > 0) {
+    bs_dir_df <- bind_rows(lapply(bs_dir_files, function(f) {
+      read_tsv(f, show_col_types = FALSE)
+    }))
+    if(nrow(bs_dir_df) > 0) {
+      direction_cols <- intersect(c("OT%", "OB%", "CTOT%", "CTOB%"), colnames(bs_dir_df))
+      if(length(direction_cols) > 0) {
+        bs_dir_long <- bs_dir_df %>%
+          pivot_longer(cols = all_of(direction_cols),
+                       names_to = "Direction", values_to = "Percentage") %>%
+          mutate(Percentage = as.numeric(Percentage)) %>%
+          filter(!is.na(Percentage))
+      } else if(all(c("sample", "read_pairs") %in% colnames(bs_dir_df))) {
+        label_col <- if("strand_pattern" %in% colnames(bs_dir_df)) "strand_pattern" else if("strand_note" %in% colnames(bs_dir_df)) "strand_note" else NA_character_
+        if(is.na(label_col)) {
+          bs_dir_long <- tibble()
+        } else {
+          bs_dir_long <- bs_dir_df %>%
+            mutate(read_pairs = as.numeric(read_pairs), Direction = as.character(.data[[label_col]])) %>%
+            group_by(sample) %>%
+            mutate(Percentage = ifelse(sum(read_pairs, na.rm = TRUE) > 0, 100 * read_pairs / sum(read_pairs, na.rm = TRUE), NA_real_)) %>%
+            ungroup() %>%
+            filter(!is.na(Percentage), nzchar(Direction))
+        }
+      } else {
+        bs_dir_long <- tibble()
+        message("   ⚠️ BS directionality 文件缺少 OT/OB 百分比列或 strand_pattern/read_pairs 长表列，跳过方向性图。")
+      }
+
+      if(nrow(bs_dir_long) > 0) {
+        bs_dir_palette_base <- c(
+          "OT%" = unname(viz_pal$group[1]), "OB%" = unname(viz_pal$group[2]),
+          "CTOT%" = unname(viz_pal$accent["warm"]), "CTOB%" = unname(viz_pal$accent["purple"])
+        )
+        bs_dir_missing_levels <- setdiff(unique(bs_dir_long$Direction), names(bs_dir_palette_base))
+        bs_dir_palette <- c(
+          bs_dir_palette_base,
+          setNames(
+            rep(c(unname(viz_pal$group), unname(viz_pal$accent["warm"]), unname(viz_pal$accent["purple"]), viz_pal$neutral_dark),
+                length.out = length(bs_dir_missing_levels)),
+            bs_dir_missing_levels
+          )
+        )
+
+        p_bs_dir <- ggplot(bs_dir_long, aes(x = sample, y = Percentage, fill = Direction)) +
+          geom_col(position = "stack") +
+          scale_fill_manual(values = bs_dir_palette) +
+          labs(title = "Bisulfite Conversion Directionality", x = "", y = "Percentage (%)") +
+          theme_wgbs_bw(base_size = 12) +
+          theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+        ggsave(file.path(qc_plot_dir, "bisulfite_directionality.pdf"), p_bs_dir, width = 7, height = 5, device = cairo_pdf)
+      }
+
+      # 检测异常方向性
+      if("CTOT%" %in% colnames(bs_dir_df) || "CTOB%" %in% colnames(bs_dir_df)) {
+        ctot_max <- if("CTOT%" %in% colnames(bs_dir_df)) max(as.numeric(bs_dir_df$`CTOT%`), na.rm = TRUE) else 0
+        ctob_max <- if("CTOB%" %in% colnames(bs_dir_df)) max(as.numeric(bs_dir_df$`CTOB%`), na.rm = TRUE) else 0
+        ctot_max <- if(is.finite(ctot_max)) ctot_max else 0
+        ctob_max <- if(is.finite(ctob_max)) ctob_max else 0
+        if(ctot_max > 5 || ctob_max > 5) {
+          message("   ⚠️ 检测到 CTOT/CTOB 比例异常 (>5%)，可能提示文库制备问题或非 directional protocol")
+        }
+      } else if(exists("bs_dir_long") && nrow(bs_dir_long) > 0 && "strand_note" %in% colnames(bs_dir_df)) {
+        non_directional_max <- bs_dir_df %>%
+          mutate(read_pairs = as.numeric(read_pairs), is_complementary = grepl("complementary", strand_note, ignore.case = TRUE)) %>%
+          group_by(sample) %>%
+          summarise(
+            complementary_pct = ifelse(sum(read_pairs, na.rm = TRUE) > 0,
+                                      100 * sum(read_pairs[is_complementary], na.rm = TRUE) / sum(read_pairs, na.rm = TRUE),
+                                      NA_real_),
+            .groups = "drop"
+          ) %>%
+          pull(complementary_pct) %>%
+          max(na.rm = TRUE)
+        non_directional_max <- if(is.finite(non_directional_max)) non_directional_max else 0
+        if(non_directional_max > 5) {
+          message("   ⚠️ 检测到 complementary strand 比例异常 (>5%)，可能提示文库制备问题或非 directional protocol")
+        }
+      }
+    }
+  }
+
+  # ------------------------------------------------------------------
+  # 10 Insert Size 分布可视化
+  # ------------------------------------------------------------------
+  insert_size_files <- list.files(file.path(config$work_dir, "01rawdata", "qc_results_GRCm39"),
+                                    pattern = "_insert_size\\.tsv$", full.names = TRUE)
+  if(length(insert_size_files) > 0) {
+    insert_df <- bind_rows(lapply(insert_size_files, function(f) {
+      sample_name <- sub("_insert_size\\.tsv$", "", basename(f))
+      read_tsv(f, col_names = c("insert_size", "count"), show_col_types = FALSE) %>%
+        mutate(Sample = sample_name) %>%
+        left_join(tibble(Sample = sample_ids, Group = as.character(sample_group_factor(sample_ids, config))),
+                  by = "Sample")
+    }))
+    if(nrow(insert_df) > 0) {
+      insert_df <- insert_df %>%
+        filter(!is.na(insert_size), is.finite(count))
+
+      p_insert <- ggplot(insert_df, aes(x = insert_size, y = count, color = Group)) +
+        geom_line(alpha = 0.8) +
+        facet_wrap(~Sample, scales = "free_y") +
+        scale_color_manual(values = viz_pal$group) +
+        labs(title = "Insert Size Distribution", x = "Insert Size (bp)", y = "Count") +
+        theme_wgbs_bw(base_size = 11)
+
+      ggsave(file.path(qc_plot_dir, "insert_size_distribution.pdf"), p_insert, width = 10, height = 8, device = cairo_pdf)
+    }
+  }
+
+  # ------------------------------------------------------------------
+  # 11 Duplication Rate 可视化 (来自上游 QC 汇总表)
+  # ------------------------------------------------------------------
+  if(exists("qc_read_alignment") && "bismark_duplicate_rate_pct" %in% colnames(qc_read_alignment)) {
+    dup_df <- qc_read_alignment %>%
+      select(sample, bismark_duplicate_rate_pct) %>%
+      left_join(tibble(sample = sample_ids, Group = as.character(sample_group_factor(sample_ids, config))),
+                by = "sample") %>%
+      filter(!is.na(bismark_duplicate_rate_pct))
+
+    if(nrow(dup_df) > 0) {
+      p_dup <- ggplot(dup_df, aes(x = sample, y = bismark_duplicate_rate_pct, fill = Group)) +
+        geom_col(width = 0.6) +
+        geom_text(aes(label = sprintf("%.1f%%", bismark_duplicate_rate_pct)), vjust = -0.3, size = 3.5) +
+        scale_fill_manual(values = viz_pal$group) +
+        labs(title = "Duplication Rate", x = "", y = "Duplicate Rate (%)") +
+        theme_wgbs_bw(base_size = 12) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+      ggsave(file.path(qc_plot_dir, "duplication_rate.pdf"), p_dup, width = 6, height = 5, device = cairo_pdf)
+    }
+  }
+
+  # ------------------------------------------------------------------
+  # 12 BS 转换率 (非 CG 甲基化) 可视化
+  # ------------------------------------------------------------------
+  chg_chh_files <- list.files(file.path(config$work_dir, "04methykit"),
+                                pattern = "_CHG\\.methylKit$", full.names = TRUE)
+  if(length(chg_chh_files) > 0 && exists("qc_read_alignment")) {
+    if(all(c("chg_methylation_pct_bismark", "chh_methylation_pct_bismark") %in% colnames(qc_read_alignment))) {
+      bs_conv_df <- qc_read_alignment %>%
+        select(sample, chg_methylation_pct_bismark, chh_methylation_pct_bismark, bisulfite_conversion_lower_bound_pct) %>%
+        pivot_longer(cols = c(chg_methylation_pct_bismark, chh_methylation_pct_bismark),
+                     names_to = "Context", values_to = "NonCG_Meth_pct") %>%
+        mutate(
+          Context = ifelse(Context == "chg_methylation_pct_bismark", "CHG", "CHH"),
+          BS_Conversion_pct = 100 - NonCG_Meth_pct
+        ) %>%
+        left_join(tibble(sample = sample_ids, Group = as.character(sample_group_factor(sample_ids, config))),
+                  by = "sample")
+
+      p_bs_conv <- ggplot(bs_conv_df, aes(x = sample, y = BS_Conversion_pct, fill = Group)) +
+        geom_col(width = 0.6) +
+        geom_hline(yintercept = 99, linetype = "dashed", color = viz_pal$neutral_dark) +
+        geom_text(aes(label = sprintf("%.2f%%", BS_Conversion_pct)), vjust = -0.3, size = 3.2) +
+        scale_fill_manual(values = viz_pal$group) +
+        labs(title = "Bisulfite Conversion Rate (Lower Bound from non-CG)", x = "", y = "BS Conversion Rate (%)") +
+        theme_wgbs_bw(base_size = 12) +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+      ggsave(file.path(qc_plot_dir, "bisulfite_conversion_rate.pdf"), p_bs_conv, width = 7, height = 5, device = cairo_pdf)
+    }
+  }
+```

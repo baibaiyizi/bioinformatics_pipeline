@@ -1,0 +1,445 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 3: DMR Calling 与注释
+# ==============================================================================
+dmr_table_dir_1 <- "result/3_dmr/tables/1"
+dmr_table_dir_2 <- "result/3_dmr/tables/2"
+dmr_plot_dir <- "result/3_dmr/plots/1"
+ensure_step_dirs(dmr_table_dir_1, dmr_table_dir_2, dmr_plot_dir)
+
+# ==============================================================================
+# 1 差异甲基化分析 (DML/DMR Calling)
+# ==============================================================================
+# 这是 stage1 最核心、也最吃时间/内存的部分。
+# 先做单 CpG 位点检验，再按设定阈值把相邻显著位点聚合成 DMR。
+
+ensure_obj_cpg_loaded()
+
+if(!exists("sample_ids") || length(sample_ids) == 0) {
+  sample_ids <- vapply(obj.cpg, function(x) x@sample.id, character(1))
+}
+
+message("⏳ 开始 DSS 差异分析...")
+message(
+  "   DMR calling 阈值: p.threshold < ", config$dmr_p_threshold,
+  ", pct.sig >= ", scales::percent(config$dmr_pct_sig, accuracy = 1),
+  ", minlen >= ", config$dmr_minlen, " bp",
+  ", minCG >= ", config$dmr_minCG,
+  ", delta >= ", config$dmr_delta
+)
+
+# 构建 BSseq 对象
+# DSS 使用的是 BSseq 格式，这里把 methylKit 的 coverage / methylated count 整理成 DSS 所需输入。
+dss_input_list <- lapply(obj.cpg, function(x) {
+  df <- getData(x)
+  data.frame(chr = df$chr, pos = df$start, N = df$coverage, X = df$numCs)
+})
+BSobj <- makeBSseqData(dss_input_list, sample_ids)
+
+# DML 检验
+# 这一层得到的是单个 CpG 位点的差异统计，后面的 callDMR 会基于这些位点结果做区域聚合。
+dmlTest <- DMLtest(BSobj, 
+                   group1 = sample_ids[config$group1_idx], 
+                   group2 = sample_ids[config$group2_idx], 
+                   smoothing = config$dss_smoothing,
+                   smoothing.span = config$dss_smoothing_span,
+                   ncores = config$dss_ncores)
+
+# 统一方向为 group2 - group1，避免后续 Hyper/Hypo 与四象限解释混乱
+dml_df <- as.data.frame(dmlTest)
+dml_pval_col <- first_existing_col(dml_df, c("pvals", "pvalue", "pval"))
+if(all(c("mu1", "mu2") %in% colnames(dml_df))) {
+  dml_df <- dml_df %>%
+    mutate(
+      meanMethy_group1 = mu1,
+      meanMethy_group2 = mu2,
+      group1_label = config$group1_name,
+      group2_label = config$group2_name,
+      diff.Methy = meanMethy_group2 - meanMethy_group1,
+      diffMethy = diff.Methy
+    )
+} else if("diff" %in% colnames(dml_df)) {
+  dml_df <- dml_df %>% mutate(
+    meanMethy_group1 = NA_real_,
+    meanMethy_group2 = NA_real_,
+    group1_label = config$group1_name,
+    group2_label = config$group2_name,
+    diff.Methy = -diff,
+    diffMethy = diff.Methy
+  )
+} else {
+  stop("❌ DMLtest 结果中未找到可用于方向统一的甲基化差异列")
+}
+dml_df <- dml_df %>%
+  mutate(
+    DML_type = ifelse(diff.Methy > 0, "Hyper", "Hypo"),
+    negLog10P = if(!is.na(dml_pval_col)) safe_neglog10(.data[[dml_pval_col]]) else NA_real_
+  )
+
+# 全量 DML 位点表很大，不再默认写成 CSV；保留压缩 RDS 供后续追溯。
+# 当前显著筛选口径仍沿用 config$dmr_p_threshold；严格解读时建议同步查看 FDR/qvalue。
+dml_legacy_csv <- file.path(dmr_table_dir_1, "dml_results.csv")
+dml_legacy_target <- file.path(dmr_table_dir_1, "dml_results_legacy_full_csv_not_regenerated.csv")
+if(file.exists(dml_legacy_csv) && !file.exists(dml_legacy_target)) {
+  file.rename(dml_legacy_csv, dml_legacy_target)
+}
+saveRDS(dml_df, file.path(dmr_table_dir_1, "dml_results.rds"), compress = "gzip")
+if(!is.na(dml_pval_col)) {
+  dml_sig_df <- dml_df %>% filter(.data[[dml_pval_col]] < config$dmr_p_threshold)
+  write_csv(dml_sig_df, file.path(dmr_table_dir_1, "dml_results_p_lt_0_05.csv"))
+  message("✅ DML 全量 RDS 已保存；pvalue < ", config$dmr_p_threshold, " 位点数: ", nrow(dml_sig_df))
+} else {
+  message("✅ DML 全量 RDS 已保存；未找到 pvalue 列，跳过显著 DML CSV")
+}
+
+# DMR 调用
+# 所有 DMR calling 阈值都从顶部 config 读取，便于以后统一改标准而不漏改正文代码。
+dmrs <- callDMR(dmlTest, 
+                delta = config$dmr_delta,
+                p.threshold = config$dmr_p_threshold,
+                minlen = config$dmr_minlen,
+                minCG = config$dmr_minCG,
+                dis.merge = config$dmr_dis_merge,
+                pct.sig = config$dmr_pct_sig        
+)
+
+# 整理 DMR 结果表
+# 这里把 DSS 原始输出整理成 downstream 统一字段，避免后续脚本再做方向和列名判断。
+dmrs <- dmrs %>%
+  mutate(
+    DMR_id = paste0("DMR_", row_number()),
+    meanMethy_group1 = meanMethy1,
+    meanMethy_group2 = meanMethy2,
+    group1_label = config$group1_name,
+    group2_label = config$group2_name,
+    diff.Methy = meanMethy_group2 - meanMethy_group1,
+    diffMethy = diff.Methy,
+    DMR_type = ifelse(diff.Methy > 0, "Hyper", "Hypo"), 
+    chr = as.character(chr) 
+  ) %>%
+  arrange(chr, start)
+
+write_csv(dmrs, file.path(dmr_table_dir_1, "dmr_raw.csv"))
+message("✅ 鉴定到 DMR 数量: ", nrow(dmrs))
+
+# DMR calling 阈值敏感性
+# DSS 官方文档也强调 DMR 阈值没有唯一自然标准；这里保留主阈值结果不变，
+# 额外扫描 delta / pct.sig / minCG，帮助判断核心结论是否依赖单一阈值组合。
+make_dmr_gr_for_overlap <- function(dmr_df) {
+  if(is.null(dmr_df) || nrow(dmr_df) == 0) return(GRanges())
+  GRanges(
+    seqnames = as.character(dmr_df$chr),
+    ranges = IRanges(start = dmr_df$start, end = dmr_df$end)
+  )
+}
+
+primary_dmr_gr_for_sensitivity <- make_dmr_gr_for_overlap(dmrs)
+dmr_sensitivity_grid <- tidyr::expand_grid(
+  delta = config$dmr_sensitivity_delta,
+  pct_sig = config$dmr_sensitivity_pct_sig,
+  minCG = config$dmr_sensitivity_minCG
+) %>%
+  mutate(
+    p_threshold = config$dmr_p_threshold,
+    minlen = config$dmr_minlen,
+    dis_merge = config$dmr_dis_merge
+  )
+
+dmr_sensitivity_summary <- bind_rows(lapply(seq_len(nrow(dmr_sensitivity_grid)), function(i) {
+  params <- dmr_sensitivity_grid[i, ]
+  sens_dmrs <- tryCatch(
+    callDMR(
+      dmlTest,
+      delta = params$delta,
+      p.threshold = params$p_threshold,
+      minlen = params$minlen,
+      minCG = params$minCG,
+      dis.merge = params$dis_merge,
+      pct.sig = params$pct_sig
+    ),
+    error = function(e) {
+      attr(params, "error_message") <- e$message
+      NULL
+    }
+  )
+
+  if(is.null(sens_dmrs)) {
+    return(tibble(
+      delta = params$delta,
+      pct_sig = params$pct_sig,
+      minCG = params$minCG,
+      p_threshold = params$p_threshold,
+      minlen = params$minlen,
+      n_dmr = NA_integer_,
+      n_hyper = NA_integer_,
+      n_hypo = NA_integer_,
+      median_length = NA_real_,
+      median_abs_diff = NA_real_,
+      primary_overlap_fraction = NA_real_,
+      sensitivity_overlap_fraction = NA_real_,
+      status = "error"
+    ))
+  }
+
+  sens_df <- as_tibble(sens_dmrs)
+  if(nrow(sens_df) == 0) {
+    return(tibble(
+      delta = params$delta,
+      pct_sig = params$pct_sig,
+      minCG = params$minCG,
+      p_threshold = params$p_threshold,
+      minlen = params$minlen,
+      n_dmr = 0L,
+      n_hyper = 0L,
+      n_hypo = 0L,
+      median_length = NA_real_,
+      median_abs_diff = NA_real_,
+      primary_overlap_fraction = 0,
+      sensitivity_overlap_fraction = 0,
+      status = "ok"
+    ))
+  }
+
+  sens_df <- sens_df %>%
+    mutate(
+      diff.Methy = meanMethy2 - meanMethy1,
+      DMR_type = ifelse(diff.Methy > 0, "Hyper", "Hypo")
+    )
+  sens_gr <- make_dmr_gr_for_overlap(sens_df)
+  ov <- findOverlaps(primary_dmr_gr_for_sensitivity, sens_gr, ignore.strand = TRUE)
+  primary_hits <- length(unique(queryHits(ov)))
+  sensitivity_hits <- length(unique(subjectHits(ov)))
+
+  tibble(
+    delta = params$delta,
+    pct_sig = params$pct_sig,
+    minCG = params$minCG,
+    p_threshold = params$p_threshold,
+    minlen = params$minlen,
+    n_dmr = nrow(sens_df),
+    n_hyper = sum(sens_df$DMR_type == "Hyper", na.rm = TRUE),
+    n_hypo = sum(sens_df$DMR_type == "Hypo", na.rm = TRUE),
+    median_length = median(sens_df$length, na.rm = TRUE),
+    median_abs_diff = median(abs(sens_df$diff.Methy), na.rm = TRUE),
+    primary_overlap_fraction = if(length(primary_dmr_gr_for_sensitivity) > 0) primary_hits / length(primary_dmr_gr_for_sensitivity) else NA_real_,
+    sensitivity_overlap_fraction = if(length(sens_gr) > 0) sensitivity_hits / length(sens_gr) else NA_real_,
+    status = "ok"
+  )
+}))
+
+write_csv(dmr_sensitivity_summary, file.path(dmr_table_dir_1, "dmr_threshold_sensitivity_summary.csv"))
+
+# dmrseq region-level 交叉验证
+# 默认启用以提供 DMR 结果的统计稳健性验证。
+# 若需跳过（例如节省运行时间），设置 WGBS_SKIP_DMRSEQ=1
+dmrseq_status_file <- file.path(dmr_table_dir_1, "dmrseq_crosscheck_status.csv")
+if(isTRUE(config$run_dmrseq_crosscheck)) {
+  if(requireNamespace("dmrseq", quietly = TRUE)) {
+    dmrseq_status <- tryCatch({
+      BSobj_dmrseq <- BSobj
+      bsseq::pData(BSobj_dmrseq)$group <- factor(
+        ifelse(sample_ids %in% sample_ids[config$group1_idx], config$group1_name, config$group2_name),
+        levels = c(config$group1_name, config$group2_name)
+      )
+      dmrseq_res <- dmrseq::dmrseq(
+        bs = BSobj_dmrseq,
+        testCovariate = "group",
+        cutoff = config$dmr_delta,
+        maxPerms = config$dmrseq_max_permutations
+      )
+      dmrseq_df <- as_tibble(as.data.frame(dmrseq_res))
+      write_csv(dmrseq_df, file.path(dmr_table_dir_1, "dmrseq_crosscheck_regions.csv"))
+      tibble(step = "dmrseq", status = "ok", message = paste("regions:", nrow(dmrseq_df)))
+    }, error = function(e) {
+      tibble(step = "dmrseq", status = "error", message = e$message)
+    })
+    write_csv(dmrseq_status, dmrseq_status_file)
+  } else {
+    write_csv(tibble(step = "dmrseq", status = "skipped", message = "dmrseq package is not installed"), dmrseq_status_file)
+  }
+} else {
+  write_csv(tibble(step = "dmrseq", status = "skipped", message = "unset WGBS_SKIP_DMRSEQ or set it to a value other than 1 to enable"), dmrseq_status_file)
+}
+
+# DML 位点层图表已移除，只保留结果表供后续追溯与补充分析使用。
+
+```
+
+```{r}
+# ==============================================================================
+# 2 DMR 注释与基因映射
+# ==============================================================================
+message("⏳ 开始 DMR 注释...")
+
+# 准备主染色体版 TxDb
+# 主染色体版 TxDb 会被后面的 annotatePeak、browser 图和 gene model 反复使用。
+txdb <- load_main_chr_txdb(config$gtf_file)
+txdb_has_chr <- any(grepl("^chr", seqlevels(txdb)))
+
+dmr_n_before_main_chr <- nrow(dmrs)
+dmrs$chr <- standardize_chr_style(dmrs$chr, target_has_chr = txdb_has_chr)
+dmrs <- filter_df_to_main_chr(dmrs, chr_col = "chr")
+message("✅ 主染色体 DMR 数量（用于注释与 downstream）: ", nrow(dmrs), " / ", dmr_n_before_main_chr)
+
+# 转换为 GRanges 并执行注释
+# 这里把表格型 DMR 转成 GRanges，并按 promoter/exon/intron/intergenic 等层级做标准注释。
+dmr_gr <- GRanges(
+  seqnames = dmrs$chr,
+  ranges = IRanges(start = dmrs$start, end = dmrs$end),
+  DMR_id = dmrs$DMR_id,
+  diffMethy = dmrs$diff.Methy,
+  meanMethy_group1 = dmrs$meanMethy_group1,
+  meanMethy_group2 = dmrs$meanMethy_group2,
+  group1_label = dmrs$group1_label,
+  group2_label = dmrs$group2_label,
+  DMR_type = dmrs$DMR_type
+)
+dmr_gr <- filter_gr_to_main_chr(dmr_gr)
+
+# DMR 每样本覆盖支持度
+# 这张表用于检查每个 DMR 是否由两组样本都有足够 CpG/coverage 支撑，
+# 也方便后续把低覆盖敏感性分析与主 DMR 结果做交叉核对。
+dmr_support_status_file <- file.path(dmr_table_dir_2, "dmr_region_support_status.csv")
+dmr_region_meth <- tryCatch({
+  ensure_obj_cpg_loaded()
+  build_region_sample_methylation(
+    obj.cpg,
+    dmr_gr,
+    sample_ids_arg = sample_ids,
+    config_arg = config,
+    region_ids = mcols(dmr_gr)$DMR_id
+  )
+}, error = function(e) {
+  write_csv(tibble(step = "dmr_region_support", status = "error", message = e$message), dmr_support_status_file)
+  NULL
+})
+
+if(!is.null(dmr_region_meth)) {
+  write_csv(dmr_region_meth$support, file.path(dmr_table_dir_2, "dmr_region_sample_support.csv"))
+  dmr_support_summary <- dmr_region_meth$support %>%
+    group_by(RegionID) %>%
+    summarise(
+      n_samples_supported = sum(Coverage > 0, na.rm = TRUE),
+      n_groups_supported = n_distinct(Group[Coverage > 0]),
+      min_sample_coverage = min(Coverage, na.rm = TRUE),
+      max_sample_coverage = max(Coverage, na.rm = TRUE),
+      min_sample_cpg_sites = min(n_cpg_sites, na.rm = TRUE),
+      max_sample_cpg_sites = max(n_cpg_sites, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    rename(DMR_id = RegionID)
+  write_csv(dmr_support_summary, file.path(dmr_table_dir_2, "dmr_region_support_summary.csv"))
+  write_csv(tibble(step = "dmr_region_support", status = "ok", message = paste(nrow(dmr_support_summary), "DMRs summarized")), dmr_support_status_file)
+}
+
+# 使用 org.Mm.eg.db 添加 Gene Symbol
+peak_anno <- annotatePeak(dmr_gr, TxDb = txdb, tssRegion = c(-config$promoter_upstream, config$promoter_downstream),
+                          genomicAnnotationPriority = c("Promoter", "5UTR", "3UTR", "Exon", "Intron","Downstream", "Intergenic"), 
+                          annoDb = "org.Mm.eg.db", 
+                          level = "transcript", verbose = FALSE)
+
+# 结果清洗与保存
+# geneId 在这里先去掉版本号，后面和 RNA-seq / KEGG / GO 连接时会更稳。
+dmr_anno_df <- as.data.frame(peak_anno)
+if(!("DMR_id" %in% colnames(dmr_anno_df))) {
+  dmr_anno_df$DMR_id <- dmrs$DMR_id
+}
+
+# 清洗 Gene ID (去除版本号)
+if("geneId" %in% colnames(dmr_anno_df)) {
+  dmr_anno_df$gene_id_clean <- str_replace(dmr_anno_df$geneId, "\\..*$", "")
+}
+dmr_anno_df$annotation_simple <- normalize_feature_label(dmr_anno_df$annotation)
+
+write_csv(dmr_anno_df, file.path(dmr_table_dir_2, "dmr_annotated.csv"))
+
+```
+
+```{r}
+# ==============================================================================
+# 3 DML 火山图与 DMR 长度-效应关系图
+# ==============================================================================
+# 补充关键可视化：DML 火山图是论文标准展示；DMR 长度 vs 甲基化差异帮助判断效应尺度。
+message("⏳ 绘制 DML 火山图与 DMR 长度-效应关系图...")
+
+# DML 火山图
+if(exists("dml_df") && nrow(dml_df) > 0 && !is.na(dml_pval_col)) {
+  dml_volcano_df <- dml_df %>%
+    mutate(
+      sig_type = case_when(
+        .data[[dml_pval_col]] < config$dmr_p_threshold & diff.Methy > config$dmr_delta ~ "Hyper",
+        .data[[dml_pval_col]] < config$dmr_p_threshold & diff.Methy < -config$dmr_delta ~ "Hypo",
+        .data[[dml_pval_col]] < config$dmr_p_threshold ~ "Sig (small Δ)",
+        TRUE ~ "NS"
+      )
+    ) %>%
+    filter(is.finite(diff.Methy), is.finite(.data[[dml_pval_col]]), .data[[dml_pval_col]] > 0)
+
+  # 采样以提高绘图效率 (太多点时)
+  if(nrow(dml_volcano_df) > 500000) {
+    set.seed(42)
+    dml_volcano_df <- dml_volcano_df %>%
+      group_by(sig_type) %>%
+      group_modify(function(.x, .y) {
+        max_n <- if(identical(as.character(.y$sig_type[[1]]), "NS")) 200000L else 300000L
+        dplyr::slice_sample(.x, n = min(nrow(.x), max_n))
+      }) %>%
+      ungroup()
+  }
+
+  p_dml_volcano <- ggplot(dml_volcano_df, aes(x = diff.Methy, y = -log10(.data[[dml_pval_col]]), color = sig_type)) +
+    geom_point(alpha = 0.4, size = viz_style$point_sm) +
+    scale_color_manual(values = c(
+      "Hyper" = unname(viz_pal$dmr["Hyper"]),
+      "Hypo" = unname(viz_pal$dmr["Hypo"]),
+      "Sig (small Δ)" = unname(viz_pal$accent["purple"]),
+      "NS" = viz_pal$neutral_mid
+    )) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.7)) +
+    geom_vline(xintercept = c(-config$dmr_delta, config$dmr_delta), linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.7)) +
+    labs(
+      title = "DML Volcano Plot",
+      x = group_diff_axis_label,
+      y = "-log10(p-value)",
+      color = ""
+    ) +
+    theme_wgbs_bw(base_size = 13)
+
+  ggsave(file.path(dmr_plot_dir, "dml_volcano.pdf"), p_dml_volcano, width = 8, height = 6, device = cairo_pdf)
+}
+
+# DMR 长度 vs 甲基化差异绝对值
+if(exists("dmr_anno_df") && nrow(dmr_anno_df) > 0) {
+  dmr_len_df <- dmr_anno_df %>%
+    filter(is.finite(diffMethy)) %>%
+    mutate(
+      dmr_length = end - start + 1,
+      abs_diff = abs(diffMethy)
+    )
+
+  p_dmr_length_effect <- ggplot(dmr_len_df, aes(x = dmr_length, y = abs_diff, color = DMR_type)) +
+    geom_point(alpha = 0.55, size = viz_style$point_md) +
+    scale_x_log10(labels = scales::comma) +
+    scale_color_manual(values = viz_pal$dmr) +
+    geom_smooth(method = "loess", se = FALSE, linewidth = 0.8, alpha = 0.6) +
+    labs(
+      title = "DMR Length vs Effect Size",
+      x = "DMR Length (bp, log10)",
+      y = "|ΔMeth|",
+      color = ""
+    ) +
+    theme_wgbs_bw(base_size = 13)
+
+  ggsave(file.path(dmr_plot_dir, "dmr_length_vs_effect.pdf"), p_dmr_length_effect, width = 8, height = 6, device = cairo_pdf)
+
+  # DMR 长度分布直方图
+  p_dmr_length_hist <- ggplot(dmr_len_df, aes(x = dmr_length, fill = DMR_type)) +
+    geom_histogram(alpha = 0.65, position = "identity", bins = 50) +
+    scale_x_log10(labels = scales::comma) +
+    scale_fill_manual(values = viz_pal$dmr) +
+    labs(title = "DMR Length Distribution", x = "DMR Length (bp, log10)", y = "Count", fill = "") +
+    theme_wgbs_bw(base_size = 13)
+
+  ggsave(file.path(dmr_plot_dir, "dmr_length_distribution.pdf"), p_dmr_length_hist, width = 8, height = 5, device = cairo_pdf)
+}
+```

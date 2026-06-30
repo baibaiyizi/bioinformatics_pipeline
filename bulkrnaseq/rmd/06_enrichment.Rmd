@@ -1,0 +1,408 @@
+# Step 6: 通路 ORA（KEGG / Reactome）
+
+## 6.1 富集对象初始化（供 Step 6-8 共用）
+
+```{r}
+ensure_module_result_layout("06_enrichment")
+
+de_result <- restore_main_de_result(required = TRUE)
+sig_de <- de_result %>% filter(direction != "ns")
+
+rank_file <- file.path(result_05_dir, "5_9_gene_rank_for_GSEA.rnk")
+if (file.exists(rank_file)) {
+  rank_tbl <- read.table(rank_file, sep = "\t", stringsAsFactors = FALSE, col.names = c("ENTREZID", "rank_score"))
+} else {
+  rank_tbl <- de_result %>%
+    filter(!is.na(ENTREZID), !is.na(rank_score)) %>%
+    group_by(ENTREZID) %>%
+    slice_max(order_by = abs(rank_score), n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    arrange(desc(rank_score))
+}
+
+go_bp <- NULL
+go_mf <- NULL
+go_cc <- NULL
+go_all <- NULL
+kegg_ora <- NULL
+reactome_ora <- NULL
+gsea_go <- NULL
+gsea_kegg <- NULL
+gsea_reactome <- NULL
+gsea_go_df <- data.frame()
+gsea_hallmark_df <- data.frame()
+gsea_reactome_df <- data.frame()
+gsea_msigdb_c2_df <- data.frame()
+gsea_msigdb_c5_df <- data.frame()
+go_ora_sets <- list(
+  all = list(BP = NULL, MF = NULL, CC = NULL, ALL = NULL),
+  up = list(BP = NULL, MF = NULL, CC = NULL, ALL = NULL),
+  down = list(BP = NULL, MF = NULL, CC = NULL, ALL = NULL)
+)
+kegg_ora_sets <- list(all = NULL, up = NULL, down = NULL)
+reactome_ora_sets <- list(all = NULL, up = NULL, down = NULL)
+go_directional_df <- data.frame()
+kegg_directional_df <- data.frame()
+reactome_directional_df <- data.frame()
+leading_edge_go <- data.frame()
+leading_edge_kegg <- data.frame()
+leading_edge_hallmark <- data.frame()
+leading_edge_reactome <- data.frame()
+leading_edge_msigdb_c2 <- data.frame()
+leading_edge_msigdb_c5 <- data.frame()
+
+sig_entrez_sets <- make_directional_gene_sets(sig_de, "ENTREZID")
+sig_entrez <- sig_entrez_sets$all
+geneList_symbol_fc <- build_gene_foldchange_symbol(de_result)
+
+enrichment_universe_tbl <- de_result %>%
+  filter(!is.na(ENTREZID), ENTREZID != "")
+if ("baseMean" %in% colnames(enrichment_universe_tbl)) {
+  enrichment_universe_tbl <- enrichment_universe_tbl %>%
+    mutate(baseMean_for_universe = suppressWarnings(as.numeric(baseMean))) %>%
+    filter(is.finite(baseMean_for_universe), baseMean_for_universe > 0)
+}
+enrichment_universe_entrez <- unique(as.character(enrichment_universe_tbl$ENTREZID))
+if (length(enrichment_universe_entrez) < 10) {
+  enrichment_universe_entrez <- de_result %>%
+    filter(!is.na(ENTREZID), ENTREZID != "") %>%
+    pull(ENTREZID) %>%
+    as.character() %>%
+    unique()
+}
+cat("[Step6] ORA background universe ENTREZID n=", length(enrichment_universe_entrez), "\n", sep = "")
+
+for (one_direction in names(sig_entrez_sets)) {
+  one_ids <- sig_entrez_sets[[one_direction]]
+  if (length(one_ids) < 10) {
+    cat("[Step5] 跳过", one_direction, "方向 ORA：有效 ENTREZID 少于 10 个\n")
+    next
+  }
+  cat("[Step5] 开始", one_direction, "方向 GO/KEGG/Reactome ORA，gene_n=", length(one_ids), "\n")
+  go_ora_sets[[one_direction]]$BP <- run_with_guard(
+    label = paste("[Step5] GO ORA BP", one_direction),
+    must_succeed = TRUE,
+    fn = function() enrichGO(one_ids, OrgDb = annotation_orgdb, keyType = "ENTREZID", ont = "BP", universe = enrichment_universe_entrez, pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
+  )
+  go_ora_sets[[one_direction]]$MF <- run_with_guard(
+    label = paste("[Step5] GO ORA MF", one_direction),
+    must_succeed = TRUE,
+    fn = function() enrichGO(one_ids, OrgDb = annotation_orgdb, keyType = "ENTREZID", ont = "MF", universe = enrichment_universe_entrez, pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
+  )
+  go_ora_sets[[one_direction]]$CC <- run_with_guard(
+    label = paste("[Step5] GO ORA CC", one_direction),
+    must_succeed = TRUE,
+    fn = function() enrichGO(one_ids, OrgDb = annotation_orgdb, keyType = "ENTREZID", ont = "CC", universe = enrichment_universe_entrez, pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
+  )
+  go_ora_sets[[one_direction]]$ALL <- run_with_guard(
+    label = paste("[Step5] GO ORA ALL", one_direction),
+    must_succeed = TRUE,
+    fn = function() enrichGO(one_ids, OrgDb = annotation_orgdb, keyType = "ENTREZID", ont = "ALL", universe = enrichment_universe_entrez, pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
+  )
+  for (one_ont in names(go_ora_sets[[one_direction]])) {
+    # 保留当前项目 nominal pvalue < 0.05 的富集筛选口径；正式报告建议同时查看 p.adjust/qvalue。
+    go_ora_sets[[one_direction]][[one_ont]] <- filter_result_by_pvalue(go_ora_sets[[one_direction]][[one_ont]], threshold = 0.05)
+  }
+
+  kegg_ora_sets[[one_direction]] <- run_clusterprofiler_with_retry(
+    label = paste("KEGG ORA", one_direction),
+    fn = function() enrichKEGG(gene = one_ids, universe = enrichment_universe_entrez, organism = kegg_organism_code, pvalueCutoff = 1, qvalueCutoff = 1),
+    attempts = 3,
+    sleep_seconds = 5,
+    must_succeed = FALSE,
+    timeout_seconds = 120
+  )
+  kegg_ora_sets[[one_direction]] <- filter_result_by_pvalue(kegg_ora_sets[[one_direction]], threshold = 0.05)
+  if (nrow(make_result_df(kegg_ora_sets[[one_direction]])) > 0) {
+    kegg_ora_sets[[one_direction]] <- tryCatch(setReadable(kegg_ora_sets[[one_direction]], OrgDb = annotation_orgdb, keyType = "ENTREZID"), error = function(e) kegg_ora_sets[[one_direction]])
+  } else {
+    cat("[Step5] KEGG ORA", one_direction, "无可用结果，继续后续分析。\n")
+  }
+
+  reactome_ora_sets[[one_direction]] <- run_clusterprofiler_with_retry(
+    label = paste("Reactome ORA", one_direction),
+    fn = function() ReactomePA::enrichPathway(gene = one_ids, universe = enrichment_universe_entrez, organism = reactome_organism, pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE),
+    attempts = 3,
+    sleep_seconds = 5,
+    must_succeed = FALSE,
+    timeout_seconds = 120
+  )
+  reactome_ora_sets[[one_direction]] <- filter_result_by_pvalue(reactome_ora_sets[[one_direction]], threshold = 0.05)
+  if (nrow(make_result_df(reactome_ora_sets[[one_direction]])) == 0) {
+    cat("[Step5] Reactome ORA", one_direction, "无可用结果，继续后续分析。\n")
+  }
+  cat("[Step5] 完成", one_direction, "方向 GO/KEGG/Reactome ORA\n")
+}
+
+go_bp <- go_ora_sets$all$BP
+go_mf <- go_ora_sets$all$MF
+go_cc <- go_ora_sets$all$CC
+go_all <- go_ora_sets$all$ALL
+kegg_ora <- kegg_ora_sets$all
+reactome_ora <- reactome_ora_sets$all
+
+go_directional_df <- bind_rows(
+  lapply(c("BP", "MF", "CC", "ALL"), function(one_ont) {
+    bind_rows(lapply(names(go_ora_sets), function(one_direction) {
+      extract_enrich_df(go_ora_sets[[one_direction]][[one_ont]], direction_label = one_direction, source_label = one_ont)
+    }))
+  })
+)
+kegg_directional_df <- combine_directional_enrichments(kegg_ora_sets, source_label = "KEGG")
+reactome_directional_df <- combine_directional_enrichments(reactome_ora_sets, source_label = "Reactome")
+
+geneList_gsea <- numeric(0)
+if (nrow(rank_tbl) > 0) {
+  geneList_gsea <- rank_tbl$rank_score
+  names(geneList_gsea) <- rank_tbl$ENTREZID
+  geneList_gsea <- sort(geneList_gsea, decreasing = TRUE)
+}
+
+geneList_symbol_gsea <- numeric(0)
+if (nrow(de_result) > 0) {
+  gene_rank_symbol_tbl <- de_result %>%
+    filter(!is.na(gene_label), gene_label != "", is.finite(rank_score)) %>%
+    group_by(gene_label) %>%
+    slice_max(order_by = abs(rank_score), n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    arrange(desc(rank_score))
+  geneList_symbol_gsea <- gene_rank_symbol_tbl$rank_score
+  names(geneList_symbol_gsea) <- gene_rank_symbol_tbl$gene_label
+  geneList_symbol_gsea <- sort(geneList_symbol_gsea, decreasing = TRUE)
+}
+
+if (length(geneList_gsea) >= 100) {
+  cat("[Step7] 开始 GO/KEGG/Reactome GSEA，rank_n=", length(geneList_gsea), "\n")
+  gsea_go_parts <- setNames(vector("list", 3), c("BP", "MF", "CC"))
+  for (one_ont in names(gsea_go_parts)) {
+    cat("[Step7] GO GSEA:", one_ont, "\n")
+    gsea_go_parts[[one_ont]] <- run_clusterprofiler_with_retry(
+      label = paste0("GO GSEA ", one_ont),
+      fn = function() gseGO(
+        geneList = geneList_gsea,
+        OrgDb = annotation_orgdb,
+        keyType = "ENTREZID",
+        ont = one_ont,
+        pvalueCutoff = 1,
+        verbose = FALSE
+      ),
+      attempts = 2,
+      sleep_seconds = 2,
+      must_succeed = FALSE
+    )
+    gsea_go_parts[[one_ont]] <- filter_result_by_pvalue(gsea_go_parts[[one_ont]], threshold = 0.05)
+  }
+  gsea_go_df <- combine_gsea_go_results(gsea_go_parts)
+  gsea_go <- choose_primary_gsea_obj(gsea_go_parts)
+
+  cat("[Step7] KEGG GSEA\n")
+  gsea_kegg <- run_clusterprofiler_with_retry(
+    label = "KEGG GSEA",
+    fn = function() gseKEGG(
+      geneList = geneList_gsea,
+      organism = kegg_organism_code,
+      pvalueCutoff = 1,
+      verbose = FALSE
+    ),
+    attempts = 3,
+    sleep_seconds = 5,
+    must_succeed = FALSE,
+    timeout_seconds = 180
+  )
+  gsea_kegg <- filter_result_by_pvalue(gsea_kegg, threshold = 0.05)
+
+  cat("[Step7] Reactome GSEA\n")
+  gsea_reactome <- run_clusterprofiler_with_retry(
+    label = "Reactome GSEA",
+    fn = function() ReactomePA::gsePathway(
+      geneList = geneList_gsea,
+      organism = reactome_organism,
+      pvalueCutoff = 1,
+      verbose = FALSE
+    ),
+    attempts = 3,
+    sleep_seconds = 5,
+    must_succeed = FALSE,
+    timeout_seconds = 180
+  )
+  gsea_reactome <- filter_result_by_pvalue(gsea_reactome, threshold = 0.05)
+  gsea_reactome_df <- make_result_df(gsea_reactome)
+  cat("[Step7] 完成 GO/KEGG/Reactome GSEA\n")
+}
+
+if (length(geneList_symbol_gsea) >= 100) {
+  cat("[Step7] Hallmark GSEA，rank_n=", length(geneList_symbol_gsea), "\n")
+  hallmark_res <- run_with_guard(
+    label = "[Step7] Hallmark GSEA",
+    must_succeed = FALSE,
+    fn = function() run_fgsea_hallmark(geneList_symbol_gsea, species = msigdb_species)
+  )
+  gsea_hallmark_df <- if (is.null(hallmark_res)) data.frame() else hallmark_res$result
+  if (nrow(gsea_hallmark_df) > 0) {
+    gsea_hallmark_df <- gsea_hallmark_df %>%
+      filter(is.finite(pvalue), pvalue < 0.05) %>%
+      arrange(pvalue, desc(abs(NES)))
+  }
+  cat("[Step7] 完成 Hallmark GSEA\n")
+
+  cat("[Step7] MSigDB C2/C5 GSEA，rank_n=", length(geneList_symbol_gsea), "\n")
+  msigdb_c2_res <- run_with_guard(
+    label = "[Step7] MSigDB C2 GSEA",
+    must_succeed = FALSE,
+    fn = function() run_fgsea_msig_collection(geneList_symbol_gsea, collection = "C2", species = msigdb_species)
+  )
+  gsea_msigdb_c2_df <- if (is.null(msigdb_c2_res)) data.frame() else msigdb_c2_res$result
+  if (nrow(gsea_msigdb_c2_df) > 0) {
+    # 保留当前项目 nominal pvalue < 0.05 的 GSEA 展示口径；正式报告建议同步查看 padj/FDR。
+    gsea_msigdb_c2_df <- gsea_msigdb_c2_df %>%
+      filter(is.finite(pvalue), pvalue < 0.05) %>%
+      arrange(pvalue, desc(abs(NES)))
+  }
+
+  msigdb_c5_res <- run_with_guard(
+    label = "[Step7] MSigDB C5 GSEA",
+    must_succeed = FALSE,
+    fn = function() run_fgsea_msig_collection(geneList_symbol_gsea, collection = "C5", species = msigdb_species)
+  )
+  gsea_msigdb_c5_df <- if (is.null(msigdb_c5_res)) data.frame() else msigdb_c5_res$result
+  if (nrow(gsea_msigdb_c5_df) > 0) {
+    # 保留当前项目 nominal pvalue < 0.05 的 GSEA 展示口径；正式报告建议同步查看 padj/FDR。
+    gsea_msigdb_c5_df <- gsea_msigdb_c5_df %>%
+      filter(is.finite(pvalue), pvalue < 0.05) %>%
+      arrange(pvalue, desc(abs(NES)))
+  }
+  cat("[Step7] 完成 MSigDB C2/C5 GSEA\n")
+}
+
+leading_edge_go <- extract_leading_edge_table(gsea_go_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_kegg <- extract_leading_edge_table(make_result_df(gsea_kegg), id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_hallmark <- extract_leading_edge_table(gsea_hallmark_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_reactome <- extract_leading_edge_table(gsea_reactome_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_msigdb_c2 <- extract_leading_edge_table(gsea_msigdb_c2_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_msigdb_c5 <- extract_leading_edge_table(gsea_msigdb_c5_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+
+for (one_direction in names(kegg_ora_sets)) {
+  one_table_dir <- step5_table_dir(one_direction)
+  write_csv_safe(make_result_df(kegg_ora_sets[[one_direction]]), file.path(one_table_dir, "6_1_KEGG_ORA_results.csv"), row.names = FALSE)
+  write_csv_safe(make_result_df(reactome_ora_sets[[one_direction]]), file.path(one_table_dir, "6_2_Reactome_ORA_results.csv"), row.names = FALSE)
+}
+write_csv_safe(kegg_directional_df, file.path(step5_table_dir("all"), "6_0_KEGG_directional_summary.csv"), row.names = FALSE)
+write_csv_safe(reactome_directional_df, file.path(step5_table_dir("all"), "6_0_Reactome_directional_summary.csv"), row.names = FALSE)
+write_csv_safe(gsea_msigdb_c2_df, file.path(step5_table_dir("all"), "6_3_MSigDB_C2_GSEA_results.csv"), row.names = FALSE)
+write_csv_safe(gsea_msigdb_c5_df, file.path(step5_table_dir("all"), "6_4_MSigDB_C5_GSEA_results.csv"), row.names = FALSE)
+write_csv_safe(leading_edge_msigdb_c2, file.path(step5_table_dir("all"), "6_3_MSigDB_C2_leading_edge.csv"), row.names = FALSE)
+write_csv_safe(leading_edge_msigdb_c5, file.path(step5_table_dir("all"), "6_4_MSigDB_C5_leading_edge.csv"), row.names = FALSE)
+
+go_all_df <- make_result_df(go_all)
+kegg_ora_df <- make_result_df(kegg_ora)
+reactome_ora_df <- make_result_df(reactome_ora)
+
+go_circle_data <- prepare_enrichment_circle_data(go_all_df, de_result, "GO")
+kegg_circle_data <- prepare_enrichment_circle_data(kegg_ora_df, de_result, "KEGG")
+gsea_circle_data <- prepare_enrichment_circle_data(gsea_go_df, de_result, "GSEA")
+
+enrichment_tables <- list(
+  go_directional_df = go_directional_df,
+  kegg_directional_df = kegg_directional_df,
+  reactome_directional_df = reactome_directional_df,
+  go_all_df = go_all_df,
+  kegg_ora_df = kegg_ora_df,
+  reactome_ora_df = reactome_ora_df,
+  gsea_go_df = gsea_go_df,
+  gsea_kegg_df = make_result_df(gsea_kegg),
+  gsea_hallmark_df = gsea_hallmark_df,
+  gsea_reactome_df = gsea_reactome_df,
+  gsea_msigdb_c2_df = gsea_msigdb_c2_df,
+  gsea_msigdb_c5_df = gsea_msigdb_c5_df,
+  leading_edge_go = leading_edge_go,
+  leading_edge_kegg = leading_edge_kegg,
+  leading_edge_hallmark = leading_edge_hallmark,
+  leading_edge_reactome = leading_edge_reactome,
+  leading_edge_msigdb_c2 = leading_edge_msigdb_c2,
+  leading_edge_msigdb_c5 = leading_edge_msigdb_c5,
+  go_circle_data = go_circle_data,
+  kegg_circle_data = kegg_circle_data,
+  gsea_circle_data = gsea_circle_data
+)
+saveRDS(enrichment_tables, cache_06_tables_path)
+
+enrichment_objects <- list(
+  go_ora_sets = go_ora_sets,
+  kegg_ora_sets = kegg_ora_sets,
+  reactome_ora_sets = reactome_ora_sets,
+  go_all = go_all,
+  kegg_ora = kegg_ora,
+  reactome_ora = reactome_ora,
+  gsea_go = gsea_go,
+  gsea_kegg = gsea_kegg,
+  gsea_reactome = gsea_reactome
+)
+saveRDS(enrichment_objects, cache_06_objects_path)
+
+write.csv(
+  data.frame(
+    cache = c("tables", "objects"),
+    path = c(cache_06_tables_path, cache_06_objects_path),
+    stringsAsFactors = FALSE
+  ),
+  file.path(step5_table_dir("all"), "6_0_cache_manifest.csv"),
+  row.names = FALSE
+)
+```
+
+## 6.2 KEGG / Reactome 图表
+
+```{r}
+if (nrow(kegg_directional_df) > 0) {
+  save_directional_ora_plot(
+    kegg_directional_df,
+    file.path(step5_plot_dir("all"), "6_0_KEGG_directional_dotplot.pdf"),
+    "KEGG ORA by direction"
+  )
+}
+if (nrow(reactome_directional_df) > 0) {
+  save_directional_ora_plot(
+    reactome_directional_df,
+    file.path(step5_plot_dir("all"), "6_0_Reactome_directional_dotplot.pdf"),
+    "Reactome ORA by direction"
+  )
+}
+
+for (one_direction in names(kegg_ora_sets)) {
+  one_plot_dir <- step5_plot_dir(one_direction)
+  one_label <- direction_label(one_direction)
+  if (nrow(make_result_df(kegg_ora_sets[[one_direction]])) > 0) {
+    save_kegg_family(
+      kegg_ora_sets[[one_direction]],
+      out_dir = one_plot_dir,
+      prefix = "6_1_KEGG_ORA",
+      title_prefix = paste("KEGG ORA", one_label)
+    )
+  }
+  if (nrow(make_result_df(reactome_ora_sets[[one_direction]])) > 0) {
+    save_pathway_ora_family(
+      reactome_ora_sets[[one_direction]],
+      out_dir = one_plot_dir,
+      prefix = "6_2_Reactome_ORA",
+      title_prefix = paste("Reactome", one_label)
+    )
+  }
+}
+
+if (nrow(gsea_msigdb_c2_df) > 0) {
+  save_gsea_df_dotplot(
+    gsea_msigdb_c2_df,
+    file.path(step5_plot_dir("all"), "6_3_MSigDB_C2_GSEA_dotplot.pdf"),
+    title_prefix = "MSigDB C2 curated gene sets GSEA",
+    top_n = 20
+  )
+}
+if (nrow(gsea_msigdb_c5_df) > 0) {
+  save_gsea_df_dotplot(
+    gsea_msigdb_c5_df,
+    file.path(step5_plot_dir("all"), "6_4_MSigDB_C5_GSEA_dotplot.pdf"),
+    title_prefix = "MSigDB C5 GO gene sets GSEA",
+    top_n = 20
+  )
+}
+```

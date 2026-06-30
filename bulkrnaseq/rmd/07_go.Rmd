@@ -1,0 +1,100 @@
+# Step 7: GO 富集
+
+## 7.1 GO ORA 主图与扩展图
+
+```{r}
+ensure_module_result_layout("07_go")
+
+de_result <- restore_main_de_result(required = TRUE)
+geneList_symbol_fc <- build_gene_foldchange_symbol(de_result)
+
+if (!file.exists(cache_06_tables_path)) {
+  stop("缺少 06 表格缓存: ", cache_06_tables_path, "。请先运行模块 06。")
+}
+
+enrichment_tables <- readRDS(cache_06_tables_path)
+if (!is.list(enrichment_tables)) {
+  stop("06 表格缓存格式错误（应为 list）: ", cache_06_tables_path)
+}
+
+go_directional_df <- enrichment_tables[["go_directional_df"]] %||% data.frame()
+
+subset_go_df <- function(direction_value, source_value) {
+  if (nrow(go_directional_df) == 0) {
+    return(data.frame())
+  }
+  go_directional_df %>%
+    filter(direction == direction_value, source == source_value)
+}
+
+go_ora_sets <- list(
+  all = list(
+    BP = subset_go_df("all", "BP"),
+    MF = subset_go_df("all", "MF"),
+    CC = subset_go_df("all", "CC"),
+    ALL = subset_go_df("all", "ALL")
+  ),
+  up = list(
+    BP = subset_go_df("up", "BP"),
+    MF = subset_go_df("up", "MF"),
+    CC = subset_go_df("up", "CC"),
+    ALL = subset_go_df("up", "ALL")
+  ),
+  down = list(
+    BP = subset_go_df("down", "BP"),
+    MF = subset_go_df("down", "MF"),
+    CC = subset_go_df("down", "CC"),
+    ALL = subset_go_df("down", "ALL")
+  )
+)
+
+has_enrichment_objects <- FALSE
+if (file.exists(cache_06_objects_path)) {
+  enrichment_objects <- readRDS(cache_06_objects_path)
+  if (is.list(enrichment_objects) && !is.null(enrichment_objects[["go_ora_sets"]])) {
+    go_ora_sets <- enrichment_objects[["go_ora_sets"]]
+    has_enrichment_objects <- TRUE
+  }
+}
+if (!has_enrichment_objects) {
+  message("[07_go] 未检测到 06 对象缓存，cnet/tree 等对象型图将显式跳过；表格型输出继续生成。")
+}
+
+go_family_paths <- function(out_dir, prefix) {
+  list(
+    bar = file.path(out_dir, paste0(prefix, "_barplot.pdf")),
+    dot = file.path(out_dir, paste0(prefix, "_dotplot.pdf")),
+    cnet = file.path(out_dir, paste0(prefix, "_cnetplot.pdf")),
+    tree = file.path(out_dir, paste0(prefix, "_Treeplot.pdf")),
+    chord = file.path(out_dir, paste0(prefix, "_Chord.pdf")),
+    upset = file.path(out_dir, paste0(prefix, "_UpSet.pdf")),
+    cluster = file.path(out_dir, paste0(prefix, "_Cluster.pdf"))
+  )
+}
+
+for (one_direction in names(go_ora_sets)) {
+  one_table_dir <- step6_table_dir(one_direction)
+  one_plot_dir <- step6_plot_dir(one_direction)
+  one_label <- direction_label(one_direction)
+  one_go_set <- go_ora_sets[[one_direction]]
+
+  write_csv_safe(make_result_df(one_go_set$BP), file.path(one_table_dir, "7_1_GO_BP_enrichment_results.csv"), row.names = FALSE)
+  write_csv_safe(make_result_df(one_go_set$MF), file.path(one_table_dir, "7_2_GO_MF_enrichment_results.csv"), row.names = FALSE)
+  write_csv_safe(make_result_df(one_go_set$CC), file.path(one_table_dir, "7_3_GO_CC_enrichment_results.csv"), row.names = FALSE)
+  write_csv_safe(make_result_df(one_go_set$ALL), file.path(one_table_dir, "7_4_GO_ALL_enrichment_results.csv"), row.names = FALSE)
+
+  save_go_family(one_go_set$BP, go_family_paths(one_plot_dir, "7_1_GO_BP"), paste("GO BP", one_label), "BP")
+  save_go_family(one_go_set$MF, go_family_paths(one_plot_dir, "7_2_GO_MF"), paste("GO MF", one_label), "MF")
+  save_go_family(one_go_set$CC, go_family_paths(one_plot_dir, "7_3_GO_CC"), paste("GO CC", one_label), "CC")
+  save_go_all_family(one_go_set$ALL, one_plot_dir, paste("GO ORA", one_label))
+}
+
+write_csv_safe(go_directional_df, file.path(step6_table_dir("all"), "7_0_GO_directional_summary.csv"), row.names = FALSE)
+if (nrow(go_directional_df) > 0) {
+  save_directional_ora_plot(
+    go_directional_df %>% filter(source == "ALL"),
+    file.path(step6_plot_dir("all"), "7_0_GO_directional_dotplot.pdf"),
+    "GO ORA by direction"
+  )
+}
+```

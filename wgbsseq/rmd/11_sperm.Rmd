@@ -1,0 +1,614 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 11: 精子特异性甲基化分析
+# ==============================================================================
+# 本模块聚焦精子/生殖系特有的甲基化模式，包括：
+# 1. 印记控制区域 (ICR) 甲基化
+# 2. 转座子亚家族深度分析
+# 3. 精子发生关键基因启动子甲基化
+# 4. 全基因组低甲基化趋势检验
+# 5. CpG 密度分层差异甲基化模式
+
+sperm_plot_dir <- "result/11_sperm/plots/1"
+sperm_table_dir <- "result/11_sperm/tables/1"
+ensure_step_dirs(sperm_plot_dir, sperm_table_dir)
+
+save_sperm_tile_heatmap <- function(mat, out_pdf, title, width = 8, height = 6,
+                                   row_label_size = 7, show_row_names = TRUE) {
+  if(is.null(mat) || length(mat) == 0 || nrow(mat) == 0 || ncol(mat) == 0) {
+    return(invisible(FALSE))
+  }
+  mat <- as.matrix(mat)
+  suppressWarnings(storage.mode(mat) <- "numeric")
+  mat[is.infinite(mat)] <- NA_real_
+  keep_rows <- rowSums(is.finite(mat)) > 0
+  keep_cols <- colSums(is.finite(mat)) > 0
+  mat <- mat[keep_rows, keep_cols, drop = FALSE]
+  if(nrow(mat) == 0 || ncol(mat) == 0) {
+    message("Sperm heatmap skipped because no finite values remain: ", out_pdf)
+    return(invisible(FALSE))
+  }
+
+  plot_df <- as.data.frame(mat, check.names = FALSE) %>%
+    tibble::rownames_to_column("RegionID") %>%
+    pivot_longer(-RegionID, names_to = "Sample", values_to = "Methylation") %>%
+    mutate(
+      RegionID = factor(RegionID, levels = rev(rownames(mat))),
+      Sample = factor(Sample, levels = colnames(mat))
+    )
+
+  p <- ggplot(plot_df, aes(x = Sample, y = RegionID, fill = Methylation)) +
+    geom_tile(color = alpha(viz_pal$neutral_light, 0.8), linewidth = 0.15) +
+    scale_fill_gradientn(
+      colors = viz_pal$heat_meth,
+      limits = c(0, 100),
+      oob = scales::squish,
+      na.value = viz_pal$neutral_light,
+      name = "Meth(%)"
+    ) +
+    theme_wgbs_bw(base_size = 10) +
+    labs(title = title, x = "", y = "") +
+    theme(
+      panel.grid = element_blank(),
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      axis.text.y = if(show_row_names) element_text(size = row_label_size) else element_blank(),
+      axis.ticks.y = if(show_row_names) element_line() else element_blank()
+    )
+
+  plot_width <- min(width, 45)
+  plot_height <- min(height, 45)
+  if(width > plot_width || height > plot_height) {
+    message("Sperm heatmap size capped for ", basename(out_pdf), ": ",
+            round(width, 1), "x", round(height, 1), " -> ",
+            plot_width, "x", plot_height, " inches")
+  }
+  ggsave(out_pdf, p, width = plot_width, height = plot_height, device = cairo_pdf)
+  invisible(TRUE)
+}
+
+ensure_dmr_outputs_loaded()
+ensure_obj_cpg_loaded()
+```
+
+```{r}
+# ==============================================================================
+# 1 印记控制区域 (ICR) 甲基化分析
+# ==============================================================================
+# 精子中 ICR 的甲基化维持对后代印记至关重要。
+# 使用 Geneimprint / MouseBook 已知的 ICR 列表进行分析。
+message("⏳ [1] 印记控制区域 (ICR) 甲基化分析...")
+
+# 小鼠已知 ICR 列表默认内置；如果 config$sperm_icr_file 存在，则优先读取外部 TSV。
+# 参考来源: https://www.geneimprint.com/ 和 Proudhon et al., 2012
+default_mouse_icr_regions <- tibble::tribble(
+  ~ICR_name,        ~chr,    ~start,     ~end,    ~imprinted_gene, ~parental_origin,
+  "Igf2r_ICR",      "chr17", 12632738,  12634520, "Igf2r",          "Maternal",
+  "H19_ICR",        "chr7",  149777550, 149778550, "H19",           "Paternal",
+  "Kcnq1ot1_ICR",   "chr7",  143194550, 143195550, "Kcnq1ot1",     "Paternal",
+  "Peg3_ICR",       "chr7",  6700380,   6702380,  "Peg3",           "Paternal",
+  "Snrpn_ICR",      "chr7",  59686770,  59688770, "Snrpn",          "Paternal",
+  "Gnas_ICR",       "chr2",  174470820, 174472820, "Gnas",          "Paternal",
+  "Grb10_ICR",      "chr11", 11938430,  11940430,  "Grb10",         "Maternal",
+  "Rasgrf1_ICR",    "chr9",  88928450,  88930450,  "Rasgrf1",       "Paternal",
+  "Plagl1_ICR",     "chr10", 12804690,  12806690,  "Plagl1",        "Paternal",
+  "Mest_ICR",       "chr6",  30658520,  30660520,  "Mest",           "Paternal",
+  "Nnat_ICR",       "chr2",  157565670, 157567670, "Nnat",          "Paternal",
+  "Impact_ICR",     "chr18", 12432130,  12434130,  "Impact",         "Paternal",
+  "Zdbf2_ICR",      "chr1",  63488690,  63490690,  "Zdbf2",          "Paternal",
+  "Gpr1_ICR",       "chr5",  142342950, 142344950, "Gpr1",         "Paternal"
+)
+mouse_icr_regions <- if(file.exists(config$sperm_icr_file)) {
+  icr_df <- read_tsv(config$sperm_icr_file, show_col_types = FALSE)
+  required_icr_cols <- c("ICR_name", "chr", "start", "end", "imprinted_gene", "parental_origin")
+  missing_icr_cols <- setdiff(required_icr_cols, colnames(icr_df))
+  if(length(missing_icr_cols) > 0) {
+    stop("外部 ICR 文件缺少列: ", paste(missing_icr_cols, collapse = ", "))
+  }
+  icr_df
+} else {
+  default_mouse_icr_regions
+}
+
+icr_gr <- GRanges(
+  seqnames = mouse_icr_regions$chr,
+  ranges = IRanges(start = mouse_icr_regions$start, end = mouse_icr_regions$end),
+  ICR_name = mouse_icr_regions$ICR_name,
+  imprinted_gene = mouse_icr_regions$imprinted_gene,
+  parental_origin = mouse_icr_regions$parental_origin
+)
+icr_gr <- filter_gr_to_main_chr(icr_gr)
+
+# 获取每个 ICR 区域的甲基化水平
+icr_region_meth <- build_region_sample_methylation(
+  obj.cpg, icr_gr,
+  sample_ids_arg = sample_ids, config_arg = config,
+  region_ids = mcols(icr_gr)$ICR_name
+)
+
+if(!is.null(icr_region_meth) && nrow(icr_region_meth$support) > 0) {
+  write_csv(icr_region_meth$support, file.path(sperm_table_dir, "icr_region_methylation.csv"))
+
+  # 计算 ICR 组均值
+  icr_group_mean <- icr_region_meth$support %>%
+    group_by(RegionID, Group) %>%
+    summarise(
+      mean_meth = mean(Methylation, na.rm = TRUE),
+      n_samples = sum(!is.na(Methylation)),
+      .groups = "drop"
+    )
+
+  icr_group_wide <- icr_group_mean %>%
+    pivot_wider(names_from = Group, values_from = mean_meth, names_prefix = "Meth_")
+
+  if(all(c(paste0("Meth_", config$group1_name), paste0("Meth_", config$group2_name)) %in% colnames(icr_group_wide))) {
+    icr_group_wide <- icr_group_wide %>%
+      mutate(
+        diffMethy = .data[[paste0("Meth_", config$group2_name)]] - .data[[paste0("Meth_", config$group1_name)]]
+      )
+  }
+
+  write_csv(icr_group_wide, file.path(sperm_table_dir, "icr_group_methylation_summary.csv"))
+
+  # ICR 甲基化热图
+  icr_mat <- icr_region_meth$matrix
+  if(nrow(icr_mat) > 0) {
+    col_order <- sample_ids[sample_ids %in% colnames(icr_mat)]
+    if(length(col_order) > 0) icr_mat <- icr_mat[, col_order, drop = FALSE]
+
+    save_sperm_tile_heatmap(
+      mat = icr_mat,
+      out_pdf = file.path(sperm_plot_dir, "icr_methylation_heatmap.pdf"),
+      width = 8, height = max(6, nrow(icr_mat) * 0.5),
+      title = "Imprinting Control Region Methylation",
+      row_label_size = 7
+    )
+  }
+
+  # ICR 甲基化条形图
+  p_icr <- ggplot(icr_group_mean, aes(x = RegionID, y = mean_meth, fill = Group)) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+    scale_fill_manual(values = viz_pal$group) +
+    labs(title = "Imprinting Control Region Methylation", x = "", y = "Mean Methylation (%)") +
+    theme_wgbs_bw(base_size = 11) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  ggsave(file.path(sperm_plot_dir, "icr_methylation_barplot.pdf"), p_icr, width = 10, height = 6, device = cairo_pdf)
+
+  # 检测 DMR 与 ICR 重叠
+  icr_dmr_overlap <- findOverlaps(dmr_gr, icr_gr, ignore.strand = TRUE)
+  if(length(icr_dmr_overlap) > 0) {
+    icr_dmr_hits <- tibble(
+      DMR_id = mcols(dmr_gr)$DMR_id[queryHits(icr_dmr_overlap)],
+      ICR_name = mcols(icr_gr)$ICR_name[subjectHits(icr_dmr_overlap)],
+      Imprinted_gene = mcols(icr_gr)$imprinted_gene[subjectHits(icr_dmr_overlap)],
+      Parental_origin = mcols(icr_gr)$parental_origin[subjectHits(icr_dmr_overlap)],
+      DMR_type = mcols(dmr_gr)$DMR_type[queryHits(icr_dmr_overlap)],
+      diffMethy = mcols(dmr_gr)$diffMethy[queryHits(icr_dmr_overlap)]
+    )
+    write_csv(icr_dmr_hits, file.path(sperm_table_dir, "icr_dmr_overlap.csv"))
+    message("   ⚠️ 发现 ", nrow(icr_dmr_hits), " 个 DMR 与 ICR 区域重叠，需重点关注！")
+  } else {
+    message("   ✅ 未发现 DMR 与 ICR 区域重叠")
+  }
+} else {
+  message("   ⚠️ ICR 甲基化提取失败或数据不足")
+}
+```
+
+```{r}
+# ==============================================================================
+# 2 转座子亚家族深度分析
+# ==============================================================================
+# LINE1、IAP、MERVL 等对精子基因组稳定性至关重要。
+# 精子中转座子的异常甲基化可导致基因组不稳定和跨代遗传效应。
+message("⏳ [2] 转座子亚家族深度分析...")
+
+txdb <- load_main_chr_txdb(config$gtf_file)
+
+# 加载 RepeatMasker 注释
+repeat_file_candidates <- file.path(config$ref_base_dir, config$repeatmasker_candidates)
+
+repeat_file <- NULL
+for(f in repeat_file_candidates) {
+  if(file.exists(f)) { repeat_file <- f; break }
+}
+
+if(!is.null(repeat_file)) {
+  message("   使用 RepeatMasker 注释: ", repeat_file)
+
+  rmsk_cols <- c("bin", "swScore", "milliDiv", "milliDel", "milliIns", "genoName", "genoStart",
+                 "genoEnd", "genoLeft", "strand", "repName", "repClass", "repFamily",
+                 "repStart", "repEnd", "repLeft", "id")
+
+  if(grepl("\\.gz$", repeat_file)) {
+    repeat_df <- read_tsv(repeat_file, comment = "#", col_names = rmsk_cols,
+                          col_types = cols(.default = col_character(), genoStart = col_double(), genoEnd = col_double()),
+                          show_col_types = FALSE)
+  } else {
+    repeat_df <- read_tsv(repeat_file, comment = "#", col_names = rmsk_cols,
+                          col_types = cols(.default = col_character(), genoStart = col_double(), genoEnd = col_double()),
+                          show_col_types = FALSE)
+  }
+
+  # 关注精子相关关键转座子
+  sperm_te_names <- c("L1Md_A", "L1Md_T", "IAPez-int", "IAPEz-int", "MERVL-int",
+                      "MuRRS-int", "MuRV-int", "MT2_Mm", "MT2A_Mm", "SINEB1",
+                      "B1_Mur1", "B1_Mur2", "AluJb", "ORR1A", "ETnERV-int",
+                      "RLTR10", "RLTR13", "MMERVK10C-int")
+
+  repeat_df <- repeat_df %>%
+    mutate(
+      genoName = standardize_chr_style(genoName, target_has_chr = TRUE),
+      repClass_simplified = simplify_repeat_class(repClass, repFamily),
+      is_sperm_relevant = repName %in% sperm_te_names |
+        grepl("^LINE1|^IAP|^MERVL|^ETn|^L1Md", repName, ignore.case = TRUE)
+    ) %>%
+    filter(genoName %in% mouse_main_chr_levels(TRUE))
+
+  # 精子关键转座子
+  sperm_te_df <- repeat_df %>%
+    filter(is_sperm_relevant) %>%
+    mutate(TE_instance_id = paste(repName, row_number(), sep = "__"))
+
+  if(nrow(sperm_te_df) > 0) {
+    sperm_te_gr <- GRanges(
+      seqnames = sperm_te_df$genoName,
+      ranges = IRanges(start = sperm_te_df$genoStart + 1, end = sperm_te_df$genoEnd),
+      repName = sperm_te_df$repName,
+      repClass = sperm_te_df$repClass,
+      repFamily = sperm_te_df$repFamily,
+      repClass_simplified = sperm_te_df$repClass_simplified
+    )
+    sperm_te_gr <- filter_gr_to_main_chr(sperm_te_gr)
+
+    # 按转座子类型分组计算甲基化
+    te_type_meth <- build_region_sample_methylation(
+      obj.cpg, sperm_te_gr,
+      sample_ids_arg = sample_ids, config_arg = config,
+      region_ids = sperm_te_df$TE_instance_id
+    )
+
+    if(!is.null(te_type_meth) && nrow(te_type_meth$support) > 0) {
+      sperm_te_meta <- sperm_te_df %>%
+        select(RegionID = TE_instance_id, repName, repClass, repFamily, repClass_simplified) %>%
+        distinct()
+
+      te_group_mean <- te_type_meth$support %>%
+        left_join(sperm_te_meta, by = "RegionID") %>%
+        group_by(repName, Group) %>%
+        summarise(
+          mean_meth = mean(Methylation, na.rm = TRUE),
+          n_records = n(),
+          .groups = "drop"
+        ) %>%
+        filter(is.finite(mean_meth))
+
+      write_csv(te_group_mean, file.path(sperm_table_dir, "sperm_te_methylation.csv"))
+
+      # 精子关键转座子甲基化热图：按 repName 汇总到 sample 层，避免逐实例热图过大。
+      te_sample_mean <- te_type_meth$support %>%
+        left_join(sperm_te_meta, by = "RegionID") %>%
+        group_by(repName, Sample, Group) %>%
+        summarise(
+          mean_meth = mean(Methylation, na.rm = TRUE),
+          n_regions_with_signal = sum(is.finite(Methylation)),
+          .groups = "drop"
+        ) %>%
+        filter(!is.na(repName), is.finite(mean_meth))
+      write_csv(te_sample_mean, file.path(sperm_table_dir, "sperm_te_sample_methylation.csv"))
+
+      if(nrow(te_sample_mean) > 0) {
+        te_sample_mat_df <- te_sample_mean %>%
+          select(repName, Sample, mean_meth) %>%
+          group_by(repName, Sample) %>%
+          summarise(mean_meth = mean(mean_meth, na.rm = TRUE), .groups = "drop") %>%
+          pivot_wider(names_from = Sample, values_from = mean_meth)
+        te_row_ids <- te_sample_mat_df$repName
+        te_sample_mat <- as.matrix(te_sample_mat_df[, sample_ids[sample_ids %in% colnames(te_sample_mat_df)], drop = FALSE])
+        rownames(te_sample_mat) <- te_row_ids
+        if(nrow(te_sample_mat) > 1 && ncol(te_sample_mat) > 0) {
+          save_sperm_tile_heatmap(
+            mat = te_sample_mat,
+            out_pdf = file.path(sperm_plot_dir, "sperm_te_methylation_heatmap.pdf"),
+            width = 8, height = max(6, nrow(te_sample_mat) * 0.35),
+            title = "Sperm-relevant Transposon Methylation by RepName",
+            row_label_size = 6,
+            show_row_names = nrow(te_sample_mat) <= 80
+          )
+        }
+      }
+
+      # 主要转座子类别甲基化比较
+      te_by_class <- te_type_meth$support %>%
+        left_join(sperm_te_meta, by = "RegionID") %>%
+        group_by(repClass_simplified, Group) %>%
+        summarise(mean_meth = mean(Methylation, na.rm = TRUE), .groups = "drop") %>%
+        filter(!is.na(repClass_simplified), is.finite(mean_meth))
+
+      if(nrow(te_by_class) > 0) {
+        p_te_class <- ggplot(te_by_class, aes(x = repClass_simplified, y = mean_meth, fill = Group)) +
+          geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+          scale_fill_manual(values = viz_pal$group) +
+          labs(title = "Transposon Methylation by Class", x = "", y = "Mean Methylation (%)") +
+          theme_wgbs_bw(base_size = 12)
+
+        ggsave(file.path(sperm_plot_dir, "sperm_te_class_methylation.pdf"), p_te_class, width = 8, height = 5, device = cairo_pdf)
+      }
+    }
+
+    # DMR 与精子关键转座子重叠
+    te_dmr_overlap <- findOverlaps(dmr_gr, sperm_te_gr, ignore.strand = TRUE)
+    if(length(te_dmr_overlap) > 0) {
+      te_dmr_hits <- tibble(
+        DMR_id = mcols(dmr_gr)$DMR_id[queryHits(te_dmr_overlap)],
+        repName = mcols(sperm_te_gr)$repName[subjectHits(te_dmr_overlap)],
+        repClass = mcols(sperm_te_gr)$repClass[subjectHits(te_dmr_overlap)],
+        DMR_type = mcols(dmr_gr)$DMR_type[queryHits(te_dmr_overlap)],
+        diffMethy = mcols(dmr_gr)$diffMethy[queryHits(te_dmr_overlap)]
+      )
+      write_csv(te_dmr_hits, file.path(sperm_table_dir, "sperm_te_dmr_overlap.csv"))
+      message("   发现 ", nrow(te_dmr_hits), " 个 DMR 与精子关键转座子重叠")
+    }
+  }
+} else {
+  message("   ⚠️ 未找到 RepeatMasker 注释文件，跳过转座子亚家族分析")
+  message("   提示: 请将 rmsk.txt/rmsk.txt.gz 放置在 ", config$ref_base_dir)
+}
+```
+
+```{r}
+# ==============================================================================
+# 3 精子发生关键基因启动子甲基化
+# ==============================================================================
+# 精子发生相关基因的异常甲基化可能导致生育力下降。
+message("⏳ [3] 精子发生关键基因启动子甲基化分析...")
+
+# 精子发生关键基因列表默认内置；如果 config$spermatogenesis_gene_file 存在，则优先读取外部 TSV。
+default_spermatogenesis_genes <- tibble::tribble(
+  ~symbol,       ~function_category,
+  "Dazl",        "生殖细胞发育",
+  "Ddx4",        "生殖细胞标记 (VASA)",
+  "Sycp3",       "减数分裂联会复合体",
+  "Prm1",        "精蛋白1 (染色质凝缩)",
+  "Prm2",        "精蛋白2 (染色质凝缩)",
+  "Tnp1",        "过渡蛋白1",
+  "Tnp2",        "过渡蛋白2",
+  "Dmc1",        "减数分裂重组",
+  "Spo11",       "减数分裂DSB形成",
+  "Stra8",       "减数分裂进入",
+  "Sohlh1",      "精原细胞分化",
+  "Ddx3y",       "Y连锁精子发生",
+  "Uty",         "Y连锁精子发生",
+  "Hspa2",       "减数分裂伴侣蛋白",
+  "Crem",        "单倍体精子细胞转录",
+  "Taf7l",       "精子细胞特异性转录",
+  "Foxj2",       "精子发生调控",
+  "Mtl5",        "睾丸特异性金属硫蛋白",
+  "Nanos2",      "生殖干细胞维持",
+  "Piwil1",      "piRNA通路",
+  "Piwil2",      "piRNA通路",
+  "Miwi2",       "piRNA通路/转座子沉默",
+  "Dnmt3l",      "DNA甲基化建立",
+  "Dnmt3a",      "DNA甲基化建立",
+  "Dnmt1",       "DNA甲基化维持",
+  "Tet1",        "DNA去甲基化",
+  "Tet2",        "DNA去甲基化",
+  "Tet3",        "DNA去甲基化",
+  "Mbd3",       "甲基化读取/NuRD复合体"
+)
+spermatogenesis_genes <- if(file.exists(config$spermatogenesis_gene_file)) {
+  gene_df <- read_tsv(config$spermatogenesis_gene_file, show_col_types = FALSE)
+  required_gene_cols <- c("symbol", "function_category")
+  missing_gene_cols <- setdiff(required_gene_cols, colnames(gene_df))
+  if(length(missing_gene_cols) > 0) {
+    stop("外部精子发生基因文件缺少列: ", paste(missing_gene_cols, collapse = ", "))
+  }
+  gene_df
+} else {
+  default_spermatogenesis_genes
+}
+
+# 转换为 Entrez/Ensembl ID
+gene_map <- tryCatch({
+  bitr(spermatogenesis_genes$symbol, fromType = "SYMBOL",
+       toType = c("ENTREZID", "ENSEMBL"), OrgDb = org.Mm.eg.db)
+}, error = function(e) NULL)
+
+if(!is.null(gene_map)) {
+  spermatogenesis_genes <- spermatogenesis_genes %>%
+    left_join(gene_map, by = c("symbol" = "SYMBOL"))
+
+  # 获取启动子区域 (-2kb to +500bp from TSS)
+  tryCatch({
+    gene_gr <- genes(txdb)
+    gene_gr <- filter_gr_to_main_chr(gene_gr)
+
+    sperm_gene_ids <- gene_map$ENSEMBL[!is.na(gene_map$ENSEMBL)]
+    sperm_gene_ids_clean <- str_replace(sperm_gene_ids, "\\..*$", "")
+
+    promoter_gr <- promoters(gene_gr, upstream = config$sperm_promoter_upstream, downstream = config$sperm_promoter_downstream)
+    promoter_gr <- promoter_gr[names(promoter_gr) %in% sperm_gene_ids]
+
+    if(length(promoter_gr) > 0) {
+      # 获取基因 Symbol
+      promoter_names <- str_replace(names(promoter_gr), "\\..*$", "")
+      promoter_symbols <- gene_map$symbol[match(promoter_names, gene_map$ENSEMBL)]
+      names(promoter_gr) <- ifelse(!is.na(promoter_symbols), promoter_symbols, names(promoter_gr))
+
+      promoter_meth <- build_region_sample_methylation(
+        obj.cpg, promoter_gr,
+        sample_ids_arg = sample_ids, config_arg = config,
+        region_ids = names(promoter_gr)
+      )
+
+      if(!is.null(promoter_meth) && nrow(promoter_meth$support) > 0) {
+        write_csv(promoter_meth$support, file.path(sperm_table_dir, "spermatogenesis_promoter_methylation.csv"))
+
+        # 组均值
+        prom_group_mean <- promoter_meth$support %>%
+          group_by(RegionID, Group) %>%
+          summarise(mean_meth = mean(Methylation, na.rm = TRUE), .groups = "drop")
+
+        prom_wide <- prom_group_mean %>%
+          pivot_wider(names_from = Group, values_from = mean_meth, names_prefix = "Meth_")
+
+        write_csv(prom_wide, file.path(sperm_table_dir, "spermatogenesis_promoter_summary.csv"))
+
+        # 热图
+        prom_mat <- promoter_meth$matrix
+        if(nrow(prom_mat) > 0) {
+          col_order <- sample_ids[sample_ids %in% colnames(prom_mat)]
+          if(length(col_order) > 0) prom_mat <- prom_mat[, col_order, drop = FALSE]
+
+          save_sperm_tile_heatmap(
+            mat = prom_mat,
+            out_pdf = file.path(sperm_plot_dir, "spermatogenesis_promoter_heatmap.pdf"),
+            width = 8, height = max(6, nrow(prom_mat) * 0.45),
+            title = "Spermatogenesis Gene Promoter Methylation",
+            row_label_size = 7
+          )
+        }
+
+        # 检测哪些基因启动子与 DMR 重叠
+        prom_dmr_overlap <- findOverlaps(dmr_gr, promoter_gr, ignore.strand = TRUE)
+        if(length(prom_dmr_overlap) > 0) {
+          prom_dmr_hits <- tibble(
+            DMR_id = mcols(dmr_gr)$DMR_id[queryHits(prom_dmr_overlap)],
+            Gene = names(promoter_gr)[subjectHits(prom_dmr_overlap)],
+            DMR_type = mcols(dmr_gr)$DMR_type[queryHits(prom_dmr_overlap)],
+            diffMethy = mcols(dmr_gr)$diffMethy[queryHits(prom_dmr_overlap)]
+          )
+          write_csv(prom_dmr_hits, file.path(sperm_table_dir, "spermatogenesis_dmr_overlap.csv"))
+          message("   发现 ", nrow(prom_dmr_hits), " 个 DMR 与精子发生基因启动子重叠")
+        }
+      }
+    }
+  }, error = function(e) {
+    message("   精子发生基因启动子甲基化分析失败: ", e$message)
+  })
+} else {
+  message("   ⚠️ 精子发生基因 Symbol 转 ID 失败，跳过")
+}
+```
+
+```{r}
+# ==============================================================================
+# 4 全基因组低甲基化趋势检验
+# ==============================================================================
+# PFOS 暴露可能导致精子全基因组低甲基化。
+message("⏳ [4] 全基因组低甲基化趋势检验...")
+
+# 从 2_qc 已有的 global_meth 获取全基因组甲基化
+if(exists("global_meth")) {
+  # Wilcoxon 检验 (小样本 n=2)
+  if(length(unique(global_meth$Group)) == 2) {
+    g1_meth <- global_meth$Methylation[global_meth$Group == config$group1_name]
+    g2_meth <- global_meth$Methylation[global_meth$Group == config$group2_name]
+
+    hypometh_test <- tryCatch({
+      wilcox.test(g1_meth, g2_meth, alternative = "greater")
+    }, error = function(e) {
+      list(p.value = NA_real_, statistic = NA_real_)
+    })
+
+    hypometh_summary <- tibble(
+      test = "Wilcoxon (one-sided: group1 > group2)",
+      group1_mean = mean(g1_meth, na.rm = TRUE),
+      group2_mean = mean(g2_meth, na.rm = TRUE),
+      diff = mean(g1_meth, na.rm = TRUE) - mean(g2_meth, na.rm = TRUE),
+      pvalue = hypometh_test$p.value,
+      direction = ifelse(mean(g2_meth) < mean(g1_meth), "Hypomethylation in group2", "Hypermethylation in group2")
+    )
+    write_csv(hypometh_summary, file.path(sperm_table_dir, "global_hypomethylation_test.csv"))
+
+    # 按染色体的低甲基化趋势
+    if(exists("meth_raw_dt")) {
+      chr_hypo <- meth_raw_dt %>%
+        mutate(chr_clean = strip_chr_prefix(chr)) %>%
+        filter(chr_clean %in% as.character(1:19) | chr_clean %in% c("X", "Y")) %>%
+        group_by(Sample, Group, chr_clean) %>%
+        summarise(mean_meth = mean(Methylation, na.rm = TRUE), .groups = "drop") %>%
+        group_by(Group, chr_clean) %>%
+        summarise(group_mean_meth = mean(mean_meth, na.rm = TRUE), .groups = "drop") %>%
+        pivot_wider(names_from = Group, values_from = group_mean_meth, names_prefix = "Mean_")
+
+      if(all(c(paste0("Mean_", config$group1_name), paste0("Mean_", config$group2_name)) %in% colnames(chr_hypo))) {
+        chr_hypo <- chr_hypo %>%
+          mutate(
+            diff = .data[[paste0("Mean_", config$group2_name)]] - .data[[paste0("Mean_", config$group1_name)]],
+            direction = ifelse(diff < 0, "Hypomethylated", "Hypermethylated")
+          )
+
+        write_csv(chr_hypo, file.path(sperm_table_dir, "chromosome_hypomethylation.csv"))
+
+        p_chr_hypo <- ggplot(chr_hypo, aes(x = chr_clean, y = diff, fill = direction)) +
+          geom_col(width = 0.7) +
+          scale_fill_manual(values = c("Hypomethylated" = unname(viz_pal$dmr["Hypo"]),
+                                       "Hypermethylated" = unname(viz_pal$dmr["Hyper"]))) +
+          geom_hline(yintercept = 0, linetype = "dashed") +
+          labs(title = "Chromosome-level Methylation Difference",
+               x = "Chromosome", y = group_diff_axis_label, fill = "") +
+          theme_wgbs_bw(base_size = 12)
+
+        ggsave(file.path(sperm_plot_dir, "chromosome_hypomethylation.pdf"), p_chr_hypo, width = 10, height = 5, device = cairo_pdf)
+      }
+    }
+  }
+} else {
+  message("   ⚠️ global_meth 对象不存在，请先运行 2_qc 模块")
+}
+```
+
+```{r}
+# ==============================================================================
+# 5 CpG 密度分层差异甲基化模式
+# ==============================================================================
+# 分析 DMR 在 Island / Shore / Shelf / Open Sea 各层的分布和效应模式。
+message("⏳ [5] CpG 密度分层差异甲基化模式...")
+
+if(exists("dmr_anno_df") && "CGI_context" %in% colnames(dmr_anno_df) && nrow(dmr_anno_df) > 0) {
+  cgi_dmr <- dmr_anno_df %>%
+    filter(!is.na(CGI_context), CGI_context != "") %>%
+    mutate(CGI_context = factor(CGI_context, levels = c("Island", "N_Shore", "S_Shore", "N_Shelf", "S_Shelf", "Open_Sea")))
+
+  if(nrow(cgi_dmr) > 0) {
+    # DMR 数量按 CGI 上下文分布
+    p_cgi_dmr_count <- cgi_dmr %>%
+      count(CGI_context, DMR_type) %>%
+      ggplot(aes(x = CGI_context, y = n, fill = DMR_type)) +
+      geom_col(position = position_dodge(width = 0.8)) +
+      scale_fill_manual(values = viz_pal$dmr) +
+      labs(title = "DMR Count by CpG Density Context", x = "", y = "Count", fill = "") +
+      theme_wgbs_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+    ggsave(file.path(sperm_plot_dir, "cgi_context_dmr_count.pdf"), p_cgi_dmr_count, width = 8, height = 5, device = cairo_pdf)
+
+    # 各 CGI 层的甲基化差异分布
+    p_cgi_dmr_effect <- ggplot(cgi_dmr, aes(x = CGI_context, y = diffMethy, fill = DMR_type)) +
+      geom_violin(alpha = 0.35, trim = FALSE, position = position_dodge(width = 0.8)) +
+      geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.55, position = position_dodge(width = 0.8)) +
+      scale_fill_manual(values = viz_pal$dmr) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.5)) +
+      labs(title = "DMR Effect Size by CpG Density Context", x = "", y = group_diff_axis_label, fill = "") +
+      theme_wgbs_bw(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+    ggsave(file.path(sperm_plot_dir, "cgi_context_dmr_effect.pdf"), p_cgi_dmr_effect, width = 9, height = 6, device = cairo_pdf)
+
+    # 各 CGI 层的统计汇总
+    cgi_dmr_summary <- cgi_dmr %>%
+      group_by(CGI_context, DMR_type) %>%
+      summarise(
+        n = n(),
+        mean_diff = mean(diffMethy, na.rm = TRUE),
+        median_diff = median(diffMethy, na.rm = TRUE),
+        mean_abs_diff = mean(abs(diffMethy), na.rm = TRUE),
+        .groups = "drop"
+      )
+    write_csv(cgi_dmr_summary, file.path(sperm_table_dir, "cgi_context_dmr_summary.csv"))
+  }
+} else {
+  message("   ⚠️ dmr_anno_df 中无 CGI_context 列，请先运行 Step 6 或 7 生成 CGI 注释")
+}
+```

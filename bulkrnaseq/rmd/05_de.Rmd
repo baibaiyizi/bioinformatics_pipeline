@@ -1,0 +1,355 @@
+# Step 5: 差异表达
+
+## 5.1 差异表达结果读取与注释
+
+```{r}
+ensure_module_result_layout("05_de")
+
+de_raw <- read.delim(de_path, check.names = FALSE, stringsAsFactors = FALSE)
+if (!"gene_id" %in% colnames(de_raw)) {
+  stop("4.DE_analysis/DE_results 缺少 gene_id 列")
+}
+
+de_result <- de_raw %>%
+  mutate(
+    gene_id = as.character(gene_id),
+    ensembl_id = sub("\\.[0-9]+$", "", gene_id)
+  )
+
+anno <- AnnotationDbi::select(
+  annotation_orgdb,
+  keys = unique(de_result$ensembl_id),
+  keytype = "ENSEMBL",
+  columns = c("SYMBOL", "GENENAME", "ENTREZID")
+) %>%
+  distinct(ENSEMBL, .keep_all = TRUE)
+
+de_result <- de_result %>%
+  left_join(anno, by = c("ensembl_id" = "ENSEMBL")) %>%
+  mutate(
+    gene_label = dplyr::coalesce(SYMBOL, ensembl_id),
+    # 保留当前项目既有筛选口径：nominal pvalue < 0.05 且 abs(log2FC) >= 0.58。
+    # 正式发表/更严格汇报时，建议同时报告 padj/FDR < 0.05 的辅助计数和敏感性结果。
+    direction = case_when(
+      is.na(pvalue) | pvalue >= 0.05 | is.na(log2FoldChange) | abs(log2FoldChange) < 0.58 ~ "ns",
+      log2FoldChange >= 0.58 ~ "up",
+      TRUE ~ "down"
+    ),
+    rank_score = sign(dplyr::coalesce(log2FoldChange, 0)) * -log10(dplyr::coalesce(pvalue, 1) + 1e-300)
+  ) %>%
+  arrange(pvalue, desc(abs(log2FoldChange)))
+
+sig_de <- de_result %>% filter(direction != "ns")
+
+write.csv(de_result, "result/05_de/5_1_annotated_DE_results.csv", row.names = FALSE)
+```
+
+## 5.2 DE 概览、火山图与 MA 图
+
+```{r}
+de_summary <- de_result %>%
+  count(direction, name = "gene_count") %>%
+  mutate(direction = factor(direction, levels = c("up", "down", "ns")))
+
+write.csv(de_summary, "result/05_de/5_2_DE_summary_counts.csv", row.names = FALSE)
+
+threshold_advisory <- data.frame(
+  threshold = c(
+    "pvalue_lt_0.05",
+    "pvalue_lt_0.05_abs_log2fc_ge_0.58",
+    "padj_lt_0.05",
+    "padj_lt_0.05_abs_log2fc_ge_0.58"
+  ),
+  gene_count = c(
+    sum(!is.na(de_result$pvalue) & de_result$pvalue < 0.05),
+    sum(!is.na(de_result$pvalue) & de_result$pvalue < 0.05 & !is.na(de_result$log2FoldChange) & abs(de_result$log2FoldChange) >= 0.58),
+    sum(!is.na(de_result$padj) & de_result$padj < 0.05),
+    sum(!is.na(de_result$padj) & de_result$padj < 0.05 & !is.na(de_result$log2FoldChange) & abs(de_result$log2FoldChange) >= 0.58)
+  ),
+  note = c(
+    "current nominal screening support count",
+    "current main DE definition",
+    "recommended FDR support count for stricter reporting",
+    "recommended stricter DE support count for reporting sensitivity"
+  ),
+  stringsAsFactors = FALSE
+)
+write.csv(threshold_advisory, "result/05_de/5_2b_threshold_advisory_counts.csv", row.names = FALSE)
+
+de_barplot <- ggplot(de_summary, aes(x = direction, y = gene_count, fill = direction)) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(values = viz_pal$de) +
+  labs(title = "差异表达基因统计", x = NULL, y = "Gene count") +
+  theme_rnaseq_minimal() +
+  theme(legend.position = "none")
+
+save_plot_versions(
+  de_barplot,
+  primary = "result/05_de/5_3_DE_summary_barplot.pdf",
+  width = 6,
+  height = 4.5
+)
+
+volcano_tbl <- de_result %>%
+  mutate(
+    label_score = ifelse(is.na(pvalue) | is.na(log2FoldChange), 0, abs(log2FoldChange) * -log10(pvalue + 1e-300)),
+    label = ifelse(direction != "ns" & rank(-label_score, ties.method = "first") <= 20, gene_label, NA)
+  )
+
+volcano_plot <- ggplot(volcano_tbl, aes(x = log2FoldChange, y = -log10(pvalue + 1e-300), color = direction)) +
+  geom_point(alpha = 0.75, size = 1.5) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  geom_vline(xintercept = c(-0.58, 0.58), linetype = "dashed") +
+  geom_text_repel(aes(label = label), size = 3, na.rm = TRUE, show.legend = FALSE) +
+  scale_color_manual(values = viz_pal$de) +
+  labs(title = "差异表达火山图", x = "log2 Fold Change", y = "-log10(PValue)") +
+  theme_rnaseq_bw()
+
+save_plot_versions(
+  volcano_plot,
+  primary = "result/05_de/5_4_volcano_plot.pdf",
+  width = 8.5,
+  height = 6
+)
+
+ma_plot <- ggplot(de_result, aes(x = log10(baseMean + 1), y = log2FoldChange, color = direction)) +
+  geom_point(alpha = 0.7, size = 1.2) +
+  geom_hline(yintercept = c(-0.58, 0.58), linetype = "dashed") +
+  scale_color_manual(values = viz_pal$de) +
+  labs(title = "差异表达 MA 图", x = "log10(baseMean + 1)", y = "log2 Fold Change") +
+  theme_rnaseq_bw()
+
+save_plot_versions(
+  ma_plot,
+  primary = "result/05_de/5_5_ma_plot.pdf",
+  width = 8.5,
+  height = 6
+)
+```
+
+## 5.3 Top DE 基因热图与导出
+
+```{r}
+if (nrow(sig_de) > 0) {
+  top_sig_ids <- sig_de %>%
+    arrange(pvalue, desc(abs(log2FoldChange))) %>%
+    slice_head(n = 50) %>%
+    pull(gene_id)
+
+  heatmap_mat <- log2(gene_exp[top_sig_ids, , drop = FALSE] + 1)
+  heatmap_mat <- safe_scale_rows(heatmap_mat)
+  row_labels <- de_result$gene_label[match(rownames(heatmap_mat), de_result$gene_id)]
+  row_labels[is.na(row_labels)] <- rownames(heatmap_mat)[is.na(row_labels)]
+
+  annotation_col <- data.frame(Group = sample_info[colnames(heatmap_mat), "group"])
+  rownames(annotation_col) <- colnames(heatmap_mat)
+
+  save_pheatmap_versions(
+    primary = "result/05_de/5_6_top_DE_heatmap.pdf",
+    width = 9,
+    height = 11,
+    expr = pheatmap::pheatmap(
+      heatmap_mat,
+      annotation_col = annotation_col,
+      annotation_colors = list(Group = group_colors),
+      show_rownames = TRUE,
+      labels_row = row_labels,
+      cluster_rows = TRUE,
+      cluster_cols = TRUE,
+      fontsize_row = 7,
+      fontsize_col = 10,
+      main = "Top 50 DE genes",
+      silent = TRUE
+    )
+  )
+
+  top_up <- sig_de %>%
+    filter(direction == "up") %>%
+    arrange(pvalue, desc(log2FoldChange))
+  top_down <- sig_de %>%
+    filter(direction == "down") %>%
+    arrange(pvalue, log2FoldChange)
+
+  write.csv(top_up, "result/05_de/5_7_top_upregulated_genes.csv", row.names = FALSE)
+  write.csv(top_down, "result/05_de/5_8_top_downregulated_genes.csv", row.names = FALSE)
+
+  rank_tbl <- de_result %>%
+    filter(!is.na(ENTREZID), !is.na(rank_score)) %>%
+    group_by(ENTREZID) %>%
+    slice_max(order_by = abs(rank_score), n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    arrange(desc(rank_score))
+
+  write.table(
+    rank_tbl[, c("ENTREZID", "rank_score")],
+    file = "result/05_de/5_9_gene_rank_for_GSEA.rnk",
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE,
+    col.names = FALSE
+  )
+} else {
+  rank_tbl <- data.frame()
+}
+```
+
+## 5.4 全样本敏感性分析
+
+```{r}
+full_sensitivity_summary <- data.frame()
+full_de_result <- data.frame()
+
+if (!is.null(gene_count_full) && !is.null(gene_count_mat) && !is.null(full_sample_info)) {
+  full_groups <- full_sample_info[colnames(gene_count_full), "group"]
+  names(full_groups) <- colnames(gene_count_full)
+  full_keep_samples <- names(full_groups)[full_groups %in% c(group1_label, group2_label)]
+  full_group_counts <- table(full_groups[full_keep_samples])
+
+  if (length(full_keep_samples) >= ncol(gene_count_mat) &&
+      all(c(group1_label, group2_label) %in% names(full_group_counts)) &&
+      all(full_group_counts[c(group1_label, group2_label)] >= 3)) {
+    full_counts <- round(gene_count_full[, full_keep_samples, drop = FALSE])
+    full_condition <- factor(full_sample_info[full_keep_samples, "group"], levels = c(group1_label, group2_label))
+    full_col_data <- data.frame(condition = full_condition, row.names = full_keep_samples, check.names = FALSE)
+
+    full_dds <- DESeq2::DESeqDataSetFromMatrix(countData = full_counts, colData = full_col_data, design = ~ condition)
+    full_dds <- DESeq2::DESeq(full_dds, quiet = TRUE)
+    # 敏感性分析也沿用当前项目口径：independentFiltering=FALSE 和 nominal pvalue。
+    # 可用 DESeq2 默认 independent filtering / padj 作为报告中的补充稳定性证据。
+    full_res <- DESeq2::results(full_dds, contrast = c("condition", group2_label, group1_label), independentFiltering = FALSE)
+    full_norm <- DESeq2::counts(full_dds, normalized = TRUE)
+
+    full_de_result <- data.frame(
+      gene_id = rownames(full_res),
+      sampleA = group2_label,
+      sampleB = group1_label,
+      baseMeanA = rowMeans(full_norm[, full_condition == group2_label, drop = FALSE]),
+      baseMeanB = rowMeans(full_norm[, full_condition == group1_label, drop = FALSE]),
+      baseMean = full_res$baseMean,
+      log2FoldChange = full_res$log2FoldChange,
+      lfcSE = full_res$lfcSE,
+      stat = full_res$stat,
+      pvalue = full_res$pvalue,
+      padj = full_res$padj,
+      stringsAsFactors = FALSE,
+      check.names = FALSE
+    ) %>%
+      mutate(ensembl_id = sub("\\.[0-9]+$", "", gene_id)) %>%
+      left_join(anno, by = c("ensembl_id" = "ENSEMBL")) %>%
+      mutate(
+        gene_label = dplyr::coalesce(SYMBOL, ensembl_id),
+        direction = case_when(
+          is.na(pvalue) | pvalue >= 0.05 | is.na(log2FoldChange) | abs(log2FoldChange) < 0.58 ~ "ns",
+          log2FoldChange >= 0.58 ~ "up",
+          TRUE ~ "down"
+        )
+      ) %>%
+      arrange(pvalue, desc(abs(log2FoldChange)))
+
+    write.csv(full_de_result, "result/05_de/5_10_full_sample_sensitivity_DE_results.csv", row.names = FALSE)
+
+    main_sig_ids <- unique(de_result$ensembl_id[de_result$direction != "ns"])
+    full_sig_ids <- unique(full_de_result$ensembl_id[full_de_result$direction != "ns"])
+    compare_tbl <- de_result %>%
+      dplyr::select(ensembl_id, gene_label, main_log2FoldChange = log2FoldChange, main_pvalue = pvalue, main_padj = padj, main_direction = direction) %>%
+      inner_join(
+        full_de_result %>%
+          dplyr::select(ensembl_id, full_log2FoldChange = log2FoldChange, full_pvalue = pvalue, full_padj = padj, full_direction = direction),
+        by = "ensembl_id"
+      )
+
+    full_sensitivity_summary <- data.frame(
+      metric = c(
+        "main_selected_samples_n",
+        "full_snapshot_samples_n",
+        "main_de_genes_nominal",
+        "full_de_genes_nominal",
+        "overlap_de_genes_nominal",
+        "main_only_de_genes_nominal",
+        "full_only_de_genes_nominal",
+        "log2fc_pearson_all_genes",
+        "same_direction_overlap_genes"
+      ),
+      value = c(
+        ncol(gene_count_mat),
+        length(full_keep_samples),
+        length(main_sig_ids),
+        length(full_sig_ids),
+        length(intersect(main_sig_ids, full_sig_ids)),
+        length(setdiff(main_sig_ids, full_sig_ids)),
+        length(setdiff(full_sig_ids, main_sig_ids)),
+        safe_cor(compare_tbl$main_log2FoldChange, compare_tbl$full_log2FoldChange),
+        sum(compare_tbl$ensembl_id %in% intersect(main_sig_ids, full_sig_ids) &
+              compare_tbl$main_direction == compare_tbl$full_direction, na.rm = TRUE)
+      ),
+      stringsAsFactors = FALSE
+    )
+    write.csv(full_sensitivity_summary, "result/05_de/5_11_full_sample_sensitivity_summary.csv", row.names = FALSE)
+    write.csv(compare_tbl, "result/05_de/5_12_main_vs_full_de_concordance.csv", row.names = FALSE)
+
+    concordance_plot <- compare_tbl %>%
+      filter(is.finite(main_log2FoldChange), is.finite(full_log2FoldChange)) %>%
+      mutate(status = case_when(
+        ensembl_id %in% intersect(main_sig_ids, full_sig_ids) ~ "both_nominal_DE",
+        ensembl_id %in% main_sig_ids ~ "main_only",
+        ensembl_id %in% full_sig_ids ~ "full_only",
+        TRUE ~ "not_nominal_DE"
+      )) %>%
+      ggplot(aes(x = main_log2FoldChange, y = full_log2FoldChange, color = status)) +
+      geom_point(alpha = 0.55, size = 1) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+      geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+      scale_color_manual(values = c(
+        both_nominal_DE = unname(viz_pal$sig_status["significant"]),
+        main_only = unname(viz_pal$accent["warm"]),
+        full_only = unname(viz_pal$accent["green"]),
+        not_nominal_DE = unname(viz_pal$neutral["mid"])
+      )) +
+      labs(title = "主分析 3v3 与全样本快照 DE log2FC 一致性", x = "Main selected-sample log2FC", y = "Full-snapshot log2FC") +
+      theme_rnaseq_bw()
+
+    save_plot_versions(
+      concordance_plot,
+      primary = "result/05_de/5_13_main_vs_full_log2fc_concordance.pdf",
+      width = 7.5,
+      height = 6
+    )
+  } else {
+    full_sensitivity_summary <- data.frame(
+      metric = "full_sample_sensitivity_status",
+      value = "skipped_insufficient_full_snapshot_or_group_replicates",
+      stringsAsFactors = FALSE
+    )
+    write.csv(full_sensitivity_summary, "result/05_de/5_11_full_sample_sensitivity_summary.csv", row.names = FALSE)
+  }
+}
+```
+
+## 5.5 全样本 DE 补充图
+
+```{r}
+if (exists("full_de_result") && is.data.frame(full_de_result) && nrow(full_de_result) > 0) {
+  full_de_plot_tbl <- full_de_result %>%
+    mutate(
+      neg_log10_p = -log10(dplyr::coalesce(pvalue, 1) + 1e-300),
+      direction = factor(direction, levels = c("up", "down", "ns"))
+    )
+
+  full_volcano <- ggplot(full_de_plot_tbl, aes(x = log2FoldChange, y = neg_log10_p, color = direction)) +
+    geom_point(alpha = 0.58, size = 1) +
+    geom_vline(xintercept = c(-0.58, 0.58), linetype = "dashed", color = viz_pal$neutral["dark"]) +
+    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = viz_pal$neutral["dark"]) +
+    scale_color_manual(values = viz_pal$de, drop = FALSE) +
+    labs(title = "全样本快照 DE 火山图", x = paste0(group2_label, " vs ", group1_label, " log2FC"), y = "-log10(pvalue)") +
+    theme_rnaseq_bw()
+  save_plot_versions(full_volcano, "result/05_de/5_14_full_sample_sensitivity_volcano.pdf", width = 8.5, height = 6)
+
+  full_ma_plot <- ggplot(full_de_plot_tbl, aes(x = log10(baseMean + 1), y = log2FoldChange, color = direction)) +
+    geom_point(alpha = 0.58, size = 1) +
+    geom_hline(yintercept = c(-0.58, 0, 0.58), linetype = c("dashed", "solid", "dashed"), color = viz_pal$neutral["dark"]) +
+    scale_color_manual(values = viz_pal$de, drop = FALSE) +
+    labs(title = "全样本快照 DE MA 图", x = "log10(baseMean + 1)", y = paste0(group2_label, " vs ", group1_label, " log2FC")) +
+    theme_rnaseq_bw()
+  save_plot_versions(full_ma_plot, "result/05_de/5_15_full_sample_sensitivity_MA.pdf", width = 8.5, height = 6)
+}
+```

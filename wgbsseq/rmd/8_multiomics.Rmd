@@ -1,0 +1,807 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 8: 多组学联合分析
+# ==============================================================================
+# 这里开始把甲基化变化和 RNA 表达变化放到同一张图、同一张表里一起解释。
+
+ensure_step_dirs(
+  "result/8_multiomics/plots/1",
+  "result/8_multiomics/plots/2_gene_centric",
+  "result/8_multiomics/plots/3_quadrant_enrichment",
+  "result/8_multiomics/tables/1"
+)
+
+ensure_dmr_outputs_loaded()
+
+rna_p_threshold <- config$rna_p_threshold
+rna_log2fc_threshold <- config$rna_log2fc_threshold
+multiomics_methyl_delta <- config$multiomics_methyl_delta
+enrichment_p_threshold <- config$enrichment_p_threshold
+enrich_top_n_kegg <- config$enrichment_top_n_kegg
+enrich_top_n_go <- config$enrichment_top_n_go
+enrich_goplot_top_n <- config$enrichment_goplot_top_n
+enrich_cnet_show_category <- config$enrichment_cnet_show_category
+enrich_tree_show_category <- config$enrichment_tree_show_category
+
+if(!"CGI_context" %in% colnames(dmr_anno_df)) {
+  dmr_anno_df$CGI_context <- "Open_Sea"
+}
+
+# 1 RNA-seq 联合分析
+# 这一层保留 DMR-level join，优点是信息完整；后面的 7.2 再做 gene-centric 去重版本。
+if(file.exists(config$rna_seq_file)) {
+  message("⏳ 联合 RNA-seq 分析...")
+  expr_df <- read_expr_results(config$rna_seq_file)
+
+  dmr_expr <- inner_join(dmr_anno_df, expr_df, by = "gene_id_clean")
+  if(!"SYMBOL" %in% colnames(dmr_expr)) {
+    tryCatch({
+      gene_map <- bitr(unique(dmr_expr$gene_id_clean), fromType = "ENSEMBL", toType = c("ENTREZID", "SYMBOL"), OrgDb = org.Mm.eg.db)
+      dmr_expr <- left_join(dmr_expr, gene_map, by = c("gene_id_clean" = "ENSEMBL"))
+    }, error = function(e) dmr_expr$SYMBOL <- NA)
+  }
+
+  if(nrow(dmr_expr) > 0) {
+    dmr_expr <- dmr_expr %>%
+      mutate(Quadrant = case_when(
+        diffMethy > multiomics_methyl_delta & log2FoldChange > rna_log2fc_threshold ~ "Hyper-Up",
+        diffMethy < -multiomics_methyl_delta & log2FoldChange > rna_log2fc_threshold ~ "Hypo-Up",
+        diffMethy < -multiomics_methyl_delta & log2FoldChange < -rna_log2fc_threshold ~ "Hypo-Down",
+        diffMethy > multiomics_methyl_delta & log2FoldChange < -rna_log2fc_threshold ~ "Hyper-Down",
+        TRUE ~ "NS"
+      ))
+
+    quad_counts <- dmr_expr %>% group_by(Quadrant) %>% summarise(count = n())
+
+    label_pos <- data.frame(
+      Quadrant = c("Hyper-Up", "Hyper-Down", "Hypo-Down", "Hypo-Up", "NS"),
+      x = c(max(dmr_expr$diffMethy) * 0.8, max(dmr_expr$diffMethy) * 0.8,
+            min(dmr_expr$diffMethy) * 0.8, min(dmr_expr$diffMethy) * 0.8, 0),
+      y = c(max(dmr_expr$log2FoldChange) * 0.8, min(dmr_expr$log2FoldChange) * 0.8,
+            min(dmr_expr$log2FoldChange) * 0.8, max(dmr_expr$log2FoldChange) * 0.8, 0)
+    )
+    quad_labels <- left_join(label_pos, quad_counts, by = "Quadrant")
+
+	    p_quad <- ggplot(dmr_expr, aes(x = diffMethy, y = log2FoldChange, color = Quadrant)) +
+	                geom_point(alpha = 0.62, size = viz_style$point_md) +
+                geom_hline(yintercept = c(-rna_log2fc_threshold, rna_log2fc_threshold), linetype = "dashed") +
+                geom_vline(xintercept = c(-multiomics_methyl_delta, multiomics_methyl_delta), linetype = "dashed") +
+	                scale_color_manual(values = viz_pal$quadrant) +
+	                 theme_wgbs_classic(base_size = 13) +
+	                labs(title = "DMR vs Expression", x = group_diff_axis_label, y = "Log2FC") +
+	                geom_text(data = quad_labels, aes(x = x, y = y, label = count, color = Quadrant),
+	                inherit.aes = FALSE, size = 5, show.legend = FALSE)
+
+    ggsave("result/8_multiomics/plots/1/quadrant_scatter.pdf", p_quad, width = 7, height = 6, device = cairo_pdf)
+    write_csv(dmr_expr, "result/8_multiomics/tables/1/multiomics_merged.csv")
+  }
+}
+```
+
+```{r}
+# 2 Gene-centric 汇总层与四层甲基化-表达关系
+# ==============================================================================
+# 这里把多个 DMR 对同一基因的映射收敛成 gene-centric 记录，减少后续富集和统计中的重复。
+if(exists("expr_df") && exists("dmr_anno_df") && nrow(dmr_anno_df) > 0) {
+  message("⏳ 构建 gene-centric 汇总层...")
+
+  gene_link_df <- dmr_anno_df %>%
+    filter(!is.na(gene_id_clean), gene_id_clean != "") %>%
+    mutate(
+      annotation_simple = normalize_feature_label(annotation),
+      Layer_Base = derive_feature_layer(annotation)
+    )
+
+  gene_centric_parts <- list(
+    gene_link_df %>% filter(Layer_Base == "Promoter") %>% group_by(gene_id_clean) %>% slice_max_abs("diffMethy") %>% ungroup() %>% mutate(Layer = "Promoter"),
+    gene_link_df %>% filter(Layer_Base == "Gene Body") %>% group_by(gene_id_clean) %>% slice_max_abs("diffMethy") %>% ungroup() %>% mutate(Layer = "Gene Body"),
+    gene_link_df %>% filter(Layer_Base == "Distal") %>% group_by(gene_id_clean) %>% slice_max_abs("diffMethy") %>% ungroup() %>% mutate(Layer = "Distal"),
+    gene_link_df %>% filter(CGI_context != "Open_Sea") %>% group_by(gene_id_clean) %>% slice_max_abs("diffMethy") %>% ungroup() %>% mutate(Layer = "CGI")
+  )
+
+  gene_centric_long <- bind_rows(gene_centric_parts) %>%
+    distinct(gene_id_clean, Layer, .keep_all = TRUE) %>%
+    left_join(expr_df, by = "gene_id_clean") %>%
+    mutate(
+      Layer = factor(Layer, levels = c("Promoter", "Gene Body", "CGI", "Distal")),
+      Quadrant = case_when(
+        diffMethy > multiomics_methyl_delta & log2FoldChange > rna_log2fc_threshold ~ "Hyper-Up",
+        diffMethy < -multiomics_methyl_delta & log2FoldChange > rna_log2fc_threshold ~ "Hypo-Up",
+        diffMethy < -multiomics_methyl_delta & log2FoldChange < -rna_log2fc_threshold ~ "Hypo-Down",
+        diffMethy > multiomics_methyl_delta & log2FoldChange < -rna_log2fc_threshold ~ "Hyper-Down",
+        TRUE ~ "NS"
+      ),
+      CouplingScore = case_when(
+        Layer %in% c("Promoter", "CGI") ~ -diffMethy * log2FoldChange,
+        TRUE ~ diffMethy * log2FoldChange
+      ),
+      MethylationDirection = ifelse(diffMethy > 0, "Hyper", "Hypo")
+    )
+
+  if(!"SYMBOL" %in% colnames(gene_centric_long) || all(is.na(gene_centric_long$SYMBOL))) {
+    tryCatch({
+      gene_map <- bitr(unique(gene_centric_long$gene_id_clean),
+                       fromType = "ENSEMBL", toType = c("SYMBOL", "ENTREZID"),
+                       OrgDb = org.Mm.eg.db)
+      gene_centric_long <- gene_centric_long %>%
+        select(-any_of(c("SYMBOL", "ENTREZID"))) %>%
+        left_join(gene_map, by = c("gene_id_clean" = "ENSEMBL"))
+    }, error = function(e) message("Gene-centric symbol mapping failed: ", e$message))
+  }
+
+  gene_centric_wide <- gene_centric_long %>%
+    select(gene_id_clean, SYMBOL, Layer, diffMethy, CouplingScore, DMR_id) %>%
+    pivot_wider(
+      names_from = Layer,
+      values_from = c(diffMethy, CouplingScore, DMR_id),
+      values_fill = NA
+    )
+
+  write_csv(gene_centric_long, "result/8_multiomics/tables/1/gene_centric_long.csv")
+  write_csv(gene_centric_wide, "result/8_multiomics/tables/1/gene_centric_wide.csv")
+
+  gene_centric_stats <- gene_centric_long %>%
+    filter(!is.na(log2FoldChange), !is.na(diffMethy)) %>%
+    group_by(Layer) %>%
+    summarise(
+      n = n(),
+      spearman_rho = suppressWarnings(cor(diffMethy, log2FoldChange, method = "spearman", use = "complete.obs")),
+      pearson_r = suppressWarnings(cor(diffMethy, log2FoldChange, method = "pearson", use = "complete.obs")),
+      mean_abs_diff = mean(abs(diffMethy), na.rm = TRUE),
+      .groups = "drop"
+    )
+  write_csv(gene_centric_stats, "result/8_multiomics/tables/1/gene_centric_correlation_stats.csv")
+
+  p_gene_centric_scatter <- ggplot(gene_centric_long, aes(x = diffMethy, y = log2FoldChange, color = Quadrant)) +
+    geom_point(alpha = 0.66, size = viz_style$point_md) +
+    geom_hline(yintercept = c(-rna_log2fc_threshold, rna_log2fc_threshold), linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.8)) +
+    geom_vline(xintercept = c(-multiomics_methyl_delta, multiomics_methyl_delta), linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.8)) +
+    facet_wrap(~Layer, scales = "free") +
+    scale_color_manual(values = viz_pal$quadrant) +
+    theme_wgbs_classic(base_size = 13) +
+    labs(title = "Gene-centric Methylation vs Expression", x = group_diff_axis_label, y = "Log2 Fold Change")
+
+  ggsave("result/8_multiomics/plots/2_gene_centric/gene_centric_scatter.pdf",
+         p_gene_centric_scatter, width = 11, height = 7, device = cairo_pdf)
+
+  p_gene_centric_violin <- ggplot(gene_centric_long, aes(x = Layer, y = log2FoldChange, fill = MethylationDirection)) +
+    geom_violin(alpha = 0.22, trim = FALSE, position = position_dodge(width = 0.8)) +
+    geom_boxplot(width = 0.16, outlier.shape = NA, alpha = 0.45, position = position_dodge(width = 0.8)) +
+    geom_jitter(aes(color = MethylationDirection), width = 0.12, size = 1.1, alpha = 0.45, show.legend = FALSE) +
+    scale_fill_manual(values = viz_pal$dmr) +
+    scale_color_manual(values = viz_pal$dmr) +
+    theme_wgbs_classic(base_size = 13) +
+    labs(title = "Expression Distribution across Gene-centric Layers", x = "", y = "Log2 Fold Change")
+
+  ggsave("result/8_multiomics/plots/2_gene_centric/gene_centric_violin.pdf",
+         p_gene_centric_violin, width = 8.5, height = 6, device = cairo_pdf)
+
+  p_gene_centric_count <- gene_centric_long %>%
+    count(Layer, Quadrant) %>%
+    ggplot(aes(x = Layer, y = n, fill = Quadrant)) +
+    geom_col(position = "fill") +
+    scale_fill_manual(values = viz_pal$quadrant) +
+    scale_y_continuous(labels = percent_format(accuracy = 1)) +
+    theme_wgbs_classic(base_size = 13) +
+    labs(title = "Quadrant Composition by Gene-centric Layer", x = "", y = "Percentage")
+
+  ggsave("result/8_multiomics/plots/2_gene_centric/gene_centric_quadrant_composition.pdf",
+         p_gene_centric_count, width = 8, height = 5.5, device = cairo_pdf)
+
+  # 基于排序的 GSEA：一版使用纯甲基化差异，一版使用表达耦合分数
+  gene_centric_meth_rank <- gene_centric_long %>%
+    filter(!is.na(ENTREZID)) %>%
+    group_by(ENTREZID) %>%
+    slice_max_abs("diffMethy") %>%
+    ungroup()
+  if(nrow(gene_centric_meth_rank) > 0) {
+    rank_vec <- gene_centric_meth_rank$diffMethy
+    names(rank_vec) <- gene_centric_meth_rank$ENTREZID
+    rank_vec <- rank_vec[!duplicated(names(rank_vec))]
+    build_gsea_plots(rank_vec,
+                     prefix = "result/8_multiomics/tables/1/gene_centric_methylation",
+                     title_prefix = "Gene-centric Methylation",
+                     plot_prefix = "result/8_multiomics/plots/2_gene_centric/gene_centric_methylation")
+  }
+
+  gene_centric_coupling_rank <- gene_centric_long %>%
+    filter(!is.na(ENTREZID), Layer %in% c("Promoter", "CGI")) %>%
+    group_by(ENTREZID) %>%
+    slice_max_abs("CouplingScore") %>%
+    ungroup()
+  if(nrow(gene_centric_coupling_rank) > 0) {
+    rank_vec <- gene_centric_coupling_rank$CouplingScore
+    names(rank_vec) <- gene_centric_coupling_rank$ENTREZID
+    rank_vec <- rank_vec[!duplicated(names(rank_vec))]
+    build_gsea_plots(rank_vec,
+                     prefix = "result/8_multiomics/tables/1/gene_centric_coupling",
+                     title_prefix = "Gene-centric Coupling",
+                     plot_prefix = "result/8_multiomics/plots/2_gene_centric/gene_centric_coupling")
+  }
+}
+```
+
+```{r}
+# 3 四象限独立富集分析
+# ==============================================================================
+# 这一节把四种表达-甲基化耦合模式拆开分析，便于分别讲故事线。
+# 当前继续保留既有 RNA `pvalue < config$rna_p_threshold` 与 `abs(log2FoldChange) > config$rna_log2fc_threshold` 口径。
+# 最终投稿或严格筛选时，建议在同一位置同时检查 RNA `padj < 0.05`，
+# 富集结果则优先报告 `p.adjust` 或 `qvalue < 0.05`。
+quad_levels <- c("Hyper-Up", "Hypo-Up", "Hypo-Down", "Hyper-Down")
+
+if(!exists("dmr_expr") || is.null(dmr_expr) || nrow(dmr_expr) == 0) {
+  message("⚠️ dmr_expr 不存在或为空，跳过四象限富集分析")
+} else {
+  quadrant_enrichment_results <- lapply(quad_levels, function(quad) {
+    message("   👉 正在分析象限: ", quad)
+    quad_dir <- file.path("result/8_multiomics/plots/3_quadrant_enrichment", quad)
+    sub_df <- dmr_expr %>%
+      filter(
+        Quadrant == quad,
+        pvalue < rna_p_threshold,
+        abs(log2FoldChange) > rna_log2fc_threshold
+      )
+
+    if(nrow(sub_df) == 0) {
+      write_csv(
+        tibble(Quadrant = quad, status = "skipped", message = "no genes passed RNA pvalue/log2FC filters"),
+        file.path("result/8_multiomics/tables/1", paste0("quadrant_enrichment_status_", enrichment_context_slug(quad), ".csv"))
+      )
+      return(NULL)
+    }
+
+    theme_regex <- if(quad %in% config$enrichment_theme_quadrants) config$enrichment_theme_regex else NULL
+    run_ora_enrichment_bundle(
+      input_df = sub_df,
+      context_name = quad,
+      plot_dir = quad_dir,
+      table_dir = "result/8_multiomics/tables/1",
+      file_prefix = "quadrant_",
+      context_col = "Quadrant",
+      p_threshold = enrichment_p_threshold,
+      theme_regex = theme_regex,
+      theme_label = "metabolism_insulin"
+    )
+  })
+  names(quadrant_enrichment_results) <- quad_levels
+}
+```
+
+```{r}
+# 7 四象限比较热图 / 三层流向图 / Top DMR 热图
+# ==============================================================================
+# 这一节更偏结果展示层：把分散的富集结果压成热图、alluvial 和 ComplexHeatmap。
+
+# 四象限富集比较热图
+quad_levels <- c("Hyper-Up", "Hypo-Up", "Hypo-Down", "Hyper-Down")
+
+quad_go_df <- bind_rows(lapply(quad_levels, function(q) {
+  f <- paste0("result/8_multiomics/tables/1/quadrant_go_bp_", q, ".csv")
+  if(file.exists(f)) {
+    df <- suppressWarnings(read.csv(f, stringsAsFactors = FALSE))
+    if(nrow(df) > 0) {
+      df$Quadrant <- q
+      return(df)
+    }
+  }
+  NULL
+}))
+
+quad_kegg_df <- bind_rows(lapply(quad_levels, function(q) {
+  f <- paste0("result/8_multiomics/tables/1/quadrant_kegg_", q, ".csv")
+  if(file.exists(f)) {
+    df <- suppressWarnings(read.csv(f, stringsAsFactors = FALSE))
+    if(nrow(df) > 0) {
+      df$Quadrant <- q
+      return(df)
+    }
+  }
+  NULL
+}))
+
+if(nrow(quad_go_df) > 0 && "pvalue" %in% colnames(quad_go_df)) {
+  save_enrichment_compare_heatmap(
+    df = quad_go_df %>% filter(pvalue < enrichment_p_threshold),
+    context_col = "Quadrant",
+    out_pdf = "result/8_multiomics/plots/3_quadrant_enrichment/go_bp_quadrant_heatmap.pdf",
+    out_csv = "result/8_multiomics/tables/1/go_bp_quadrant_heatmap.csv",
+    title = "GO BP Enrichment across Expression-Methylation Quadrants",
+    top_n = 30,
+    width = 11, height = 9
+  )
+}
+
+if(nrow(quad_kegg_df) > 0 && "pvalue" %in% colnames(quad_kegg_df)) {
+  save_enrichment_compare_heatmap(
+    df = quad_kegg_df %>% filter(pvalue < enrichment_p_threshold),
+    context_col = "Quadrant",
+    out_pdf = "result/8_multiomics/plots/3_quadrant_enrichment/kegg_quadrant_heatmap.pdf",
+    out_csv = "result/8_multiomics/tables/1/kegg_quadrant_heatmap.csv",
+    title = "KEGG Enrichment across Expression-Methylation Quadrants",
+    top_n = 25,
+    width = 10, height = 8
+  )
+}
+
+# 三层流向图：基因组元件 -> Hyper/Hypo -> RNA 四象限
+if(exists("dmr_expr") && nrow(dmr_expr) > 0) {
+  flow3_df <- dmr_expr %>%
+    mutate(
+      annotation_simple = factor(normalize_feature_label(annotation), levels = feature_levels_main)
+    ) %>%
+    filter(Quadrant != "NS") %>%
+    count(annotation_simple, DMR_type, Quadrant, name = "n")
+
+  if(nrow(flow3_df) > 0) {
+    p_alluvial3 <- ggplot(flow3_df,
+                          aes(axis1 = annotation_simple, axis2 = DMR_type, axis3 = Quadrant, y = n)) +
+      geom_alluvium(aes(fill = Quadrant), width = 1/5, alpha = 0.78) +
+      geom_stratum(width = 1/5, color = viz_pal$neutral_light, fill = viz_pal$neutral_light) +
+      geom_text(stat = "stratum", aes(label = after_stat(stratum)), size = 3) +
+      scale_fill_manual(values = viz_pal$quadrant, drop = FALSE) +
+      scale_x_discrete(limits = c("Feature", "Methylation", "Quadrant"), expand = c(0.05, 0.05)) +
+      theme_wgbs_minimal(base_size = 12) +
+      labs(title = "Feature -> Methylation Direction -> RNA Quadrant", x = "", y = "DMR Count", fill = "Quadrant")
+
+    ggsave("result/8_multiomics/plots/1/three_layer_alluvial.pdf", p_alluvial3, width = 10, height = 6.5, device = cairo_pdf)
+  }
+}
+
+# Top DMR ComplexHeatmap
+if(exists("dmr_expr") && nrow(dmr_expr) > 0) {
+  ensure_obj_cpg_loaded()
+  top_dmr_meta <- dmr_expr %>%
+    mutate(
+      annotation_simple = factor(normalize_feature_label(annotation), levels = feature_levels_main),
+      CGI_context = replace_na(CGI_context, "Open_Sea"),
+      Quadrant = replace_na(Quadrant, "NS")
+    ) %>%
+    group_by(DMR_id) %>%
+    slice_max_abs("diffMethy") %>%
+    ungroup() %>%
+    arrange(desc(abs(diffMethy))) %>%
+    slice_head(n = 150)
+
+  if(nrow(top_dmr_meta) > 1) {
+    top_dmr_gr <- dmr_gr[match(top_dmr_meta$DMR_id, mcols(dmr_gr)$DMR_id)]
+    top_dmr_status_file <- "result/8_multiomics/tables/1/top_dmr_heatmap_status.csv"
+    top_region_meth <- build_region_sample_methylation(
+      obj.cpg,
+      top_dmr_gr,
+      sample_ids_arg = sample_ids,
+      config_arg = config,
+      region_ids = top_dmr_meta$DMR_id
+    )
+    write_csv(top_region_meth$support, "result/8_multiomics/tables/1/top_dmr_heatmap_region_support.csv")
+
+    top_mat <- top_region_meth$matrix
+    top_meta_matched <- top_dmr_meta[match(rownames(top_mat), top_dmr_meta$DMR_id), ]
+    group1_present <- rowSums(is.finite(top_mat[, config$group1_idx, drop = FALSE])) > 0
+    group2_present <- rowSums(is.finite(top_mat[, config$group2_idx, drop = FALSE])) > 0
+    keep_rows <- !is.na(top_meta_matched$DMR_id) & rowSums(is.finite(top_mat)) >= 2 & group1_present & group2_present
+
+    if(sum(keep_rows) > 1) {
+      top_mat <- top_mat[keep_rows, , drop = FALSE]
+      top_meta_matched <- top_meta_matched[keep_rows, , drop = FALSE]
+
+      if(nrow(top_mat) > 1) {
+        rownames(top_mat) <- make.unique(ifelse(
+          !is.na(top_meta_matched$SYMBOL) & top_meta_matched$SYMBOL != "",
+          paste0(top_meta_matched$DMR_id, "|", top_meta_matched$SYMBOL),
+          top_meta_matched$DMR_id
+        ))
+
+        feature_levels <- feature_levels_main[feature_levels_main %in% unique(as.character(top_meta_matched$annotation_simple))]
+        feature_cols <- resolve_named_colors(
+          feature_levels,
+          viz_pal$feature,
+          fallback_colors = viz_pal$feature_accent,
+          default_color = viz_pal$neutral_mid
+        )
+        cgi_levels <- unique(top_meta_matched$CGI_context)
+        cgi_cols <- resolve_named_colors(
+          cgi_levels,
+          viz_pal$cgi,
+          fallback_colors = viz_pal$feature_accent,
+          default_color = viz_pal$neutral_mid
+        )
+
+        sample_ha <- HeatmapAnnotation(
+          Group = sample_group_factor(sample_ids, config),
+          col = list(Group = viz_pal$group)
+        )
+
+        row_ha <- rowAnnotation(
+          DMR_Type = top_meta_matched$DMR_type,
+          Feature = top_meta_matched$annotation_simple,
+          CGI = top_meta_matched$CGI_context,
+          Quadrant = top_meta_matched$Quadrant,
+          col = list(
+            DMR_Type = viz_pal$dmr,
+            Feature = feature_cols,
+            CGI = cgi_cols,
+            Quadrant = viz_pal$quadrant
+          ),
+          annotation_name_gp = gpar(fontsize = 9)
+        )
+
+        write_csv(top_meta_matched, "result/8_multiomics/tables/1/top_dmr_heatmap_metadata.csv")
+
+        top_mat_cluster <- top_mat
+        top_mat_bad <- !is.finite(top_mat_cluster)
+        top_mat_imputed_n <- sum(top_mat_bad)
+        if(top_mat_imputed_n > 0) {
+          top_row_medians <- apply(top_mat_cluster, 1, function(x) {
+            finite_x <- x[is.finite(x)]
+            if(length(finite_x) == 0) NA_real_ else stats::median(finite_x)
+          })
+          top_mat_cluster[top_mat_bad] <- top_row_medians[row(top_mat_cluster)[top_mat_bad]]
+        }
+        if(any(!is.finite(top_mat_cluster))) {
+          global_median <- stats::median(top_mat_cluster[is.finite(top_mat_cluster)], na.rm = TRUE)
+          if(!is.finite(global_median)) global_median <- 0
+          top_mat_cluster[!is.finite(top_mat_cluster)] <- global_median
+        }
+        top_row_cluster <- tryCatch(
+          stats::hclust(stats::dist(top_mat_cluster)),
+          error = function(e) {
+            message("Top DMR heatmap row clustering skipped: ", e$message)
+            FALSE
+          }
+        )
+        write_csv(
+          tibble(
+            step = "top_dmr_heatmap",
+            status = if(identical(top_row_cluster, FALSE)) "cluster_rows_skipped" else "ok",
+            n_regions = nrow(top_mat),
+            n_samples = ncol(top_mat),
+            n_nonfinite_display_values = top_mat_imputed_n,
+            message = "Display matrix keeps NA values; row clustering uses row-median-imputed values."
+          ),
+          top_dmr_status_file
+        )
+
+        ht <- Heatmap(
+          top_mat,
+          name = "Meth(%)",
+          top_annotation = sample_ha,
+          left_annotation = row_ha,
+          cluster_columns = FALSE,
+          cluster_rows = top_row_cluster,
+          show_row_names = FALSE,
+          show_column_names = TRUE,
+          col = viz_pal$heat_meth_top_fun,
+          na_col = viz_pal$neutral_light,
+          column_names_gp = gpar(fontsize = 10),
+          heatmap_legend_param = list(title_position = "topcenter")
+        )
+        draw_complex_heatmap_pdf(
+          ht,
+          out_pdf = "result/8_multiomics/plots/1/top_dmr_complexheatmap.pdf",
+          width = 11,
+          height = 12
+        )
+      }
+    } else {
+      write_csv(tibble(step = "region_sample_matrix", status = "skipped", message = "fewer than two Top DMRs have methylation support in both groups"), top_dmr_status_file)
+    }
+  }
+}
+```
+
+```{r}
+# 8 KEGG 比较分析 (WGBS vs RNA-seq)
+# ==============================================================================
+# 这里把 WGBS 与 RNA 两套 KEGG 结果并排比较，帮助区分一致通路与互补通路。
+message("⏳ [8] 正在进行 WGBS 与 RNA-seq KEGG 通路比较...")
+
+# 定义文件路径
+wgbs_kegg_file <- config$wgbs_kegg_file
+rna_kegg_file  <- config$rna_kegg_file
+
+# 读取数据
+if(file.exists(wgbs_kegg_file) && file.exists(rna_kegg_file)) {
+  wgbs_kegg <- read.csv(wgbs_kegg_file, stringsAsFactors = FALSE)
+  rna_kegg  <- read.csv(rna_kegg_file, stringsAsFactors = FALSE)
+
+  # 过滤显著通路 (pvalue <= enrichment_p_threshold)
+  wgbs_kegg <- wgbs_kegg[wgbs_kegg$pvalue <= enrichment_p_threshold, ]
+  rna_kegg  <- rna_kegg[rna_kegg$pvalue <= enrichment_p_threshold, ]
+
+  # 辅助函数：计算 FoldEnrichment (如果不存在)
+  calc_enrichment <- function(df) {
+    if(!"FoldEnrichment" %in% colnames(df)) {
+      if(all(c("GeneRatio", "BgRatio") %in% colnames(df))) {
+        # 解析分数 "k/n"
+        parse_ratio <- function(ratio) {
+          sapply(ratio, function(x) {
+            parts <- as.numeric(unlist(strsplit(x, "/")))
+            if(length(parts) == 2) return(parts[1]/parts[2]) else return(NA)
+          })
+        }
+        df$FoldEnrichment <- parse_ratio(df$GeneRatio) / parse_ratio(df$BgRatio)
+      } else {
+        df$FoldEnrichment <- NA
+      }
+    }
+    return(df)
+  }
+
+  wgbs_kegg <- calc_enrichment(wgbs_kegg)
+  rna_kegg  <- calc_enrichment(rna_kegg)
+
+  # 寻找共同通路
+  common_pathways <- intersect(wgbs_kegg$Description, rna_kegg$Description)
+  message("   WGBS 与 RNA-seq 共同 KEGG 通路数量: ", length(common_pathways))
+
+  if(length(common_pathways) > 0) {
+    # 构建比较数据框
+    comparison_df <- data.frame()
+
+    for(pathway in common_pathways) {
+      row_wgbs <- wgbs_kegg[wgbs_kegg$Description == pathway, ]
+      row_rna  <- rna_kegg[rna_kegg$Description == pathway, ]
+
+      # 取最显著的一行 (防止重复)
+      if(nrow(row_wgbs) > 1) row_wgbs <- row_wgbs[which.min(row_wgbs$pvalue), ]
+      if(nrow(row_rna) > 1)  row_rna  <- row_rna[which.min(row_rna$pvalue), ]
+
+      comparison_df <- rbind(comparison_df, data.frame(
+        Pathway = pathway,
+        WGBS_pvalue = row_wgbs$pvalue,
+        WGBS_FoldEnrichment = row_wgbs$FoldEnrichment,
+        WGBS_Count = row_wgbs$Count,
+        RNA_pvalue = row_rna$pvalue,
+        RNA_FoldEnrichment = row_rna$FoldEnrichment,
+        RNA_Count = row_rna$Count
+      ))
+    }
+
+    # 保存比较结果
+    write.csv(comparison_df, "result/8_multiomics/tables/1/wgbs_rna_kegg_comparison.csv", row.names = FALSE)
+
+    # 绘图 (散点图)
+    p_comp <- ggplot(comparison_df, aes(x = WGBS_FoldEnrichment, y = RNA_FoldEnrichment)) +
+      geom_point(aes(size = -log10(WGBS_pvalue), color = -log10(RNA_pvalue)), alpha = 0.8) +
+      geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.75)) +
+      geom_text_repel(aes(label = ifelse(WGBS_pvalue < enrichment_p_threshold & RNA_pvalue < enrichment_p_threshold, Pathway, "")),
+                      size = 3, max.overlaps = 10) +
+      scale_size_continuous(name = "-log10(WGBS p-value)", range = c(2, 8)) +
+      scale_color_wgbs_ryb(name = "-log10(RNA p-value)") +
+      labs(
+        title = "KEGG Pathway Comparison: WGBS vs RNA-seq",
+        subtitle = paste("Common Pathways:", length(common_pathways)),
+        x = "WGBS Fold Enrichment",
+        y = "RNA-seq Fold Enrichment"
+      ) +
+      theme_wgbs_classic(base_size = 12)
+
+    ggsave("result/8_multiomics/plots/1/wgbs_rna_kegg_scatter.pdf", p_comp, width = 8, height = 6, device = cairo_pdf)
+
+    # 绘图 (比较点图 - 仿照 RNA-seq step6)
+
+    # 筛选前 15 个通路 (按平均 FoldEnrichment 降序筛选)
+    top_n <- 15
+    comparison_df_top <- comparison_df %>%
+      mutate(avg_enrich = (WGBS_FoldEnrichment + RNA_FoldEnrichment) / 2) %>%
+      arrange(desc(avg_enrich)) %>%
+      head(top_n)
+
+    # 转换为长格式以便绘图
+    plot_df <- comparison_df_top %>%
+      select(Pathway, WGBS_FoldEnrichment, RNA_FoldEnrichment, WGBS_pvalue, RNA_pvalue) %>%
+      pivot_longer(
+        cols = -Pathway,
+        names_to = c("Omics", ".value"),
+        names_pattern = "(.*)_(.*)"
+      )
+
+    # 设置 Omics 因子水平：WGBS 在前，RNA 在后
+    plot_df$Omics <- factor(plot_df$Omics, levels = c("WGBS", "RNA"))
+
+    # 截断过长的通路名称
+    plot_df$Pathway_short <- ifelse(
+      nchar(plot_df$Pathway) > 50,
+      paste0(substr(plot_df$Pathway, 1, 50), "..."),
+      plot_df$Pathway
+    )
+
+    # 排序：按平均 FoldEnrichment 升序排序 (以便在图中从下到上显示为：小->大)
+    pathway_order <- comparison_df_top %>%
+      mutate(avg_enrich = (WGBS_FoldEnrichment + RNA_FoldEnrichment) / 2) %>%
+      arrange(avg_enrich) %>%
+      pull(Pathway)
+
+    p_dot <- ggplot(plot_df, aes(x = Omics, y = factor(Pathway, levels = pathway_order))) +
+      geom_point(aes(size = FoldEnrichment, color = -log10(pvalue)), alpha = 0.8) +
+      scale_size_continuous(name = "Fold Enrichment", range = c(3, 10)) +
+      scale_color_wgbs_ryb(name = "-log10(p-value)") +
+      labs(
+        title = "KEGG Pathway Enrichment Comparison",
+        subtitle = paste("Common Pathways:", length(unique(plot_df$Pathway))),
+        x = "Omics Type",
+        y = "KEGG Pathway"
+      ) +
+      theme_wgbs_minimal(base_size = 12) +
+      theme(axis.y = element_text(size = 10, color = viz_pal$neutral_dark), legend.position = "right")
+
+    # 动态调整高度
+    plot_height <- max(6, 0.4 * length(unique(plot_df$Pathway)))
+    ggsave("result/8_multiomics/plots/1/wgbs_rna_kegg_dotplot_compare.pdf", p_dot, width = 10, height = plot_height, device = cairo_pdf)
+
+    message("✅ KEGG 比较分析完成。")
+  } else {
+    message("⚠️ 未找到共同的 KEGG 通路。")
+  }
+
+} else {
+  message("❌ 无法找到 KEGG 结果文件，跳过 KEGG 比较分析。")
+  if(!file.exists(wgbs_kegg_file)) message("   缺失: ", wgbs_kegg_file)
+  if(!file.exists(rna_kegg_file))  message("   缺失: ", rna_kegg_file)
+}
+```
+
+```{r}
+# ==============================================================================
+# 9 ATAC-seq 整合分析
+# ==============================================================================
+# 如果有同组织的 ATAC-seq 数据，可分析 DMR 与染色质开放区域的重叠，
+# 以及甲基化-开放性-表达三维关联。
+message("⏳ [9] ATAC-seq 整合分析...")
+
+atac_peak_dir <- config$atac_peak_dir
+atac_diff_dir <- config$atac_diff_dir
+
+# 检查 ATAC-seq 数据是否存在
+atac_peak_file <- NULL
+atac_diff_file <- NULL
+
+# 搜索 ATAC-seq peak 文件
+peak_candidates <- c(
+  file.path(atac_peak_dir, "peaks.narrowPeak"),
+  file.path(atac_peak_dir, "peaks.xls"),
+  file.path(atac_peak_dir, "1.peak_calling", "peaks.narrowPeak"),
+  file.path(atac_peak_dir, "1.peak_calling", "consensus_peaks.bed")
+)
+for(f in peak_candidates) {
+  if(file.exists(f)) { atac_peak_file <- f; break }
+}
+
+# 搜索 ATAC-seq 差异 peak 文件
+diff_candidates <- c(
+  file.path(atac_diff_dir, "differential_peaks.csv"),
+  file.path(atac_diff_dir, "differential_peaks.tsv"),
+  file.path(atac_diff_dir, "diff_bind_results.csv"),
+  file.path(atac_diff_dir, "diff_peaks.bed")
+)
+for(f in diff_candidates) {
+  if(file.exists(f)) { atac_diff_file <- f; break }
+}
+
+if(!is.null(atac_peak_file) || !is.null(atac_diff_file)) {
+  message("   找到 ATAC-seq 数据: peak=", atac_peak_file, " diff=", atac_diff_file)
+
+  ensure_step_dirs("result/8_multiomics/plots/4_atac_integration", "result/8_multiomics/tables/2_atac")
+
+  # 加载 ATAC peak
+  atac_peaks <- NULL
+  if(!is.null(atac_peak_file)) {
+    tryCatch({
+      if(grepl("\\.narrowPeak$", atac_peak_file)) {
+        atac_peaks <- read_tsv(atac_peak_file,
+          col_names = c("chr", "start", "end", "name", "score", "strand", "signalValue", "pValue", "qValue", "peak"),
+          show_col_types = FALSE)
+      } else if(grepl("\\.bed$", atac_peak_file, ignore.case = TRUE)) {
+        atac_peaks <- read_tsv(atac_peak_file, show_col_types = FALSE)
+      } else {
+        atac_peaks <- read_tsv(atac_peak_file, show_col_types = FALSE)
+      }
+      atac_peaks <- atac_peaks %>%
+        mutate(chr = standardize_chr_style(as.character(chr), target_has_chr = TRUE)) %>%
+        filter(chr %in% mouse_main_chr_levels(TRUE))
+    }, error = function(e) {
+      message("   ATAC peak 读取失败: ", e$message)
+      atac_peaks <<- NULL
+    })
+  }
+
+  # 加载差异 ATAC peak
+  atac_diff <- NULL
+  if(!is.null(atac_diff_file)) {
+    tryCatch({
+      atac_diff <- read_csv(atac_diff_file, show_col_types = FALSE)
+    }, error = function(e) {
+      atac_diff <- read_tsv(atac_diff_file, show_col_types = FALSE)
+    })
+  }
+
+  # DMR 与 ATAC peak 重叠分析
+  if(!is.null(atac_peaks) && nrow(atac_peaks) > 0) {
+    atac_gr <- GRanges(
+      seqnames = atac_peaks$chr,
+      ranges = IRanges(start = atac_peaks$start, end = atac_peaks$end)
+    )
+    atac_gr <- filter_gr_to_main_chr(atac_gr)
+
+    # DMR 与 ATAC peak 重叠
+    dmr_atac_overlap <- findOverlaps(dmr_gr, atac_gr, ignore.strand = TRUE)
+    dmr_atac_summary <- tibble(
+      total_dmr = length(dmr_gr),
+      dmr_with_atac_peak = length(unique(queryHits(dmr_atac_overlap))),
+      overlap_pct = round(length(unique(queryHits(dmr_atac_overlap))) / max(1, length(dmr_gr)) * 100, 2)
+    )
+    write_csv(dmr_atac_summary, "result/8_multiomics/tables/2_atac/dmr_atac_overlap_summary.csv")
+
+    if(length(dmr_atac_overlap) > 0) {
+      dmr_atac_hits <- tibble(
+        DMR_id = mcols(dmr_gr)$DMR_id[queryHits(dmr_atac_overlap)],
+        DMR_type = mcols(dmr_gr)$DMR_type[queryHits(dmr_atac_overlap)],
+        diffMethy = mcols(dmr_gr)$diffMethy[queryHits(dmr_atac_overlap)]
+      )
+      write_csv(dmr_atac_hits, "result/8_multiomics/tables/2_atac/dmr_atac_overlap.csv")
+
+      # 可视化: DMR 与 ATAC peak 重叠的甲基化方向
+      p_dmr_atac <- ggplot(dmr_atac_hits, aes(x = DMR_type, fill = DMR_type)) +
+        geom_bar(width = 0.6) +
+        scale_fill_manual(values = viz_pal$dmr) +
+        labs(title = "DMRs Overlapping ATAC-seq Peaks", x = "", y = "Count", fill = "") +
+        theme_wgbs_bw(base_size = 12)
+
+      ggsave("result/8_multiomics/plots/4_atac_integration/dmr_atac_overlap_barplot.pdf",
+             p_dmr_atac, width = 6, height = 5, device = cairo_pdf)
+    }
+
+    # 甲基化-开放性-表达三维关联 (需要 RNA-seq 数据)
+    if(exists("dmr_expr") && !is.null(dmr_expr) && nrow(dmr_expr) > 0 && length(dmr_atac_overlap) > 0) {
+      dmr_in_atac <- unique(mcols(dmr_gr)$DMR_id[queryHits(dmr_atac_overlap)])
+      dmr_expr_atac <- dmr_expr %>%
+        filter(DMR_id %in% dmr_in_atac) %>%
+        mutate(ATAC_overlap = "Yes") %>%
+        bind_rows(
+          dmr_expr %>%
+            filter(!DMR_id %in% dmr_in_atac) %>%
+            mutate(ATAC_overlap = "No")
+        )
+
+      # 三维关联散点图
+      p_3way <- ggplot(dmr_expr_atac, aes(x = diffMethy, y = log2FoldChange, color = ATAC_overlap)) +
+        geom_point(alpha = 0.55, size = viz_style$point_md) +
+        geom_hline(yintercept = c(-rna_log2fc_threshold, rna_log2fc_threshold), linetype = "dashed", alpha = 0.5) +
+        geom_vline(xintercept = c(-multiomics_methyl_delta, multiomics_methyl_delta), linetype = "dashed", alpha = 0.5) +
+        scale_color_manual(values = c("Yes" = unname(viz_pal$accent["teal"]), "No" = viz_pal$neutral_mid)) +
+        labs(title = "Methylation vs Expression (colored by ATAC overlap)",
+             x = group_diff_axis_label, y = "Log2FC", color = "ATAC Peak") +
+        theme_wgbs_bw(base_size = 12)
+
+      ggsave("result/8_multiomics/plots/4_atac_integration/methylation_expression_atac.pdf",
+             p_3way, width = 8, height = 6, device = cairo_pdf)
+    }
+  }
+
+  # 差异 ATAC peak 与 DMR 的重叠
+  if(!is.null(atac_diff) && nrow(atac_diff) > 0) {
+    # 尝试构建差异 peak GRanges
+    diff_atac_gr <- tryCatch({
+      chr_col <- first_existing_col(atac_diff, c("chr", "seqnames", "chrom"))
+      start_col <- first_existing_col(atac_diff, c("start", "start_pos"))
+      end_col <- first_existing_col(atac_diff, c("end", "end_pos"))
+      if(is.na(chr_col) || is.na(start_col) || is.na(end_col)) stop("no coord cols")
+
+      GRanges(
+        seqnames = standardize_chr_style(as.character(atac_diff[[chr_col]]), target_has_chr = TRUE),
+        ranges = IRanges(start = as.integer(atac_diff[[start_col]]), end = as.integer(atac_diff[[end_col]]))
+      )
+    }, error = function(e) NULL)
+
+    if(!is.null(diff_atac_gr) && length(diff_atac_gr) > 0) {
+      diff_atac_gr <- filter_gr_to_main_chr(diff_atac_gr)
+      diff_atac_dmr <- findOverlaps(diff_atac_gr, dmr_gr, ignore.strand = TRUE)
+      message("   差异 ATAC peak 与 DMR 重叠数: ", length(diff_atac_dmr))
+    }
+  }
+} else {
+  message("   ⚠️ 未找到 ATAC-seq 数据，跳过 ATAC 整合分析")
+  message("   提示: 如有 ATAC-seq 数据，请将路径配置到 config$atac_peak_dir 和 config$atac_diff_dir")
+}
+```

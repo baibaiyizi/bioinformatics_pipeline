@@ -1,0 +1,573 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 6: 全基因组上下文分析
+# ==============================================================================
+# 这一节把分析视角从离散 DMR 拉回到全基因组背景，补充大尺度甲基化图景。
+
+ensure_step_dirs(
+  "result/6_genomecontext/plots/1",
+  "result/6_genomecontext/plots/2_segmentation",
+  "result/6_genomecontext/tables/1"
+)
+
+ensure_dmr_outputs_loaded()
+
+# ==============================================================================
+# 1 全基因组精细元件甲基化趋势 (Metagene Profile)
+# ==============================================================================
+# 这里的重点不是看单个基因，而是比较不同功能元件上的平均甲基化轮廓。
+# 新增的淡色底块只负责提示 feature 分区，主信息仍然是两组样本的平均曲线。
+message("⏳ [1] 正在进行全基因组多元件甲基化趋势分析 (Upstream-5' UTR-Exon-Intron-3' UTR-Downstream)...")
+
+# 重要：TxDb 内部依赖 SQLite 连接；如果对象来自 session 恢复/缓存，连接可能已失效，
+# 从而触发 RSQLite 的 `bad_weak_ptr` 级别崩溃。
+# 这里强制从 sqlite 重新加载，保证连接有效。
+txdb <- load_main_chr_txdb(config$gtf_file)
+
+# 1. 定义提取基因组元件的函数
+get_features <- function(txdb) {
+  list(
+    Upstream   = promoters(txdb, upstream = config$genome_context_upstream_width, downstream = 0),
+    `5' UTR`   = unlist(fiveUTRsByTranscript(txdb)),
+    Exon       = unlist(cdsBy(txdb, by = "tx")),
+    Intron     = unlist(intronsByTranscript(txdb)),
+    `3' UTR`   = unlist(threeUTRsByTranscript(txdb)),
+    Downstream = {
+      tx <- transcripts(txdb)
+      # 正链：结束位点后指定窗口
+      pos <- tx[strand(tx) == "+"]
+      ranges(pos) <- IRanges(end(pos) + 1, width = config$genome_context_upstream_width)
+      # 负链：开始位点前指定窗口
+      neg <- tx[strand(tx) == "-"]
+      ranges(neg) <- IRanges(start(neg) - config$genome_context_upstream_width, width = config$genome_context_upstream_width)
+      c(pos, neg)
+    }
+  )
+}
+
+features_list <- get_features(txdb)
+
+# 2. 准备甲基化数据 (计算组均值)
+# 全局 profile 不使用 methylKit::unite() 的所有样本交集，以免低覆盖样本把背景趋势压成空图。
+ensure_obj_cpg_loaded()
+methyl_group_cols <- c(config$group1_name, config$group2_name)
+if(!exists("meth_raw_dt", inherits = FALSE)) {
+  meth_raw_dt <- build_sample_methylation_dt(obj.cpg, sample_ids, config)
+}
+meth_gr_mean <- build_group_mean_methyl_gr(
+  obj_list = obj.cpg,
+  sample_ids_arg = sample_ids,
+  config_arg = config,
+  meth_raw_dt = meth_raw_dt
+)
+meth_gr_sites <- GRanges(
+  seqnames = meth_raw_dt$chr,
+  ranges = IRanges(start = meth_raw_dt$start, end = meth_raw_dt$end),
+  strand = meth_raw_dt$strand
+)
+mcols(meth_gr_sites) <- DataFrame(
+  Sample = meth_raw_dt$Sample,
+  Group = meth_raw_dt$Group,
+  Methylation = meth_raw_dt$Methylation
+)
+meth_gr_sites <- filter_gr_to_main_chr(meth_gr_sites)
+
+# 3. 定义分箱计算函数 (Binning Function)
+empty_bin_summary <- function() {
+  tibble(
+    Feature = character(),
+    Bin = integer(),
+    Group = character(),
+    Methylation = numeric(),
+    SD_sample = numeric(),
+    n_samples = integer(),
+    n_cpg_sites = integer(),
+    n_cpg_records = integer()
+  )
+}
+
+complete_bin_support <- function(profile_df, feature_order, group_cols, offsets, n_bins = 20) {
+  profile_df %>%
+    mutate(Feature = as.character(Feature), Group = as.character(Group)) %>%
+    complete(Feature = feature_order, Bin = seq_len(n_bins), Group = group_cols) %>%
+    mutate(
+      n_samples = replace_na(n_samples, 0L),
+      n_cpg_sites = replace_na(n_cpg_sites, 0L),
+      n_cpg_records = replace_na(n_cpg_records, 0L),
+      x_cont = Bin + offsets[Feature],
+      Feature = factor(Feature, levels = feature_order),
+      Group = factor(Group, levels = group_cols)
+    )
+}
+
+calculate_bins <- function(feature_gr, meth_site_gr, n_bins = 20, label = "") {
+  if(length(feature_gr) == 0 || length(meth_site_gr) == 0) {
+    return(empty_bin_summary())
+  }
+  # 找到重叠
+  ov <- findOverlaps(meth_site_gr, feature_gr, ignore.strand = TRUE)
+  if(length(ov) == 0) {
+    return(empty_bin_summary())
+  }
+  hit_meth <- meth_site_gr[queryHits(ov)]
+  hit_feat <- feature_gr[subjectHits(ov)]
+  
+  # 计算相对位置 (0-1)
+  # 负链基因从 end 向 start 计算，正链从 start 向 end 计算
+  rel_pos <- ifelse(as.character(strand(hit_feat)) == "-",
+                    (end(hit_feat) - start(hit_meth)) / width(hit_feat),
+                    (start(hit_meth) - start(hit_feat)) / width(hit_feat))
+  
+  # 修正边界并在 1 到 n_bins 之间分箱
+  rel_pos <- pmax(0, pmin(1, rel_pos))
+  bin_idx <- ceiling(rel_pos * n_bins)
+  bin_idx[bin_idx == 0] <- 1 # 修正0值为第1个bin
+  
+  # 先按样本在每个 bin 内求平均，再按组汇总，避免高覆盖样本/区域直接主导组均值。
+  hit_meta <- as_tibble(as.data.frame(mcols(hit_meth)))
+  df <- tibble(
+    Feature = label,
+    Bin = bin_idx,
+    Sample = hit_meta$Sample,
+    Group = hit_meta$Group,
+    Methylation = hit_meta$Methylation,
+    CpG_id = paste(as.character(seqnames(hit_meth)), start(hit_meth), end(hit_meth), sep = ":")
+  ) %>%
+    filter(is.finite(Methylation))
+
+  if(nrow(df) == 0) {
+    return(empty_bin_summary())
+  }
+
+  sample_bin_df <- df %>%
+    group_by(Feature, Bin, Group, Sample) %>%
+    summarise(
+      Sample_Methylation = mean(Methylation, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    filter(is.finite(Sample_Methylation))
+
+  support_df <- df %>%
+    group_by(Feature, Bin, Group) %>%
+    summarise(
+      n_samples = n_distinct(Sample),
+      n_cpg_sites = n_distinct(CpG_id),
+      n_cpg_records = n(),
+      .groups = "drop"
+    )
+
+  df_summ <- sample_bin_df %>%
+    group_by(Feature, Bin, Group) %>%
+    summarise(
+      Methylation = mean(Sample_Methylation, na.rm = TRUE),
+      SD_sample = sd(Sample_Methylation, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    left_join(support_df, by = c("Feature", "Bin", "Group"))
+  
+  return(df_summ)
+}
+
+# 步骤 4. 执行计算 (Metagene)
+plot_data_meta <- list()
+feature_order_meta <- profile_segment_levels
+
+message("   正在计算各元件 Bin 分布...")
+pb <- txtProgressBar(min = 0, max = length(feature_order_meta), style = 3)
+for(i in seq_along(feature_order_meta)) {
+  ft <- feature_order_meta[i]
+  # 过滤掉空的GRanges以防报错
+  if(length(features_list[[ft]]) > 0) {
+    res <- calculate_bins(features_list[[ft]], meth_gr_sites, n_bins = 20, label = ft)
+    plot_data_meta[[ft]] <- res
+  }
+  setTxtProgressBar(pb, i)
+}
+close(pb)
+
+# 4. 合并数据与绘图 (Metagene)
+final_df_meta <- bind_rows(plot_data_meta)
+# 设置X轴偏移量：每个区域20个bin
+offsets_meta <- c("Upstream" = 0, "5' UTR" = 20, "Exon" = 40, "Intron" = 60, "3' UTR" = 80, "Downstream" = 100)
+
+final_df_meta <- complete_bin_support(final_df_meta, feature_order_meta, methyl_group_cols, offsets_meta)
+write_csv(final_df_meta, "result/6_genomecontext/tables/1/metagene_profile_bin_support.csv")
+
+feature_bg_meta <- tibble(
+  Feature = feature_order_meta,
+  xmin = c(0.5, 20.5, 40.5, 60.5, 80.5, 100.5),
+  xmax = c(20.5, 40.5, 60.5, 80.5, 100.5, 120.5)
+)
+feature_bg_cols_meta <- resolve_named_colors(
+  feature_bg_meta$Feature,
+  viz_pal$profile_segment,
+  fallback_colors = viz_pal$feature_accent,
+  default_color = viz_pal$neutral_mid
+)
+
+p_metagene <- ggplot(final_df_meta, aes(x = x_cont, y = Methylation, color = Group)) +
+  geom_rect(
+    data = feature_bg_meta,
+    aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = Feature),
+    inherit.aes = FALSE,
+    alpha = 0.14
+  ) +
+  geom_line(linewidth = viz_style$line_bold) +
+  # 分界线位置：20, 40, 60, 80, 100 (加0.5是为了画在Bin之间)
+  geom_vline(xintercept = c(20.5, 40.5, 60.5, 80.5, 100.5), linetype = "dashed", color = alpha(viz_pal$neutral_mid, 0.85)) +
+  scale_fill_manual(values = feature_bg_cols_meta, guide = "none") +
+  scale_color_manual(values = viz_pal$group) +
+  scale_x_continuous(breaks = c(10, 30, 50, 70, 90, 110), 
+                     labels = feature_order_meta,
+                     expand = c(0, 0)) +
+  theme_wgbs_classic(base_size = 14) +
+  theme(axis.text.x = element_text(face = "bold", size = 11, color = viz_pal$neutral_dark), panel.grid.minor = element_blank()) +
+  labs(
+    title = "Global Methylation Profile across Transcript Segments",
+    subtitle = "Background bands use the same feature semantics as DMR annotation: Upstream->Promoter, UTRs->UTR",
+    x = "Transcript Segment (Scaled)", y = "Average Methylation (%)"
+  )
+
+ggsave("result/6_genomecontext/plots/1/metagene_profile.pdf", p_metagene, width = 11, height = 6, device = cairo_pdf)
+message("✅ Metagene Profile 绘图完成。")
+
+
+# ==============================================================================
+# 2 CpG 岛及其侧翼区域深度分析 (CGI Context Analysis)
+# ==============================================================================
+# 这一节把 Island / Shore / Shelf 拆开看，帮助判断差异更偏 CGI 核心还是偏外围调控区。
+message("⏳ [2] 开始 CpG Island 及其侧翼区域 (Shores/Shelves) 分析...")
+
+# 1. 获取 CpG Island 数据。参考文件需由 shell/reference-prep 提前准备，Rmd 不再联网下载。
+cgi_resources <- get_cgi_context_resources(config, target_gr = meth_gr_mean, required = FALSE)
+
+if(!is.null(cgi_resources)) {
+  cgi_file <- cgi_resources$cgi_file
+  gr_island <- cgi_resources$gr_island
+  gr_n_shore <- cgi_resources$gr_n_shore
+  gr_n_shelf <- cgi_resources$gr_n_shelf
+  gr_s_shore <- cgi_resources$gr_s_shore
+  gr_s_shelf <- cgi_resources$gr_s_shelf
+  region_list_cgi <- cgi_resources$region_list_cgi
+  
+  # 2. 计算空间分布趋势 (Profile)
+  message("   正在计算 CGI 上下游空间甲基化趋势 (所有区域均为 20 Bins)...")
+  
+  cgi_plot_data <- list()
+  region_order_cgi <- c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf")
+  
+  for(r_name in region_order_cgi) {
+    # ★★★ 修改点：强制所有区域（包括Island）均为 20 个 Bin ★★★
+    n_b <- 20 
+    res <- calculate_bins(region_list_cgi[[r_name]], meth_gr_sites, n_bins = n_b, label = r_name)
+    cgi_plot_data[[r_name]] <- res
+  }
+  
+  cgi_final_df <- bind_rows(cgi_plot_data)
+  
+  # ★★★ 修改点：更新偏移量，因为 Island 现在也是 20 bins ★★★
+  # 0-20: N_Shelf, 20-40: N_Shore, 40-60: Island, 60-80: S_Shore, 80-100: S_Shelf
+  offsets_cgi <- c("N_Shelf" = 0, "N_Shore" = 20, "Island"  = 40, "S_Shore" = 60, "S_Shelf" = 80)
+  
+  cgi_final_df <- complete_bin_support(cgi_final_df, region_order_cgi, methyl_group_cols, offsets_cgi)
+  write_csv(cgi_final_df, "result/6_genomecontext/tables/1/cgi_profile_bin_support.csv")
+
+  feature_bg_cgi <- tibble(
+    Feature = region_order_cgi,
+    xmin = c(0.5, 20.5, 40.5, 60.5, 80.5),
+    xmax = c(20.5, 40.5, 60.5, 80.5, 100.5)
+  )
+  feature_bg_cols_cgi <- resolve_named_colors(
+    feature_bg_cgi$Feature,
+    viz_pal$cgi,
+    fallback_colors = viz_pal$feature_accent,
+    default_color = viz_pal$neutral_mid
+  )
+  
+  # 3. 绘制 CGI Profile
+  p_cgi_profile <- ggplot(cgi_final_df, aes(x = x_cont, y = Methylation, color = Group)) +
+    geom_rect(
+      data = feature_bg_cgi,
+      aes(xmin = xmin, xmax = xmax, ymin = -Inf, ymax = Inf, fill = Feature),
+      inherit.aes = FALSE,
+      alpha = 0.14
+    ) +
+    geom_line(linewidth = viz_style$line_bold) +
+    # ★★★ 修改点：更新垂直虚线位置 (20, 40, 60, 80) ★★★
+    geom_vline(xintercept = c(20.5, 40.5, 60.5, 80.5), linetype = "dashed", color = alpha(viz_pal$neutral_mid, 0.85)) +
+    scale_fill_manual(values = feature_bg_cols_cgi, guide = "none") +
+    scale_color_manual(values = viz_pal$group) +
+    # ★★★ 修改点：更新X轴标签位置 (10, 30, 50, 70, 90) ★★★
+    scale_x_continuous(
+      breaks = c(10, 30, 50, 70, 90), 
+      labels = c("N-Shelf", "N-Shore", "CpG Island", "S-Shore", "S-Shelf"),
+      expand = c(0, 0)
+    ) +
+    theme_wgbs_classic(base_size = 14) +
+    theme(axis.text.x = element_text(face = "bold", size = 11, color = viz_pal$neutral_dark), panel.grid.minor = element_blank()) +
+    labs(title = "Methylation Profile across CpG Island Context", x = "Genomic Region (Scaled)", y = "Average Methylation (%)")
+  
+  ggsave("result/6_genomecontext/plots/1/cgi_profile.pdf", p_cgi_profile, width = 10, height = 6, device = cairo_pdf)
+  
+  # 4. 包含 Others (Open Sea) 的整体统计 (Bar Plot)
+  message("   正在统计包括 Open Sea 在内的区域平均甲基化...")
+  
+  # 合并 CGI 相关区域
+  gr_all_cgi_context <- cgi_resources$gr_all_cgi_context
+  
+  # 使用 findOverlaps 进行注释
+  ov <- findOverlaps(meth_gr_mean, gr_all_cgi_context, ignore.strand = TRUE)
+  
+  # 创建数据框
+  meth_df <- as.data.frame(mcols(meth_gr_mean))[, methyl_group_cols, drop = FALSE]
+  meth_df$Region <- "Others" # 默认为 Open Sea
+  meth_df$Region[queryHits(ov)] <- mcols(gr_all_cgi_context)$context[subjectHits(ov)]
+  
+  # 简化标签 (将 N_Shore 和 S_Shore 合并为 Shore，Shelf 同理)
+  meth_df$Region_Simple <- gsub("^[NS]_", "", meth_df$Region) 
+  
+  # 汇总统计
+  stat_df <- meth_df %>%
+    pivot_longer(cols = all_of(methyl_group_cols), names_to = "Group", values_to = "Meth") %>%
+    mutate(Group = factor(Group, levels = methyl_group_cols)) %>%
+    group_by(Group, Region_Simple) %>%
+    summarise(
+      Mean_Meth = mean(Meth, na.rm = TRUE), 
+      SD_Meth = sd(Meth, na.rm = TRUE), 
+      Count = sum(!is.na(Meth)),
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      Mean_Meth = ifelse(is.nan(Mean_Meth), NA_real_, Mean_Meth),
+      SD_Meth = ifelse(is.nan(SD_Meth), NA_real_, SD_Meth),
+      Region_Simple = factor(Region_Simple, levels = c("Island", "Shore", "Shelf", "Others"))
+    )
+  
+  # 绘制柱状图
+  p_cgi_bar <- ggplot(stat_df, aes(x = Region_Simple, y = Mean_Meth, fill = Group)) +
+    geom_bar(stat = "identity", position = position_dodge(width = 0.8), width = 0.7) +
+    geom_errorbar(aes(ymin = Mean_Meth - SD_Meth, ymax = Mean_Meth + SD_Meth), 
+                  position = position_dodge(width = 0.8), width = 0.25, alpha = 0.5) +
+    scale_fill_manual(values = viz_pal$group) +
+    theme_wgbs_classic(base_size = 14) +
+    labs(title = "Average Methylation by CGI Context", x = "", y = "Mean Methylation (%)")
+  
+  ggsave("result/6_genomecontext/plots/1/cgi_stats_bar.pdf", p_cgi_bar, width = 6, height = 5, device = cairo_pdf)
+  write_csv(stat_df, "result/6_genomecontext/tables/1/global_cgi_stats.csv")
+  
+  # 5. 为后续分析补充 DMR 的 CGI context 注释
+  dmr_cgi_hits <- findOverlaps(dmr_gr, gr_all_cgi_context, ignore.strand = TRUE)
+  dmr_cgi_anno <- data.frame(
+    DMR_id = mcols(dmr_gr)$DMR_id[queryHits(dmr_cgi_hits)],
+    CGI_context = mcols(gr_all_cgi_context)$context[subjectHits(dmr_cgi_hits)]
+  ) %>%
+    distinct(DMR_id, CGI_context) %>%
+    group_by(DMR_id) %>%
+    summarise(CGI_context = first(CGI_context), .groups = "drop")
+  
+  dmr_anno_df <- dmr_anno_df %>%
+    select(-any_of("CGI_context")) %>%
+    left_join(dmr_cgi_anno, by = "DMR_id") %>%
+    mutate(CGI_context = replace_na(CGI_context, "Open_Sea"))
+  
+  dmr_cgi_map <- dmr_anno_df$CGI_context[match(mcols(dmr_gr)$DMR_id, dmr_anno_df$DMR_id)]
+  mcols(dmr_gr)$CGI_context <- dmr_cgi_map
+  
+  # 6. Violin + jitter 版本 CGI 图
+  cgi_site_hits <- findOverlaps(meth_gr_sites, gr_all_cgi_context, ignore.strand = TRUE)
+  cgi_site_region <- rep("Others", length(meth_gr_sites))
+  cgi_site_region[queryHits(cgi_site_hits)] <- mcols(gr_all_cgi_context)$context[subjectHits(cgi_site_hits)]
+  cgi_site_simple <- gsub("^[NS]_", "", cgi_site_region)
+  
+  cgi_violin_df <- as_tibble(as.data.frame(mcols(meth_gr_sites))) %>%
+    mutate(
+      Group = factor(Group, levels = methyl_group_cols),
+      Region_Simple = factor(cgi_site_simple, levels = c("Island", "Shore", "Shelf", "Others"))
+    ) %>%
+    filter(!is.na(Methylation))
+  
+  cgi_violin_plot_df <- cgi_violin_df %>%
+    group_by(Group, Region_Simple) %>%
+    group_modify(~ slice_sample(.x, n = min(config$genome_context_sample_downsample_n, nrow(.x)))) %>%
+    ungroup()
+  
+  cgi_sample_mean_df <- cgi_violin_df %>%
+    group_by(Sample, Group, Region_Simple) %>%
+    summarise(Methylation = mean(Methylation, na.rm = TRUE), .groups = "drop")
+  
+  p_cgi_violin <- ggplot(cgi_violin_plot_df, aes(x = Region_Simple, y = Methylation, fill = Group, color = Group)) +
+    geom_violin(position = position_dodge(width = 0.85), alpha = 0.18, trim = FALSE, linewidth = 0.45) +
+    geom_boxplot(position = position_dodge(width = 0.85), width = 0.14, outlier.shape = NA, alpha = 0.35, color = viz_pal$neutral_dark) +
+    geom_point(data = cgi_sample_mean_df,
+               aes(x = Region_Simple, y = Methylation, fill = Group),
+               position = position_dodge(width = 0.85), shape = 21, size = 3, color = viz_pal$neutral_dark,
+               inherit.aes = FALSE) +
+    scale_fill_manual(values = viz_pal$group) +
+    scale_color_manual(values = viz_pal$group) +
+    theme_wgbs_classic(base_size = 13) +
+    labs(title = "CGI Context Methylation Distribution", x = "", y = "Methylation (%)")
+  
+  ggsave("result/6_genomecontext/plots/1/cgi_stats_violin.pdf", p_cgi_violin, width = 8.5, height = 5.5, device = cairo_pdf)
+  
+  message("✅ CGI 分析完成。")
+} else {
+  warning("⚠️ 未找到 CpG Island 文件，跳过 6.2 分析。")
+}
+
+if(exists("meth", inherits = FALSE)) {
+  rm(meth)
+}
+if(exists("meth_mat", inherits = FALSE)) {
+  rm(meth_mat)
+}
+invisible(gc())
+
+```
+
+```{r}
+# 3 UMR / LMR / PMD 甲基化分区分析
+# ==============================================================================
+# 这是 WGBS 特有的大尺度视角，用来补足单纯 DMR 分析看不到的低甲基化结构。
+message("⏳ [3] 尝试进行 UMR/LMR/PMD 分区分析...")
+ensure_meth_loaded()
+
+if(requireNamespace("MethylSeekR", quietly = TRUE)) {
+  meth_raw_df <- methylKit::getData(meth)
+  cov_cols <- grep("^coverage", colnames(meth_raw_df), value = TRUE)
+  numCs_cols <- grep("^numCs", colnames(meth_raw_df), value = TRUE)
+  
+  if(length(cov_cols) >= max(c(config$group1_idx, config$group2_idx)) &&
+     length(numCs_cols) >= max(c(config$group1_idx, config$group2_idx))) {
+    
+    seq_lengths_seg <- seqlengths(BSgenome.Mmusculus.UCSC.mm39)
+    
+    seekr_groups <- setNames(
+      list(
+        GRanges(
+          seqnames = meth_raw_df$chr,
+          ranges = IRanges(start = meth_raw_df$start, end = meth_raw_df$end),
+          T = rowSums(meth_raw_df[, cov_cols[config$group1_idx], drop = FALSE], na.rm = TRUE),
+          M = rowSums(meth_raw_df[, numCs_cols[config$group1_idx], drop = FALSE], na.rm = TRUE)
+        ),
+        GRanges(
+          seqnames = meth_raw_df$chr,
+          ranges = IRanges(start = meth_raw_df$start, end = meth_raw_df$end),
+          T = rowSums(meth_raw_df[, cov_cols[config$group2_idx], drop = FALSE], na.rm = TRUE),
+          M = rowSums(meth_raw_df[, numCs_cols[config$group2_idx], drop = FALSE], na.rm = TRUE)
+        )
+      ),
+      c(config$group1_name, config$group2_name)
+    )
+    
+    seg_summary_list <- list()
+    
+    for(grp in names(seekr_groups)) {
+      message("   Running MethylSeekR segmentation for ", grp, " ...")
+      seekr_gr <- seekr_groups[[grp]]
+      seekr_gr <- filter_gr_to_main_chr(seekr_gr)
+      if(length(seekr_gr) > 0) {
+        seqlevels(seekr_gr) <- standardize_chr_style(seqlevels(seekr_gr), target_has_chr = TRUE)
+      }
+      seekr_gr <- GenomeInfoDb::keepSeqlevels(
+        seekr_gr,
+        value = intersect(seqlevels(seekr_gr), names(seq_lengths_seg)),
+        pruning.mode = "coarse"
+      )
+      
+      if(length(seekr_gr) < 1000) {
+        message("   ⚠️ ", grp, " 可用于分区分析的 CpG 过少，跳过")
+        next
+      }
+      
+      chr_train <- names(sort(table(as.character(seqnames(seekr_gr))), decreasing = TRUE))[1]
+      pmd_pdf <- file.path("result/6_genomecontext/plots/2_segmentation", paste0(tolower(grp), "_pmd_model.pdf"))
+      umlmr_pdf <- file.path("result/6_genomecontext/plots/2_segmentation", paste0(tolower(grp), "_umr_lmr_model.pdf"))
+      final_pdf <- file.path("result/6_genomecontext/plots/2_segmentation", paste0(tolower(grp), "_final_segmentation.pdf"))
+      
+      pmd_segments <- tryCatch(
+        MethylSeekR::segmentPMDs(
+          m = seekr_gr,
+          chr.sel = chr_train,
+          pdfFilename = pmd_pdf,
+          seqLengths = seq_lengths_seg[names(seq_lengths_seg) %in% seqlevels(seekr_gr)],
+          num.cores = 1
+        ),
+        error = function(e) {
+          message("   PMD segmentation failed in ", grp, ": ", e$message)
+          NA
+        }
+      )
+      pmd_for_umr_lmr <- if(is(pmd_segments, "GRanges")) pmd_segments else NULL
+      
+      umlmr_segments <- tryCatch(
+        MethylSeekR::segmentUMRsLMRs(
+          m = seekr_gr,
+          meth.cutoff = 0.5,
+          nCpG.cutoff = 3,
+          PMDs = pmd_for_umr_lmr,
+          pdfFilename = umlmr_pdf,
+          num.cores = 1,
+          myGenomeSeq = BSgenome.Mmusculus.UCSC.mm39,
+          seqLengths = seq_lengths_seg[names(seq_lengths_seg) %in% seqlevels(seekr_gr)],
+          minCover = 5
+        ),
+        error = function(e) {
+          message("   UMR/LMR segmentation failed in ", grp, ": ", e$message)
+          NULL
+        }
+      )
+      
+      if(!is.null(umlmr_segments) && length(umlmr_segments) > 0) {
+        umlmr_segments_df <- safe_granges_to_df(umlmr_segments)
+        write_csv(umlmr_segments_df, paste0("result/6_genomecontext/tables/1/", tolower(grp), "_umr_lmr_segments.csv"))
+        
+        if(is(pmd_segments, "GRanges")) {
+          pmd_segments_df <- safe_granges_to_df(pmd_segments)
+          write_csv(pmd_segments_df, paste0("result/6_genomecontext/tables/1/", tolower(grp), "_pmd_segments.csv"))
+        } else {
+          pmd_segments_df <- tibble()
+        }
+        
+        tryCatch({
+          MethylSeekR::plotFinalSegmentation(
+            m = seekr_gr,
+            segs = umlmr_segments,
+            PMDs = pmd_segments,
+            meth.cutoff = 0.5,
+            numRegions = 3,
+            pdfFilename = final_pdf
+          )
+        }, error = function(e) message("   plotFinalSegmentation failed in ", grp, ": ", e$message))
+        
+        seg_summary <- umlmr_segments_df %>%
+          count(type, name = "count") %>%
+          mutate(Group = grp)
+        
+        if(nrow(pmd_segments_df) > 0) {
+          pmd_summary <- pmd_segments_df %>%
+            count(type, name = "count") %>%
+            mutate(Group = grp)
+          seg_summary <- bind_rows(seg_summary, pmd_summary)
+        }
+        
+        seg_summary_list[[grp]] <- seg_summary
+      }
+    }
+    
+    if(length(seg_summary_list) > 0) {
+      seg_summary_df <- bind_rows(seg_summary_list)
+      write_csv(seg_summary_df, "result/6_genomecontext/tables/1/segmentation_summary.csv")
+      
+      p_seg_summary <- ggplot(seg_summary_df, aes(x = type, y = count, fill = Group)) +
+        geom_col(position = position_dodge(width = 0.8)) +
+        scale_fill_manual(values = viz_pal$group) +
+        theme_wgbs_classic(base_size = 13) +
+        labs(title = "UMR / LMR / PMD Summary", x = "Segment Type", y = "Count")
+      
+      ggsave("result/6_genomecontext/plots/2_segmentation/segmentation_summary.pdf", p_seg_summary, width = 8, height = 5.5, device = cairo_pdf)
+    }
+  }
+} else {
+  message("⚠️ MethylSeekR 未安装，跳过 6.3。若要启用 UMR/LMR/PMD，可安装 Bioconductor 包 MethylSeekR。")
+}
+```

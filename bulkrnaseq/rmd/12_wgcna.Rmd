@@ -1,0 +1,341 @@
+# Step 12: WGCNA
+
+## 12.1 模块划分与模块-分组相关性
+
+```{r}
+de_result <- restore_main_de_result(required = TRUE)
+
+ensure_module_result_layout("12_wgcna")
+
+wgcna_use_full_snapshot <- tolower(Sys.getenv("WGCNA_USE_FULL_SNAPSHOT", "false")) %in% c("1", "true", "yes")
+coexp_expr <- if (wgcna_use_full_snapshot) {
+  if (!is.null(gene_logcpm_full)) gene_logcpm_full else gene_exp_full
+} else {
+  if (!is.null(gene_logcpm)) gene_logcpm else gene_exp
+}
+coexp_is_log_scale <- if (wgcna_use_full_snapshot) !is.null(gene_logcpm_full) else !is.null(gene_logcpm)
+coexp_info <- if (wgcna_use_full_snapshot) full_sample_info else sample_info
+coexp_source_label <- if (wgcna_use_full_snapshot) "full_sample_snapshot" else "selected_samples"
+coexp_enabled <- !is.null(coexp_expr) && ncol(coexp_expr) >= 12
+cat("WGCNA 是否启用：", coexp_enabled, "\n")
+cat("WGCNA 输入样本集：", coexp_source_label, " (n=", ncol(coexp_expr), ")\n", sep = "")
+if (!coexp_enabled) {
+  cat("提示：当前 WGCNA 输入样本数少于 12，按项目规则跳过 WGCNA。\n")
+}
+
+module_df_annotated <- data.frame()
+module_trait_tbl <- data.frame()
+module_hub_tbl <- data.frame()
+
+if (coexp_enabled) {
+  tryCatch({
+    allowWGCNAThreads()
+    cor <- WGCNA::cor
+
+    network_expr <- if (coexp_is_log_scale) coexp_expr else log2(coexp_expr + 1)
+    keep_genes <- select_top_variable_genes(network_expr, top_n = 3000)
+    network_expr <- network_expr[keep_genes, , drop = FALSE]
+
+    good <- goodSamplesGenes(t(network_expr), verbose = 0)
+    if (!good$allOK) {
+      network_expr <- network_expr[good$goodGenes, good$goodSamples, drop = FALSE]
+    }
+
+    powers <- c(1:10, 12, 14)
+    sft <- pickSoftThreshold(t(network_expr), powerVector = powers, verbose = 0, networkType = "unsigned")
+    sft_df <- data.frame(
+      Power = powers,
+      SFT_R2 = sft$fitIndices[, 2],
+      MeanConnectivity = sft$fitIndices[, 5]
+    )
+    write.csv(sft_df, "result/12_wgcna/12_0_soft_threshold_table.csv", row.names = FALSE)
+
+    chosen_power <- sft_df$Power[which(sft_df$SFT_R2 >= 0.8)][1]
+    if (is.na(chosen_power)) {
+      chosen_power <- sft_df$Power[which.max(sft_df$SFT_R2)]
+    }
+    chosen_power <- chosen_power %||% 6
+
+    soft_plot <- ggplot(sft_df, aes(Power, SFT_R2)) +
+      geom_line(color = viz_pal$sig_gradient["low"]) +
+      geom_point(size = 2.5, color = viz_pal$sig_gradient["high"]) +
+      geom_hline(yintercept = 0.8, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+      scale_x_continuous(breaks = powers) +
+      labs(title = "WGCNA: Soft Threshold Selection", y = "Scale-free fit (R^2)") +
+      theme_rnaseq_minimal()
+    save_plot_versions(
+      soft_plot,
+      primary = "result/12_wgcna/12_1_WGCNA_Soft_Threshold_Selection.pdf",
+      width = 8,
+      height = 5
+    )
+
+    module_min_size <- max(30, floor(nrow(network_expr) / 25))
+    net <- blockwiseModules(
+      t(network_expr),
+      power = chosen_power,
+      TOMType = "unsigned",
+      minModuleSize = module_min_size,
+      reassignThreshold = 0,
+      mergeCutHeight = 0.25,
+      numericLabels = TRUE,
+      pamRespectsDendro = FALSE,
+      saveTOMs = FALSE,
+      verbose = 0
+    )
+
+    module_colors <- labels2colors(net$colors)
+    module_df <- data.frame(
+      gene_id = rownames(network_expr),
+      module_color = module_colors,
+      module_label = paste0("Module_", module_colors),
+      stringsAsFactors = FALSE
+    )
+
+    anno <- de_result %>%
+      dplyr::select(gene_id, ensembl_id, gene_label, ENTREZID, log2FoldChange, pvalue, direction) %>%
+      distinct(gene_id, .keep_all = TRUE)
+    module_df_annotated <- module_df %>% left_join(anno, by = "gene_id")
+    write.csv(module_df_annotated, "result/12_wgcna/12_2_WGCNA_Module_Assignment.csv", row.names = FALSE)
+
+    MEs <- as.data.frame(net$MEs)
+    rownames(MEs) <- rownames(net$MEs)
+    me_module_colors <- labels2colors(as.integer(sub("^ME", "", colnames(MEs))))
+    colnames(MEs) <- paste0("Module_", me_module_colors)
+    me_df <- as.data.frame(MEs)
+    rownames(me_df) <- rownames(MEs)
+    me_df$sample <- rownames(me_df)
+    me_df$group <- coexp_info[me_df$sample, "group"]
+    write.csv(me_df, "result/12_wgcna/12_3b_Module_Eigengene_Table.csv", row.names = FALSE)
+
+    eigengene_long <- me_df %>%
+      pivot_longer(cols = starts_with("Module_"), names_to = "Module", values_to = "Eigengene") %>%
+      mutate(Sample = factor(sample, levels = rownames(MEs)))
+
+    module_palette <- unique(sub("^Module_", "", eigengene_long$Module))
+    names(module_palette) <- unique(eigengene_long$Module)
+    group_shape_values <- c(16, 17, 15, 18, 8, 7)
+    names(group_shape_values) <- unique(me_df$group)
+    group_shape_values <- group_shape_values[unique(me_df$group)]
+    eigengene_plot <- ggplot(eigengene_long, aes(x = Sample, y = Eigengene, color = Module, group = Module)) +
+      geom_line(linewidth = 1) +
+      geom_point(aes(shape = group), size = 2.2) +
+      facet_wrap(~ Module, scales = "free_y", ncol = min(3, length(unique(eigengene_long$Module)))) +
+      scale_color_manual(values = module_palette) +
+      scale_shape_manual(values = group_shape_values) +
+      labs(title = "WGCNA: Module Eigengenes", y = "Scaled eigengene", x = NULL) +
+      theme_rnaseq_minimal() +
+      theme(legend.position = "top", axis.text.x = element_text(angle = 45, hjust = 1))
+    save_plot_versions(
+      eigengene_plot,
+      primary = "result/12_wgcna/12_3_WGCNA_Module_Eigengenes.pdf",
+      width = 11,
+      height = max(5, 3 * ceiling(length(unique(eigengene_long$Module)) / 3))
+    )
+
+    trait <- as.numeric(coexp_info[rownames(MEs), "group"] == group2_label)
+    module_trait_cor <- stats::cor(MEs, trait, use = "pairwise.complete.obs")
+    module_trait_p <- WGCNA::corPvalueStudent(module_trait_cor, nSamples = nrow(MEs))
+    module_trait_tbl <- data.frame(
+      Module = rownames(module_trait_cor),
+      correlation = as.numeric(module_trait_cor[, 1]),
+      pvalue = as.numeric(module_trait_p[, 1]),
+      module_size = as.numeric(table(module_df$module_label)[rownames(module_trait_cor)]),
+      stringsAsFactors = FALSE
+    ) %>%
+      arrange(desc(abs(correlation)))
+    write.csv(module_trait_tbl, "result/12_wgcna/12_4_Module_Trait_Correlation.csv", row.names = FALSE)
+
+    module_trait_plot <- module_trait_tbl %>%
+      mutate(Module = factor(Module, levels = rev(Module)),
+             label = sprintf("%.2f\np=%.3g", correlation, pvalue)) %>%
+      ggplot(aes(x = paste0(group2_label, "_vs_", group1_label), y = Module, fill = correlation)) +
+      geom_tile(color = viz_pal$neutral["light"]) +
+      geom_text(aes(label = label), size = 3) +
+      scale_fill_heatmap_diverging(midpoint = 0) +
+      labs(title = "模块与分组的相关性", x = NULL, y = NULL, fill = "Correlation") +
+      theme_rnaseq_minimal()
+    save_plot_versions(
+      module_trait_plot,
+      primary = "result/12_wgcna/12_5_Module_Trait_Heatmap.pdf",
+      width = 6,
+      height = max(4, 0.8 * nrow(module_trait_tbl))
+    )
+
+    module_universe <- unique(module_df_annotated$gene_id)
+    sig_de_ids <- intersect(unique(de_result$gene_id[de_result$direction != "ns"]), module_universe)
+
+    if (length(sig_de_ids) > 0) {
+      module_de_enrichment <- bind_rows(lapply(sort(unique(module_df_annotated$module_label)), function(one_module) {
+        module_genes <- unique(module_df_annotated$gene_id[module_df_annotated$module_label == one_module])
+        in_module_sig <- sum(module_genes %in% sig_de_ids)
+        in_module_non_sig <- length(module_genes) - in_module_sig
+        out_module_sig <- length(sig_de_ids) - in_module_sig
+        out_module_non_sig <- length(module_universe) - length(module_genes) - out_module_sig
+        fisher_res <- fisher.test(matrix(c(in_module_sig, in_module_non_sig, out_module_sig, out_module_non_sig), nrow = 2), alternative = "greater")
+        bg_ratio <- length(sig_de_ids) / length(module_universe)
+        module_ratio <- if (length(module_genes) > 0) in_module_sig / length(module_genes) else 0
+        data.frame(
+          Module = one_module,
+          module_size = length(module_genes),
+          sig_de_in_module = in_module_sig,
+          sig_de_ratio = module_ratio,
+          background_ratio = bg_ratio,
+          fold_enrichment = ifelse(bg_ratio > 0, module_ratio / bg_ratio, NA_real_),
+          odds_ratio = unname(fisher_res$estimate),
+          pvalue = fisher_res$p.value,
+          stringsAsFactors = FALSE
+        )
+      })) %>%
+        left_join(
+          module_trait_tbl %>%
+            dplyr::select(Module, module_trait_correlation = correlation, module_trait_pvalue = pvalue),
+          by = "Module"
+        ) %>%
+        arrange(pvalue, desc(fold_enrichment))
+      write.csv(module_de_enrichment, "result/12_wgcna/12_6_Module_DE_Enrichment.csv", row.names = FALSE)
+      module_de_plot <- ggplot(module_de_enrichment, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = sig_de_in_module, color = -log10(pvalue + 1e-300))) +
+        geom_point(alpha = 0.85) +
+        scale_color_heatmap_sequential() +
+        labs(title = "模块-分组相关性与 DE 富集整合", x = "Module-trait correlation", y = NULL, size = "Sig DE genes", color = "-log10(pvalue)") +
+        theme_rnaseq_bw()
+      save_plot_versions(
+        module_de_plot,
+        primary = "result/12_wgcna/12_7_Module_DE_Enrichment_Bubble.pdf",
+        width = 8,
+        height = max(4.5, 0.8 * nrow(module_de_enrichment))
+      )
+    }
+
+    module_names <- colnames(me_df)[grepl("^Module_", colnames(me_df))]
+    hub_tbl <- bind_rows(lapply(module_names, function(one_module) {
+      member_genes <- rownames(network_expr)[paste0("Module_", module_colors) == one_module]
+      if (length(member_genes) == 0) {
+        return(NULL)
+      }
+      kme <- vapply(member_genes, function(one_gene) {
+        safe_cor(as.numeric(network_expr[one_gene, ]), as.numeric(me_df[match(colnames(network_expr), me_df$sample), one_module]))
+      }, numeric(1))
+      data.frame(
+        gene_id = member_genes,
+        Module = one_module,
+        kME = kme,
+        stringsAsFactors = FALSE
+      )
+    }))
+
+    if (!is.null(hub_tbl) && nrow(hub_tbl) > 0) {
+      hub_tbl <- hub_tbl %>% left_join(anno, by = "gene_id")
+      module_hub_tbl <- hub_tbl
+      hub_tbl <- hub_tbl %>% arrange(Module, desc(abs(kME)))
+      write.csv(hub_tbl, "result/12_wgcna/12_8_Module_Hub_Genes.csv", row.names = FALSE)
+
+      top_hubs <- hub_tbl %>%
+        group_by(Module) %>%
+        slice_max(order_by = abs(kME), n = 10, with_ties = FALSE) %>%
+        ungroup() %>%
+        mutate(gene_label_plot = dplyr::coalesce(gene_label, gene_id))
+
+      hub_plot <- ggplot(top_hubs, aes(x = reorder(gene_label_plot, abs(kME)), y = abs(kME), fill = Module)) +
+        geom_col(width = 0.75) +
+        coord_flip() +
+        facet_wrap(~ Module, scales = "free_y") +
+        labs(title = "各模块 Top hub genes", x = NULL, y = "|kME|") +
+        theme_rnaseq_minimal() +
+        theme(legend.position = "none")
+      save_plot_versions(
+        hub_plot,
+        primary = "result/12_wgcna/12_9_Module_Hub_Genes.pdf",
+        width = 11,
+        height = max(6, 3 * ceiling(length(unique(top_hubs$Module)) / 2))
+      )
+    }
+  }, error = function(e) {
+    message("WGCNA 整合分析跳过：", e$message)
+  })
+} else {
+  cat("WGCNA 输入样本数不足（<12），跳过 WGCNA。\n")
+}
+
+if (!exists("me_df") || is.null(me_df)) {
+  me_df <- data.frame()
+}
+
+module_pathway_ora <- data.frame()
+if (is.data.frame(module_df_annotated) && nrow(module_df_annotated) > 0 && "ENTREZID" %in% colnames(module_df_annotated)) {
+  module_universe_entrez <- unique(as.character(stats::na.omit(module_df_annotated$ENTREZID)))
+  module_universe_entrez <- module_universe_entrez[module_universe_entrez != ""]
+  module_pathway_ora <- bind_rows(lapply(sort(unique(module_df_annotated$module_label)), function(one_module) {
+    module_tbl <- module_df_annotated %>% filter(module_label == one_module)
+    module_entrez <- unique(stats::na.omit(module_tbl$ENTREZID))
+    module_entrez <- module_entrez[module_entrez != ""]
+    if (length(module_entrez) < 10) {
+      return(data.frame())
+    }
+    go_res <- run_clusterprofiler_with_retry(
+      label = paste("WGCNA module GO BP ORA", one_module),
+      fn = function() enrichGO(module_entrez, OrgDb = annotation_orgdb, keyType = "ENTREZID", ont = "BP", universe = module_universe_entrez, pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE),
+      attempts = 2,
+      sleep_seconds = 2,
+      must_succeed = FALSE
+    )
+    kegg_res <- run_clusterprofiler_with_retry(
+      label = paste("WGCNA module KEGG ORA", one_module),
+      fn = function() enrichKEGG(gene = module_entrez, universe = module_universe_entrez, organism = kegg_organism_code, pvalueCutoff = 1, qvalueCutoff = 1),
+      attempts = 2,
+      sleep_seconds = 2,
+      must_succeed = FALSE,
+      timeout_seconds = 120
+    )
+    if (nrow(make_result_df(kegg_res)) > 0) {
+      kegg_res <- tryCatch(setReadable(kegg_res, OrgDb = annotation_orgdb, keyType = "ENTREZID"), error = function(e) kegg_res)
+    }
+    bind_rows(
+      make_result_df(go_res) %>% mutate(source = "GO_BP"),
+      make_result_df(kegg_res) %>% mutate(source = "KEGG")
+    ) %>%
+      # 保留当前项目 nominal pvalue < 0.05 的模块通路富集展示口径；正式报告建议同步查看 p.adjust/qvalue。
+      filter(is.finite(pvalue), pvalue < 0.05) %>%
+      mutate(
+        Module = one_module,
+        module_size = nrow(module_tbl),
+        module_trait_correlation = module_trait_tbl$correlation[match(one_module, module_trait_tbl$Module)],
+        module_trait_pvalue = module_trait_tbl$pvalue[match(one_module, module_trait_tbl$Module)]
+      )
+  })) %>%
+    arrange(pvalue, desc(abs(module_trait_correlation)))
+} else {
+  module_pathway_ora <- data.frame(status = "skipped_wgcna_module_annotation_unavailable")
+}
+write.csv(module_pathway_ora, "result/12_wgcna/12_10_Module_Pathway_ORA.csv", row.names = FALSE)
+
+if (nrow(module_pathway_ora) > 0 && all(c("Module", "Description", "pvalue", "source") %in% colnames(module_pathway_ora))) {
+  module_pathway_plot_tbl <- module_pathway_ora %>%
+    group_by(Module, source) %>%
+    arrange(pvalue, .by_group = TRUE) %>%
+    slice_head(n = 5) %>%
+    ungroup() %>%
+    mutate(pathway_label = factor(Description, levels = rev(unique(Description))))
+  module_pathway_plot <- ggplot(module_pathway_plot_tbl, aes(x = module_trait_correlation, y = pathway_label, size = Count, color = -log10(pvalue + 1e-300))) +
+    geom_point(alpha = 0.85) +
+    facet_grid(source ~ Module, scales = "free_y", space = "free_y") +
+    scale_color_heatmap_sequential() +
+    labs(title = "WGCNA 模块通路富集", x = "Module-trait correlation", y = NULL, size = "Gene count", color = "-log10(pvalue)") +
+    theme_rnaseq_bw(base_size = viz_style$compact_size)
+  save_plot_versions(
+    module_pathway_plot,
+    primary = "result/12_wgcna/12_11_Module_Pathway_ORA_Bubble.pdf",
+    width = 12,
+    height = max(6, 0.28 * nrow(module_pathway_plot_tbl) + 2)
+  )
+}
+
+wgcna_state <- list(
+  module_df_annotated = module_df_annotated,
+  module_trait_tbl = module_trait_tbl,
+  me_df = me_df,
+  module_pathway_ora = module_pathway_ora,
+  generated_at = as.character(Sys.time())
+)
+saveRDS(wgcna_state, cache_12_wgcna_path)
+```

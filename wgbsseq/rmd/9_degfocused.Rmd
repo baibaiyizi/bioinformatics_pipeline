@@ -1,0 +1,356 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 9: DEG-focused 甲基化分析
+# ==============================================================================
+# 如果说第 7 节是"甲基化主视角"，这里更像"表达主视角"，专门反过来看 DEGs 的甲基化状态。
+# 当前继续保留既有 `pvalue < config$rna_p_threshold` 过滤口径，避免改变当前结果。
+# 最终严格解读时建议同步检查 RNA `padj < 0.05`，富集结果优先报告 `p.adjust/qvalue < 0.05`。
+message("⏳ 开始 DEGs 的深度甲基化模式分析...")
+
+rna_p_threshold <- config$rna_p_threshold
+rna_log2fc_threshold <- config$rna_log2fc_threshold
+multiomics_methyl_delta <- config$multiomics_methyl_delta
+enrichment_p_threshold <- config$enrichment_p_threshold
+enrich_top_n_kegg <- config$enrichment_top_n_kegg
+enrich_top_n_go <- config$enrichment_top_n_go
+enrich_goplot_top_n <- config$enrichment_goplot_top_n
+enrich_cnet_show_category <- config$enrichment_cnet_show_category
+enrich_tree_show_category <- config$enrichment_tree_show_category
+
+ensure_step_dirs(
+  "result/9_degfocused/plots/1",
+  "result/9_degfocused/plots/2_cgi",
+  "result/9_degfocused/tables/1"
+)
+
+# 重新加载 TxDb 以防止 bad_weak_ptr 错误
+txdb <- load_main_chr_txdb(config$gtf_file)
+
+# 让本 step 可以在仅重跑 8-10 时独立恢复 CGI 上下文所需对象。
+# 参考文件需提前准备，Rmd 不再在渲染阶段联网下载。
+cgi_file <- config$cpg_island_file
+
+# 1 DEGs 区域甲基化水平 (Gene Body & Promoter)
+if(exists("expr_df") && "pvalue" %in% colnames(expr_df)) {
+  ensure_obj_cpg_loaded()
+  # 先限定到显著 DEGs，再分别看 gene body 和 promoter 两层区域，
+  # 用来回答"表达变化的基因，是否也伴随局部甲基化模式变化"。
+  sig_deg_df <- expr_df %>% filter(pvalue <= rna_p_threshold)
+  target_ids <- sig_deg_df$gene_id_clean
+  
+  if(nrow(sig_deg_df) > 0) {
+    all_genes_gr <- genes(txdb)
+    all_promoters_gr <- promoters(all_genes_gr, upstream = config$promoter_upstream, downstream = config$promoter_downstream)
+    common_ids <- intersect(target_ids, names(all_genes_gr))
+    
+    if(length(common_ids) > 0) {
+      deg_genes_gr <- all_genes_gr[common_ids]
+      deg_promoters_gr <- all_promoters_gr[common_ids]
+      sig_deg_df <- sig_deg_df %>% filter(gene_id_clean %in% common_ids)
+      
+      # 分别对 gene body 和 promoter 做区域 x 样本汇总。
+      # 这里不再要求所有样本共同覆盖同一区域；描述性热图保留 NA，并把支持度写出。
+      build_deg_region_result <- function(region_gr, region_name, support_file) {
+        region_meth <- build_region_sample_methylation(
+          obj.cpg,
+          region_gr,
+          sample_ids_arg = sample_ids,
+          config_arg = config,
+          region_ids = names(region_gr)
+        )
+        write_csv(region_meth$support, support_file)
+        mat <- region_meth$matrix
+        if(is.null(mat) || nrow(mat) == 0) {
+          return(list(mat = mat, df = data.frame()))
+        }
+        group1_n <- rowSums(is.finite(mat[, config$group1_idx, drop = FALSE]))
+        group2_n <- rowSums(is.finite(mat[, config$group2_idx, drop = FALSE]))
+        group1_mean <- rowMeans(mat[, config$group1_idx, drop = FALSE], na.rm = TRUE)
+        group2_mean <- rowMeans(mat[, config$group2_idx, drop = FALSE], na.rm = TRUE)
+        diff_val <- group2_mean - group1_mean
+        diff_val[group1_n == 0 | group2_n == 0] <- NA_real_
+        df_res <- data.frame(
+          gene_id_clean = rownames(mat),
+          Meth_Diff = diff_val,
+          Region = region_name,
+          n_group1_samples = group1_n,
+          n_group2_samples = group2_n
+        )
+        list(mat = mat, df = df_res)
+      }
+      
+      res_gene <- build_deg_region_result(
+        deg_genes_gr,
+        "Gene Body",
+        "result/9_degfocused/tables/1/deg_gene_body_region_support.csv"
+      )
+      res_prom <- build_deg_region_result(
+        deg_promoters_gr,
+        "Promoter",
+        "result/9_degfocused/tables/1/deg_promoter_region_support.csv"
+      )
+      
+      # 热图用于看 DEGs 内部是否有相似甲基化轮廓，因此这里固定列顺序、不额外聚类样本列。
+      draw_heatmap <- function(mat, title_suffix) {
+        if(is.null(mat) || nrow(mat) < 2 || ncol(mat) < 2) return(NULL)
+        mat <- as.matrix(mat)
+        
+        # pheatmap(scale = "row") 对恒定行或包含非有限值的行会产生 NaN，
+        # 进而在 hclust() 时报 "NA/NaN/Inf"。这里先手动清洗再做 row z-score。
+        keep_rows <- apply(mat, 1, function(x) {
+          finite_x <- x[is.finite(x)]
+          length(finite_x) >= 2 && stats::sd(finite_x) > 0
+        })
+        mat <- mat[keep_rows, , drop = FALSE]
+        if(nrow(mat) < 2) return(NULL)
+        
+        mat_scaled <- t(apply(mat, 1, function(x) {
+          finite_idx <- is.finite(x)
+          mu <- mean(x[finite_idx], na.rm = TRUE)
+          sigma <- stats::sd(x[finite_idx], na.rm = TRUE)
+          z <- (x - mu) / sigma
+          z[!is.finite(z)] <- 0
+          z
+        }))
+        rownames(mat_scaled) <- rownames(mat)
+        colnames(mat_scaled) <- colnames(mat)
+        
+        pheatmap::pheatmap(
+          mat_scaled,
+          scale = "none",
+          show_rownames = FALSE,
+          cluster_rows = nrow(mat_scaled) > 1,
+          cluster_cols = FALSE,
+          main = paste("Methylation Heatmap of DEGs -", title_suffix),
+          color = viz_pal$heat_meth,
+          filename = paste0("result/9_degfocused/plots/1/heatmap_", gsub(" ", "", title_suffix), ".pdf"),
+          width = 6,
+          height = 8
+        )
+      }
+      draw_heatmap(res_gene$mat, "Gene Body")
+      draw_heatmap(res_prom$mat, "Promoter")
+      
+      # 再把表达和甲基化拼到一张散点图里，看整体耦合方向是否一致。
+      merged_df <- bind_rows(res_gene$df, res_prom$df) %>% inner_join(sig_deg_df, by = "gene_id_clean")
+      merged_df$log2FoldChange <- as.numeric(merged_df$log2FoldChange)
+      
+      p_corr <- ggplot(merged_df, aes(x = log2FoldChange, y = Meth_Diff)) +
+        geom_point(aes(color = pvalue), alpha = 0.6, size = 1.5) +
+        geom_smooth(method = "lm", color = viz_pal$neutral_dark, linetype = "dashed") +
+        facet_wrap(~Region, scales = "free_y") +
+        scale_color_wgbs_ryb(name = "RNA pvalue") +
+        geom_hline(yintercept = 0, linetype = "dotted") +
+        geom_vline(xintercept = 0, linetype = "dotted") +
+        theme_wgbs_bw(base_size = 14) +
+        labs(title = "Correlation: Expression vs Methylation Change (DEGs)", x = "Log2 Fold Change", y = group_diff_axis_label)
+      
+      ggsave("result/9_degfocused/plots/1/correlation_expr_meth.pdf", p_corr, width = 10, height = 5, device = cairo_pdf)
+      write_csv(merged_df, "result/9_degfocused/tables/1/degs_meth_expr_integrated.csv")
+    }
+  }
+}
+
+# 2 CGI 与 RNA-seq 联合分析 (DEGs in CGI Context)
+if (exists("expr_df") && exists("txdb")) {
+  methyl_group_cols <- c(config$group1_name, config$group2_name)
+  # 复用 6.2 里构建的 CGI 上下游区域列表；如果 6.2 未运行，则这里直接报错提示。
+  if (!exists("meth_gr_mean")) {
+     ensure_obj_cpg_loaded()
+     message("   正在从原始 CpG 记录重新计算 meth_gr_mean...")
+     # meth_gr_mean 保存的是每个 CpG 的组均值，后面会和 CGI 区域做 overlap 汇总。
+     meth_gr_mean <- build_group_mean_methyl_gr(obj.cpg, sample_ids, config)
+  }
+
+  cgi_resources <- get_cgi_context_resources(config, target_gr = meth_gr_mean, required = FALSE)
+
+  if(!is.null(cgi_resources)) {
+    region_list <- cgi_resources$region_list_cgi
+    gr_all_cgi_context <- cgi_resources$gr_all_cgi_context
+
+    # 计算每个 CGI 区域的甲基化差异
+    message("   正在计算 CGI 区域甲基化差异...")
+    region_list_meth <- list()
+    for(reg_name in names(region_list)) {
+      # 对每类 CGI 区域单独聚合覆盖到的 CpG，得到区域级 group2 - group1 甲基化差异。
+      gr <- region_list[[reg_name]]
+      ov <- findOverlaps(gr, meth_gr_mean, ignore.strand = TRUE)
+      
+      if(length(ov) > 0) {
+        meth_vals <- data.frame(
+            idx = queryHits(ov),
+            group1 = mcols(meth_gr_mean)[[methyl_group_cols[[1]]]][subjectHits(ov)],
+            group2 = mcols(meth_gr_mean)[[methyl_group_cols[[2]]]][subjectHits(ov)]
+        )
+        
+        meth_agg <- meth_vals %>%
+            group_by(idx) %>%
+            summarise(
+                mean_group1 = mean(group1, na.rm=TRUE),
+                mean_group2 = mean(group2, na.rm=TRUE),
+                .groups = 'drop'
+            )
+        
+        gr$diffMethy <- NA
+        # 转换为 0-1 范围 (percMethylation 是 0-100)
+        gr$diffMethy[meth_agg$idx] <- (meth_agg$mean_group2 - meth_agg$mean_group1) / 100
+      } else {
+        gr$diffMethy <- NA
+      }
+      region_list_meth[[reg_name]] <- gr
+    }
+
+    deg_df <- expr_df %>% filter(pvalue <= rna_p_threshold)
+  
+    if (nrow(deg_df) > 0) {
+    all_genes_gr <- genes(txdb)
+    deg_ids <- deg_df$gene_id_clean[deg_df$gene_id_clean %in% names(all_genes_gr)]
+    deg_gr <- all_genes_gr[deg_ids]
+    
+    deg_cgi_df <- data.frame()
+    for (reg_name in names(region_list_meth)) {
+      # 这里把显著 DEG 映射到不同 CGI context，形成后续箱线图/散点图/富集的基础表。
+      gr <- region_list_meth[[reg_name]]
+      ov <- findOverlaps(deg_gr, gr)
+      
+      if (length(ov) > 0) {
+        tmp_ids <- names(deg_gr)[queryHits(ov)]
+        tmp_diff <- gr$diffMethy[subjectHits(ov)]
+        
+        tmp_df <- data.frame(
+            gene_id_clean = tmp_ids,
+            diffMethy = tmp_diff,
+            CGI_Context = reg_name
+        )
+        # Join with deg_df to get log2FoldChange
+        tmp_df <- inner_join(tmp_df, deg_df, by="gene_id_clean")
+        
+        deg_cgi_df <- bind_rows(deg_cgi_df, tmp_df)
+      }
+    }
+    
+    # 移除无甲基化数据的行
+    deg_cgi_df <- deg_cgi_df %>% filter(!is.na(diffMethy))
+    
+    write_csv(deg_cgi_df, "result/9_degfocused/tables/1/degs_in_cgi_context.csv")
+    
+    if (nrow(deg_cgi_df) > 0) {
+      # 1. 箱线图：比较不同 CGI context 中 DEG 的表达分布。
+      p_deg_cgi <- ggplot(deg_cgi_df, aes(x = CGI_Context, y = log2FoldChange, fill = CGI_Context)) +
+        geom_boxplot(alpha = 0.7, outlier.color = viz_pal$dmr["Hyper"], outlier.shape = NA) +
+        geom_jitter(width = 0.15, alpha = 0.3, size = 0.8) +
+        scale_fill_manual(values = viz_pal$cgi[c("Island", "N_Shore", "S_Shore", "N_Shelf", "S_Shelf")]) +
+        theme_wgbs_classic(base_size = 14) +
+        labs(title = "Expression Changes of DEGs in CGI Context", x = "CGI Context", y = "Log2 Fold Change")
+      
+      ggsave("result/9_degfocused/plots/1/degs_in_cgi_boxplot.pdf", p_deg_cgi, width = 7, height = 5, device = cairo_pdf)
+      
+      # 2. 散点图：只有表达和甲基化都达到较明显阈值时，才按 CGI context 着色。
+      deg_cgi_df <- deg_cgi_df %>%
+          mutate(Status = case_when(
+              abs(diffMethy) > multiomics_methyl_delta & abs(log2FoldChange) > rna_log2fc_threshold ~ CGI_Context,
+              TRUE ~ "NS"
+          ))
+      
+      p_scatter_cgi <- ggplot(deg_cgi_df, aes(x = diffMethy, y = log2FoldChange)) +
+          geom_point(aes(color = Status), size = 1, alpha = 0.6) +
+          scale_color_manual(values = viz_pal$cgi[c("Island", "N_Shore", "S_Shore", "N_Shelf", "S_Shelf", "NS")]) +
+          geom_hline(yintercept = c(-rna_log2fc_threshold, rna_log2fc_threshold), linetype = "dashed") +
+          geom_vline(xintercept = c(-multiomics_methyl_delta, multiomics_methyl_delta), linetype = "dashed") +
+          theme_wgbs_classic(base_size = 13) +
+          labs(title = "DEGs Methylation vs Expression in CGI Contexts", x = "Methylation Difference", y = "Log2 Fold Change")
+          
+      ggsave("result/9_degfocused/plots/1/degs_cgi_scatter.pdf", p_scatter_cgi, width = 8, height = 6, device = cairo_pdf)
+    }
+  }
+  } else {
+    write_csv(
+      tibble(step = "cgi_reference", status = "skipped", message = "CpG Island reference file is missing"),
+      "result/9_degfocused/tables/1/cgi_reference_status.csv"
+    )
+  }
+}
+
+# 3 CGI 区域 DEGs GO/KEGG 富集分析
+if (exists("deg_cgi_df") && nrow(deg_cgi_df) > 0) {
+  all_go_results <- list()
+  all_kegg_results <- list()
+  cgi_context_levels <- c("Island", "N_Shore", "S_Shore", "N_Shelf", "S_Shelf")
+
+  # 这里同时要求 RNA 和甲基化都有较明显变化，尽量聚焦真正耦合的候选基因。
+  for(reg in cgi_context_levels) {
+    if(!(reg %in% unique(deg_cgi_df$CGI_Context))) next
+    message("   👉 正在分析 CGI 区域: ", reg)
+    reg_dir <- file.path("result/9_degfocused/plots/2_cgi", reg)
+    sub_deg_df <- deg_cgi_df %>%
+      filter(
+        CGI_Context == reg,
+        pvalue < rna_p_threshold,
+        abs(log2FoldChange) > rna_log2fc_threshold,
+        abs(diffMethy) > multiomics_methyl_delta
+      )
+
+    if(nrow(sub_deg_df) == 0) {
+      write_csv(
+        tibble(CGI_Context = reg, status = "skipped", message = "no genes passed RNA and methylation filters"),
+        file.path("result/9_degfocused/tables/1", paste0("cgi_enrichment_status_", reg, ".csv"))
+      )
+      next
+    }
+
+    enrich_res <- run_ora_enrichment_bundle(
+      input_df = sub_deg_df,
+      context_name = reg,
+      plot_dir = reg_dir,
+      table_dir = "result/9_degfocused/tables/1",
+      file_prefix = "",
+      context_col = "CGI_Context",
+      p_threshold = enrichment_p_threshold
+    )
+
+    if(!is.null(enrich_res$go_bp)) {
+      all_go_results[[reg]] <- append_context_column(as.data.frame(enrich_res$go_bp), "CGI_Context", reg)
+    }
+    if(!is.null(enrich_res$kegg)) {
+      all_kegg_results[[reg]] <- append_context_column(as.data.frame(enrich_res$kegg), "CGI_Context", reg)
+    }
+  }
+
+  # 合并热图
+  if (length(all_go_results) > 0) {
+    go_combined <- bind_rows(all_go_results)
+    write_csv(go_combined, "result/9_degfocused/tables/1/go_cgi_combined.csv")
+
+    # GO term 往往很多，这里只保留显著性最高的一批条目，保证热图可读。
+    save_enrichment_compare_heatmap(
+      df = go_combined,
+      context_col = "CGI_Context",
+      out_pdf = "result/9_degfocused/plots/1/go_cgi_heatmap.pdf",
+      out_csv = "result/9_degfocused/tables/1/go_cgi_heatmap_long.csv",
+      title = "GO Enrichment (pvalue-filtered, -log10 p.adjust) across CGI Context",
+      top_n = 40,
+      width = 12,
+      height = 10,
+      value_col = "p.adjust"
+    )
+  }
+  
+  # KEGG 合并分析 (如果有多个区域)
+  if (length(all_kegg_results) > 0) {
+    kegg_combined <- bind_rows(all_kegg_results)
+    write_csv(kegg_combined, "result/9_degfocused/tables/1/kegg_cgi_combined.csv")
+
+    save_enrichment_compare_heatmap(
+      df = kegg_combined,
+      context_col = "CGI_Context",
+      out_pdf = "result/9_degfocused/plots/1/kegg_cgi_heatmap.pdf",
+      out_csv = "result/9_degfocused/tables/1/kegg_cgi_heatmap_long.csv",
+      title = "KEGG Enrichment (pvalue-filtered, -log10 p.adjust) across CGI Context",
+      top_n = 30,
+      width = 10,
+      height = 8,
+      value_col = "p.adjust"
+    )
+  }
+}
+```

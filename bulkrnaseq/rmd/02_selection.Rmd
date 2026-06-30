@@ -1,0 +1,153 @@
+# Step 2: 输入与自动选样背景
+
+## 2.1 当前选样结果与全样本背景
+
+```{r}
+ensure_module_result_layout("02_selection")
+
+selected_sample_overview <- data.frame(
+  sample = colnames(gene_exp),
+  group = sample_info[colnames(gene_exp), "group"],
+  stage = sample_info[colnames(gene_exp), "stage"],
+  in_selected_set = "yes",
+  stringsAsFactors = FALSE
+)
+selected_sample_overview$raw_sample_pool <- ncol(gene_exp_full)
+
+write.csv(selected_sample_overview, "result/02_selection/2_1_selected_sample_table.csv", row.names = FALSE)
+
+group_count_tbl <- selected_sample_overview %>%
+  count(group, name = "sample_count") %>%
+  arrange(group)
+write.csv(group_count_tbl, "result/02_selection/2_2_selected_group_counts.csv", row.names = FALSE)
+
+group_count_plot <- ggplot(group_count_tbl, aes(x = group, y = sample_count, fill = group)) +
+  geom_col(width = 0.7) +
+  scale_fill_manual(values = group_colors) +
+  labs(title = "当前进入主分析的样本分组", x = NULL, y = "Sample count") +
+  theme_rnaseq_minimal() +
+  theme(legend.position = "none")
+
+save_plot_versions(
+  group_count_plot,
+  primary = "result/02_selection/2_3_selected_group_counts.pdf",
+  width = 6,
+  height = 4
+)
+
+if (!is.null(auto_selection_summary) && nrow(auto_selection_summary) > 0) {
+  top_selection_tbl <- auto_selection_summary %>%
+    arrange(desc(score), max_outlier_distance, desc(between_group_distance), sample_key) %>%
+    slice_head(n = 15)
+
+  write.csv(top_selection_tbl, "result/02_selection/2_4_top_auto_selection_combinations.csv", row.names = FALSE)
+
+  selection_score_plot <- top_selection_tbl %>%
+    mutate(
+      combination_label = paste0(combination_type, ": ", group1_samples, " vs ", group2_samples),
+      combination_label = factor(combination_label, levels = rev(combination_label))
+    ) %>%
+    ggplot(aes(x = combination_label, y = score, fill = selected)) +
+    geom_col(width = 0.75) +
+    coord_flip() +
+    scale_fill_manual(values = viz_rekey_colors(viz_pal$sig_gradient, c("yes" = "high", "no" = "low"))) +
+    labs(title = "自动选样评分前列组合", x = NULL, y = "Selection score") +
+    theme_rnaseq_minimal()
+
+    save_plot_versions(
+      selection_score_plot,
+      primary = "result/02_selection/2_5_auto_selection_scores.pdf",
+      width = 11,
+      height = max(5, 0.45 * nrow(top_selection_tbl))
+    )
+
+    top_by_type <- auto_selection_summary %>%
+      group_by(combination_type) %>%
+      arrange(desc(score), max_outlier_distance, desc(between_group_distance), sample_key) %>%
+      slice_head(n = 5) %>%
+      ungroup()
+    write.csv(top_by_type, "result/04_pca/4_4_top_combinations_by_type.csv", row.names = FALSE)
+}
+
+if (!is.null(gene_exp_full) && ncol(gene_exp_full) >= ncol(gene_exp)) {
+  # Prefer counts-derived logCPM when present; otherwise use DESeq2 normalized counts.
+  full_log_expr <- if (!is.null(gene_logcpm_full)) gene_logcpm_full else log2(gene_exp_full + 1)
+  keep_genes <- select_top_variable_genes(full_log_expr, top_n = 5000)
+  full_pca <- prcomp(t(full_log_expr[keep_genes, , drop = FALSE]), scale. = TRUE)
+
+  full_pca_df <- as.data.frame(full_pca$x[, 1:2, drop = FALSE])
+  full_pca_df$sample <- rownames(full_pca_df)
+  full_pca_df$group <- full_sample_info[full_pca_df$sample, "group"]
+  full_pca_df$selected <- ifelse(full_pca_df$sample %in% colnames(gene_exp), "selected", "not_selected")
+
+  full_pca_plot <- ggplot(full_pca_df, aes(PC1, PC2, color = group, shape = selected, label = sample)) +
+    geom_point(size = 3) +
+    geom_text_repel(size = 3, show.legend = FALSE) +
+    scale_color_manual(values = group_colors) +
+    scale_shape_manual(values = c("selected" = 17, "not_selected" = 16)) +
+    labs(
+      title = "全样本 PCA 与最终入选样本位置",
+      x = paste0("PC1 (", round(100 * summary(full_pca)$importance[2, 1], 1), "%)"),
+      y = paste0("PC2 (", round(100 * summary(full_pca)$importance[2, 2], 1), "%)")
+    ) +
+    theme_rnaseq_bw()
+
+  save_plot_versions(
+    full_pca_plot,
+    primary = "result/02_selection/2_6_full_sample_pca_with_selection.pdf",
+    width = 8.5,
+    height = 6
+  )
+}
+```
+
+## 2.2 计数概览
+
+```{r}
+count_qc_tbl <- data.frame()
+
+if (!is.null(gene_count_mat)) {
+  count_qc_tbl <- data.frame(
+    sample = colnames(gene_count_mat),
+    group = sample_info[colnames(gene_count_mat), "group"],
+    raw_counts = colSums(gene_count_mat),
+    detected_genes_cpm1 = colSums(edgeR::cpm(gene_count_mat, log = FALSE) >= 1),
+    detected_genes_cpm5 = colSums(edgeR::cpm(gene_count_mat, log = FALSE) >= 5),
+    top100_gene_fraction = vapply(colnames(gene_count_mat), function(one_sample) {
+      one_counts <- sort(gene_count_mat[, one_sample], decreasing = TRUE)
+      sum(head(one_counts, 100)) / sum(one_counts)
+    }, numeric(1)),
+    stringsAsFactors = FALSE
+  )
+
+  write.csv(count_qc_tbl, "result/02_selection/2_1_sample_overview.csv", row.names = FALSE)
+  write.csv(count_qc_tbl, "result/02_selection/2_4_count_based_qc_metrics.csv", row.names = FALSE)
+
+  complexity_plot <- ggplot(count_qc_tbl, aes(x = raw_counts / 1e6, y = detected_genes_cpm1, color = group, label = sample)) +
+    geom_point(size = 3) +
+    geom_text_repel(size = 3, show.legend = FALSE) +
+    scale_color_manual(values = group_colors) +
+    labs(title = "文库复杂度与基因检测能力", x = "Raw counts (million)", y = "Detected genes (CPM >= 1)") +
+    theme_rnaseq_minimal() +
+    theme(legend.position = "top")
+  save_plot_versions(
+    complexity_plot,
+    primary = "result/02_selection/2_5_library_complexity_scatter.pdf",
+    width = 8,
+    height = 5
+  )
+
+  top100_fraction_plot <- ggplot(count_qc_tbl, aes(x = sample, y = top100_gene_fraction, fill = group)) +
+    geom_col(width = 0.7) +
+    scale_fill_manual(values = group_colors) +
+    labs(title = "Top100 基因占比", x = NULL, y = "Fraction of library") +
+    theme_rnaseq_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+  save_plot_versions(
+    top100_fraction_plot,
+    primary = "result/02_selection/2_6_top100_gene_fraction.pdf",
+    width = 8,
+    height = 5
+  )
+}
+```

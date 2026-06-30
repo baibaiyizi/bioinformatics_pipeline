@@ -1,0 +1,339 @@
+```{r}
+# ==============================================================================
+# WGBS 分析流程 - Step 10: 轨道导出与位点浏览图
+# ==============================================================================
+# 最后一节把关键结果导出成浏览器轨道，并画几个代表性位点图，方便人工核查和出图。
+ensure_step_dirs("result/10_browser/plots/1", "result/10_browser/tables/1", "result/10_browser/tracks/1")
+
+message("⏳ 导出 BigWig 文件用于 IGV 可视化...")
+ensure_obj_cpg_loaded()
+
+for(i in seq_along(sample_ids)) {
+  sample_obj <- obj.cpg[[i]]
+  sample_name <- sample_ids[i]
+  export_has_chr <- any(grepl("^chr", as.character(sample_obj$chr)))
+  export_main_chr_levels <- mouse_main_chr_levels(target_has_chr = export_has_chr)
+  
+  # BigWig score 使用 0-1 范围甲基化比例，并在导出前就过滤到主染色体。
+  # 这样后续 IGV/Gviz 会更干净，也能避免 scaffold 相关报错。
+  gr_export <- GRanges(
+    seqnames = sample_obj$chr,
+    ranges = IRanges(sample_obj$start, sample_obj$end),
+    score = sample_obj$numCs / sample_obj$coverage 
+  )
+  gr_export <- gr_export[!is.na(score(gr_export))]
+  gr_export <- gr_export[
+    standardize_chr_style(seqnames(gr_export), target_has_chr = export_has_chr) %in% export_main_chr_levels
+  ]
+  gr_export <- tryCatch(
+    GenomeInfoDb::keepSeqlevels(
+      gr_export,
+      value = intersect(seqlevels(gr_export), export_main_chr_levels),
+      pruning.mode = "coarse"
+    ),
+    error = function(e) gr_export
+  )
+  
+  tryCatch({ seqlengths(gr_export) <- end(range(gr_export)) }, error = function(e) {})
+  
+  out_file <- paste0("result/10_browser/tracks/1/methylation_", sample_name, ".bw")
+  tryCatch({
+    export.bw(gr_export, out_file)
+    message("   ✅ 已导出: ", out_file)
+  }, error = function(e) message("   ❌ 导出失败 ", sample_name, ": ", e$message))
+}
+
+```
+
+```{r}
+# 1 代表性位点轨道图 (Representative Locus Views)
+# ==============================================================================
+# 这里只挑代表性强、耦合分数高、且落在主染色体上的基因做 locus view，避免轨道图过散。
+message("⏳ 绘制代表性基因位点轨道图...")
+
+quiet_gviz_deprecations <- function(expr) {
+  # Gviz / S4Vectors 当前会产生一批重复的 deprecated warning；
+  # 这里只静默这类已知噪音，不吞掉真正的绘图错误。
+  withCallingHandlers(
+    expr,
+    warning = function(w) {
+      warn_msg <- conditionMessage(w)
+      if(grepl("S4Vectors:::anyMissing", warn_msg, fixed = TRUE) ||
+         grepl("Use 'anyNA()' instead", warn_msg, fixed = TRUE)) {
+        invokeRestart("muffleWarning")
+      }
+    }
+  )
+}
+
+old_ucsc_chromosome_names <- getOption("ucscChromosomeNames")
+options(ucscChromosomeNames = FALSE)
+
+tryCatch({
+if(requireNamespace("Gviz", quietly = TRUE) && exists("gene_centric_long") && nrow(gene_centric_long) > 0) {
+  txdb <- load_main_chr_txdb(config$gtf_file)
+  
+  tryCatch({
+    seqlevelsStyle(txdb) <- seqlevelsStyle(dmr_gr)[1]
+  }, error = function(e) {})
+  
+  plot_has_chr <- any(grepl("^chr", as.character(seqnames(dmr_gr))))
+  main_chr_levels <- mouse_main_chr_levels(target_has_chr = plot_has_chr)
+  txdb <- tryCatch(
+    GenomeInfoDb::keepSeqlevels(
+      txdb,
+      value = intersect(seqlevels(txdb), main_chr_levels),
+      pruning.mode = "coarse"
+    ),
+    error = function(e) txdb
+  )
+  
+  representative_genes <- gene_centric_long %>%
+    filter(!is.na(geneChr), !is.na(geneStart), !is.na(geneEnd), !is.na(CouplingScore)) %>%
+    group_by(gene_id_clean) %>%
+    summarise(
+      SYMBOL = dplyr::first(SYMBOL[!is.na(SYMBOL) & SYMBOL != ""], default = NA_character_),
+      geneChr = as.character(first(geneChr)),
+      geneStart = suppressWarnings(min(geneStart, na.rm = TRUE)),
+      geneEnd = suppressWarnings(max(geneEnd, na.rm = TRUE)),
+      score = max(abs(CouplingScore), na.rm = TRUE),
+      dominant_quadrant = names(sort(table(Quadrant), decreasing = TRUE))[1],
+      .groups = "drop"
+    ) %>%
+    mutate(SYMBOL = ifelse(is.na(SYMBOL) | SYMBOL == "", gene_id_clean, SYMBOL)) %>%
+    mutate(geneChr = standardize_chr_style(geneChr, target_has_chr = plot_has_chr)) %>%
+    filter(geneChr %in% main_chr_levels) %>%
+    filter(is.finite(score), is.finite(geneStart), is.finite(geneEnd)) %>%
+    arrange(desc(score)) %>%
+    slice_head(n = 6)
+  
+  if(nrow(representative_genes) > 0) {
+    write_csv(representative_genes, "result/10_browser/tables/1/representative_loci.csv")
+    
+    combined_pdf <- "result/10_browser/plots/1/representative_loci.pdf"
+    cairo_pdf(combined_pdf, width = 12, height = 8)
+    
+    for(i in seq_len(nrow(representative_genes))) {
+      gene_row <- representative_genes[i, ]
+      chr_use <- as.character(gene_row$geneChr)
+      view_start <- max(1, gene_row$geneStart - config$browser_gene_flank)
+      view_end <- gene_row$geneEnd + config$browser_gene_flank
+      
+      # 每个位点统一展示：样本 BigWig、局部 DMR、附近 CGI 和 gene model。
+      dmr_window <- dmr_gr[
+        as.character(seqnames(dmr_gr)) == chr_use &
+          start(dmr_gr) <= view_end &
+          end(dmr_gr) >= view_start
+      ]
+      dmr_window <- tryCatch(
+        GenomeInfoDb::keepSeqlevels(dmr_window, value = chr_use, pruning.mode = "coarse"),
+        error = function(e) dmr_window
+      )
+      
+      cgi_window <- NULL
+      if(exists("gr_all_cgi_context")) {
+        cgi_window <- gr_all_cgi_context[
+          as.character(seqnames(gr_all_cgi_context)) == chr_use &
+            start(gr_all_cgi_context) <= view_end &
+            end(gr_all_cgi_context) >= view_start
+        ]
+        cgi_window <- tryCatch(
+          GenomeInfoDb::keepSeqlevels(cgi_window, value = chr_use, pruning.mode = "coarse"),
+          error = function(e) cgi_window
+        )
+      }
+      
+      axis_track <- quiet_gviz_deprecations(GenomeAxisTrack())
+      
+      bw_tracks <- lapply(seq_along(sample_ids), function(j) {
+        bw_file <- paste0("result/10_browser/tracks/1/methylation_", sample_ids[j], ".bw")
+        if(!file.exists(bw_file)) return(NULL)
+        quiet_gviz_deprecations(DataTrack(
+          range = bw_file,
+          genome = "mm39",
+          chromosome = chr_use,
+          name = sample_ids[j],
+          type = "histogram",
+          fill = ifelse(j %in% config$group1_idx, unname(viz_pal$group[config$group1_name]), unname(viz_pal$group[config$group2_name])),
+          col = ifelse(j %in% config$group1_idx, unname(viz_pal$group[config$group1_name]), unname(viz_pal$group[config$group2_name])),
+          ylim = c(0, 1)
+        ))
+      })
+      bw_tracks <- bw_tracks[!sapply(bw_tracks, is.null)]
+      
+      dmr_track <- NULL
+      if(length(dmr_window) > 0) {
+        dmr_track <- quiet_gviz_deprecations(AnnotationTrack(
+          range = dmr_window,
+          genome = "mm39",
+          chromosome = chr_use,
+          name = "DMRs",
+          fill = ifelse(mcols(dmr_window)$DMR_type == "Hyper", unname(viz_pal$dmr["Hyper"]), unname(viz_pal$dmr["Hypo"])),
+          col = NA,
+          shape = "box"
+        ))
+      }
+      
+      cgi_track <- NULL
+      if(!is.null(cgi_window) && length(cgi_window) > 0) {
+        cgi_track <- quiet_gviz_deprecations(AnnotationTrack(
+          range = cgi_window,
+          genome = "mm39",
+          chromosome = chr_use,
+          name = "CGI",
+          fill = viz_pal$track_cgi,
+          col = NA,
+          shape = "box"
+        ))
+      }
+      
+      gene_track <- tryCatch(
+        quiet_gviz_deprecations(GeneRegionTrack(
+          txdb,
+          genome = "mm39",
+          chromosome = chr_use,
+          start = view_start,
+          end = view_end,
+          name = paste0(gene_row$SYMBOL, " | ", gene_row$dominant_quadrant),
+          transcriptAnnotation = "transcript",
+          collapseTranscripts = "meta"
+        )),
+        error = function(e) NULL
+      )
+      
+      track_list <- c(list(axis_track), bw_tracks, list(dmr_track, cgi_track, gene_track))
+      track_list <- track_list[!sapply(track_list, is.null)]
+      
+      if(length(track_list) > 1) {
+        # 所有代表位点汇总到一个 PDF，便于后续快速浏览和人工挑图。
+        tryCatch({
+          quiet_gviz_deprecations(plotTracks(
+            track_list,
+            from = view_start,
+            to = view_end,
+            chromosome = chr_use,
+            main = paste0(gene_row$SYMBOL, " (", chr_use, ":", view_start, "-", view_end, ")")
+          ))
+        }, error = function(e) message("Locus plot failed for ", gene_row$SYMBOL, ": ", e$message))
+      }
+    }
+    
+    dev.off()
+  } else {
+    message("⚠️ 代表性位点均不在主染色体 (1-19/X/Y) 上，跳过轨道图绘制。")
+  }
+}
+}, finally = {
+  options(ucscChromosomeNames = old_ucsc_chromosome_names)
+})
+```
+
+```{r}
+# ==============================================================================
+# 2 BSseq 平滑甲基化可视化
+# ==============================================================================
+# 使用 bsseq 的 BSmooth() 提供平滑甲基化估计，
+# 在区域可视化中比原始 CpG 点图更清晰。
+message("⏳ 绘制 BSseq 平滑甲基化可视化...")
+
+tryCatch({
+if(requireNamespace("bsseq", quietly = TRUE) && exists("dmr_anno_df") && nrow(dmr_anno_df) > 0) {
+  ensure_obj_cpg_loaded()
+
+  # 构建 BSseq 对象 (如果不存在)
+  if(!exists("bsobj_for_smooth") || is.null(bsobj_for_smooth)) {
+    message("   构建 BSseq 对象用于平滑...")
+    bs_data_list <- lapply(seq_along(obj.cpg), function(i) {
+      raw_df <- methylKit::getData(obj.cpg[[i]])
+      GRanges(
+        seqnames = raw_df$chr,
+        ranges = IRanges(start = raw_df$start, width = 1),
+        M = raw_df$numCs,
+        Cov = raw_df$coverage
+      )
+    })
+    bsobj_for_smooth <- BSseq(
+      chr = as.character(seqnames(bs_data_list[[1]])),
+      pos = start(bs_data_list[[1]]),
+      M = do.call(cbind, lapply(bs_data_list, function(gr) mcols(gr)$M)),
+      Cov = do.call(cbind, lapply(bs_data_list, function(gr) mcols(gr)$Cov)),
+      sampleNames = sample_ids
+    )
+  }
+
+  # BSmooth 平滑 (只在数据量可管理时执行)
+  bsobj_smooth <- tryCatch({
+    message("   运行 BSmooth 平滑...")
+    BSmooth(bsobj_for_smooth, ns = config$bsmooth_primary_ns, h = config$bsmooth_primary_h, parallelBy = "chromosome", mc.cores = 1, verbose = FALSE)
+  }, error = function(e) {
+    message("   BSmooth 失败: ", e$message, "，尝试较大窗口...")
+    tryCatch({
+      BSmooth(bsobj_for_smooth, ns = config$bsmooth_fallback_ns, h = config$bsmooth_fallback_h, parallelBy = "chromosome", mc.cores = 1, verbose = FALSE)
+    }, error = function(e2) NULL)
+  })
+
+  if(!is.null(bsobj_smooth)) {
+    # 选取 Top DMR 进行平滑可视化
+    top_dmr_for_smooth <- dmr_anno_df %>%
+      arrange(abs(diffMethy) > 0) %>%
+      slice_head(n = 3)
+
+    if(nrow(top_dmr_for_smooth) > 0) {
+      for(idx in seq_len(nrow(top_dmr_for_smooth))) {
+        dmr_row <- top_dmr_for_smooth[idx, ]
+        chr_col <- if("seqnames" %in% colnames(dmr_row)) "seqnames" else "chr"
+        dmr_chr <- as.character(dmr_row[[chr_col]])
+        dmr_start <- dmr_row$start
+        dmr_end <- dmr_row$end
+        dmr_label <- ifelse(
+          !is.na(dmr_row$SYMBOL) && dmr_row$SYMBOL != "",
+          paste0(dmr_row$DMR_id, " (", dmr_row$SYMBOL, ")"),
+          dmr_row$DMR_id
+        )
+
+        # 扩展区域用于可视化
+        view_start <- max(1, dmr_start - config$browser_dmr_flank)
+        view_end <- dmr_end + config$browser_dmr_flank
+
+        # 提取该区域的平滑数据
+        region_gr <- GRanges(seqnames = dmr_chr, ranges = IRanges(view_start, view_end))
+        tryCatch({ seqlevelsStyle(region_gr) <- seqlevelsStyle(bsobj_smooth)[1] }, error = function(e) {})
+
+        region_bs <- subsetByOverlaps(bsobj_smooth, region_gr)
+
+        if(length(region_bs) > 0) {
+          smooth_df <- data.frame(
+            pos = start(region_bs),
+            t(getMeth(region_bs, type = "smooth")) * 100
+          )
+          colnames(smooth_df) <- c("pos", sample_ids)
+
+          smooth_long <- smooth_df %>%
+            pivot_longer(cols = all_of(sample_ids), names_to = "Sample", values_to = "Smoothed_Meth") %>%
+            left_join(tibble(Sample = sample_ids, Group = as.character(sample_group_factor(sample_ids, config))),
+                      by = "Sample")
+
+          p_smooth <- ggplot(smooth_long, aes(x = pos, y = Smoothed_Meth, color = Group, group = Sample)) +
+            geom_line(alpha = 0.7, linewidth = 0.8) +
+            geom_vline(xintercept = c(dmr_start, dmr_end), linetype = "dashed",
+                       color = alpha(viz_pal$neutral_dark, 0.5)) +
+            annotate("rect", xmin = dmr_start, xmax = dmr_end,
+                     ymin = -Inf, ymax = Inf, fill = unname(viz_pal$accent["yellow"]), alpha = 0.15) +
+            scale_color_manual(values = viz_pal$group) +
+            labs(title = paste0("BSseq Smoothed: ", dmr_label),
+                 subtitle = paste0(dmr_chr, ":", view_start, "-", view_end),
+                 x = paste0("Position on ", dmr_chr),
+                 y = "Smoothed Methylation (%)") +
+            theme_wgbs_bw(base_size = 12)
+
+          ggsave(file.path("result/10_browser/plots/1", paste0("bsseq_smooth_", dmr_row$DMR_id, ".pdf")),
+                 p_smooth, width = 10, height = 5, device = cairo_pdf)
+        }
+      }
+    }
+  }
+}
+}, error = function(e) {
+  message("   BSseq 平滑可视化失败: ", e$message)
+})
+```

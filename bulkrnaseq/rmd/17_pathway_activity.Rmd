@@ -1,0 +1,518 @@
+# Step 17: 差异通路活性
+
+## 17.1 pathway activity 矩阵与差异结果
+
+```{r}
+ensure_module_result_layout("17_pathway_activity")
+
+if (!file.exists(cache_15_splicing_state_path)) {
+  stop("缺少 splicing 状态缓存: ", cache_15_splicing_state_path, "。请先运行模块 15。")
+}
+if (!file.exists(cache_16_immune_state_path)) {
+  stop("缺少免疫状态缓存: ", cache_16_immune_state_path, "。请先运行模块 16。")
+}
+
+splicing_state <- readRDS(cache_15_splicing_state_path)
+immune_state <- readRDS(cache_16_immune_state_path)
+
+required_splicing_fields <- c(
+  "as_gene_priority",
+  "as_gene_membership",
+  "dsfa_sig_ids",
+  "deu_sig_ids",
+  "isoform_sig_ids",
+  "apa_sig_ids",
+  "der_sig_ids",
+  "top_as_candidates"
+)
+missing_splicing_fields <- setdiff(required_splicing_fields, names(splicing_state))
+if (length(missing_splicing_fields) > 0) {
+  stop("splicing 状态缓存缺少字段: ", paste(missing_splicing_fields, collapse = ", "), "。缓存文件: ", cache_15_splicing_state_path)
+}
+
+required_immune_fields <- c("immune_score_long", "immune_rank_tbl")
+missing_immune_fields <- setdiff(required_immune_fields, names(immune_state))
+if (length(missing_immune_fields) > 0) {
+  stop("免疫状态缓存缺少字段: ", paste(missing_immune_fields, collapse = ", "), "。缓存文件: ", cache_16_immune_state_path)
+}
+
+as_gene_priority <- splicing_state$as_gene_priority %||% data.frame()
+as_gene_membership <- splicing_state$as_gene_membership %||% data.frame()
+dsfa_sig_ids <- unique(stats::na.omit(splicing_state$dsfa_sig_ids %||% character(0)))
+deu_sig_ids <- unique(stats::na.omit(splicing_state$deu_sig_ids %||% character(0)))
+isoform_sig_ids <- unique(stats::na.omit(splicing_state$isoform_sig_ids %||% character(0)))
+apa_sig_ids <- unique(stats::na.omit(splicing_state$apa_sig_ids %||% character(0)))
+der_sig_ids <- unique(stats::na.omit(splicing_state$der_sig_ids %||% character(0)))
+top_as_candidates <- splicing_state$top_as_candidates %||% data.frame()
+
+dsfa_gene_burden <- splicing_state$dsfa_gene_burden %||% data.frame()
+apa_gene_summary_tbl <- splicing_state$apa_gene_summary_tbl %||% data.frame()
+der_gene_summary_tbl <- splicing_state$der_gene_summary_tbl %||% data.frame()
+
+if (nrow(apa_gene_summary_tbl) == 0) {
+  apa_summary_file <- file.path(step11_dir, "13_3_APA_gene_summary.csv")
+  if (file.exists(apa_summary_file)) {
+    apa_gene_summary_tbl <- read.csv(apa_summary_file, check.names = FALSE, stringsAsFactors = FALSE)
+  }
+}
+if (nrow(der_gene_summary_tbl) == 0) {
+  der_summary_file <- file.path(step13_dir, "14_3_DER_gene_summary.csv")
+  if (file.exists(der_summary_file)) {
+    der_gene_summary_tbl <- read.csv(der_summary_file, check.names = FALSE, stringsAsFactors = FALSE)
+  }
+}
+
+immune_score_long <- immune_state$immune_score_long %||% data.frame()
+immune_rank_tbl <- immune_state$immune_rank_tbl %||% data.frame()
+
+if (nrow(immune_score_long) == 0 || nrow(immune_rank_tbl) == 0) {
+  stop("免疫状态缓存为空，无法继续模块 16。请先确认模块 16 成功生成有效缓存。")
+}
+
+ensure_membership_columns <- function(tbl) {
+  if (!is.data.frame(tbl)) {
+    tbl <- data.frame()
+  }
+  if (!"gene_id_clean" %in% colnames(tbl)) {
+    tbl$gene_id_clean <- character(nrow(tbl))
+  }
+  for (flag_col in c("DE", "DAS", "DEU", "IS", "APA", "DER", "DSFA")) {
+    if (!flag_col %in% colnames(tbl)) {
+      tbl[[flag_col]] <- FALSE
+    }
+  }
+  tbl
+}
+as_gene_membership <- ensure_membership_columns(as_gene_membership)
+
+pathway_expr_mat <- make_gene_symbol_matrix(log2(gene_exp + 1), de_result)
+if (nrow(pathway_expr_mat) < 100 || ncol(pathway_expr_mat) < 4) {
+  stop("差异通路活性分析所需的 symbol-level 表达矩阵不足，请检查 Step 4 注释结果。")
+}
+
+empty_activity_matrix <- function() {
+  matrix(
+    numeric(0),
+    nrow = 0,
+    ncol = ncol(pathway_expr_mat),
+    dimnames = list(character(0), colnames(pathway_expr_mat))
+  )
+}
+
+write_activity_matrix <- function(mat, path) {
+  if (is.null(mat)) {
+    mat <- empty_activity_matrix()
+  }
+  if (is.null(colnames(mat))) {
+    colnames(mat) <- colnames(pathway_expr_mat)
+  }
+  write.table(mat, path, sep = "\t", quote = FALSE, col.names = NA)
+}
+
+empty_activity_diff <- function() {
+  data.frame(
+    pathway = character(),
+    logFC = numeric(),
+    AveExpr = numeric(),
+    t = numeric(),
+    P.Value = numeric(),
+    adj.P.Val = numeric(),
+    B = numeric(),
+    family = character(),
+    significant = logical(),
+    stringsAsFactors = FALSE
+  )
+}
+
+run_activity_diff <- function(activity_mat, family_label) {
+  diff_tbl <- run_limma_contrast_table(activity_mat, pathway_group_factor, group1_label, group2_label)
+  if (nrow(diff_tbl) == 0) {
+    out <- empty_activity_diff()
+    out$family <- character(0)
+    return(out)
+  }
+  diff_tbl %>%
+    rownames_to_column("pathway") %>%
+    mutate(
+      family = family_label,
+      significant = !is.na(P.Value) & P.Value < 0.05
+    ) %>%
+    arrange(P.Value, desc(abs(logFC)))
+}
+
+build_msig_symbol_sets <- function(collection, subcollection = NULL) {
+  formals_now <- names(formals(msigdbr::msigdbr))
+  db_species <- "HS"
+  subcollection_options <- if (is.null(subcollection)) list(NULL) else as.list(subcollection)
+  last_error <- NULL
+
+  for (one_subcollection in subcollection_options) {
+    msig_tbl <- tryCatch({
+      if ("collection" %in% formals_now) {
+        call_args <- list(db_species = db_species, species = msigdb_species, collection = collection)
+        if (!is.null(one_subcollection) && !is.na(one_subcollection)) {
+          call_args$subcollection <- one_subcollection
+        }
+        do.call(msigdbr::msigdbr, call_args)
+      } else {
+        call_args <- list(species = msigdb_species, category = collection)
+        if (!is.null(one_subcollection) && !is.na(one_subcollection)) {
+          call_args$subcategory <- one_subcollection
+        }
+        do.call(msigdbr::msigdbr, call_args)
+      }
+    }, error = function(e) {
+      last_error <<- conditionMessage(e)
+      data.frame()
+    })
+
+    if (nrow(msig_tbl) > 0 && all(c("gene_symbol", "gs_name") %in% colnames(msig_tbl))) {
+      return(split(msig_tbl$gene_symbol, msig_tbl$gs_name))
+    }
+  }
+
+  message(
+    "[17_pathway_activity] 未能获取 MSigDB collection=", collection,
+    if (!is.null(subcollection)) paste0(" subcollection=", paste(unlist(subcollection), collapse = "/")) else "",
+    if (!is.null(last_error)) paste0("；最后错误: ", last_error) else ""
+  )
+  list()
+}
+
+hallmark_sets <- build_msig_symbol_sets("H")
+kegg_sets_activity <- build_msig_symbol_sets("C2", c("CP:KEGG", "CP:KEGG_LEGACY", "CP:KEGG_MEDICUS"))
+reactome_sets_activity <- build_msig_symbol_sets("C2", "CP:REACTOME")
+
+hallmark_activity <- run_ssgsea_matrix(pathway_expr_mat, hallmark_sets, min_size = 5, max_size = 500)
+kegg_activity <- run_ssgsea_matrix(pathway_expr_mat, kegg_sets_activity, min_size = 5, max_size = 500)
+reactome_activity <- run_ssgsea_matrix(pathway_expr_mat, reactome_sets_activity, min_size = 5, max_size = 500)
+
+pathway_group_factor <- factor(sample_info[colnames(pathway_expr_mat), "group"], levels = c(group1_label, group2_label))
+
+hallmark_activity_diff <- run_activity_diff(hallmark_activity, "Hallmark")
+kegg_activity_diff <- run_activity_diff(kegg_activity, "KEGG")
+reactome_activity_diff <- run_activity_diff(reactome_activity, "Reactome")
+
+write_activity_matrix(hallmark_activity, file.path(step14_dir, "17_1_Hallmark_activity_matrix.tsv"))
+write_activity_matrix(kegg_activity, file.path(step14_dir, "17_2_KEGG_activity_matrix.tsv"))
+write_activity_matrix(reactome_activity, file.path(step14_dir, "17_3_Reactome_activity_matrix.tsv"))
+write.csv(hallmark_activity_diff, file.path(step14_dir, "17_4_Hallmark_activity_differential.csv"), row.names = FALSE)
+write.csv(kegg_activity_diff, file.path(step14_dir, "17_5_KEGG_activity_differential.csv"), row.names = FALSE)
+write.csv(reactome_activity_diff, file.path(step14_dir, "17_6_Reactome_activity_differential.csv"), row.names = FALSE)
+
+pathway_leading_summary <- bind_rows(hallmark_activity_diff, kegg_activity_diff, reactome_activity_diff) %>%
+  mutate(direction = ifelse(logFC > 0, paste0("higher_in_", group2_label), paste0("higher_in_", group1_label))) %>%
+  group_by(family) %>%
+  arrange(P.Value, desc(abs(logFC)), .by_group = TRUE) %>%
+  slice_head(n = 15) %>%
+  ungroup()
+write.csv(pathway_leading_summary, file.path(step14_dir, "17_7_leading_pathway_activity_summary.csv"), row.names = FALSE)
+```
+
+## 17.2 pathway activity 图表
+
+```{r}
+top_pathway_names <- unique(c(
+  hallmark_activity_diff$pathway[seq_len(min(6, nrow(hallmark_activity_diff)))],
+  kegg_activity_diff$pathway[seq_len(min(6, nrow(kegg_activity_diff)))],
+  reactome_activity_diff$pathway[seq_len(min(6, nrow(reactome_activity_diff)))]
+))
+activity_heatmap_mat <- rbind(
+  hallmark_activity[rownames(hallmark_activity) %in% top_pathway_names, , drop = FALSE],
+  kegg_activity[rownames(kegg_activity) %in% top_pathway_names, , drop = FALSE],
+  reactome_activity[rownames(reactome_activity) %in% top_pathway_names, , drop = FALSE]
+)
+if (nrow(activity_heatmap_mat) >= 2) {
+  activity_heatmap_scaled <- safe_scale_rows(activity_heatmap_mat)
+  save_base_pdf_versions(
+    primary = file.path(step14_dir, "17_8_pathway_activity_heatmap.pdf"),
+    width = 9,
+    height = 10,
+    expr = ComplexHeatmap::draw(
+      ComplexHeatmap::Heatmap(
+        activity_heatmap_scaled,
+        name = "z-score",
+        col = heatmap_diverging_col_fun(activity_heatmap_scaled),
+        top_annotation = heatmap_group_annotation(sample_info$group),
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        column_names_rot = 45
+      )
+    )
+  )
+}
+
+pathway_rank_plot_tbl <- bind_rows(hallmark_activity_diff, kegg_activity_diff, reactome_activity_diff) %>%
+  mutate(direction = ifelse(logFC > 0, paste0("higher_in_", group2_label), paste0("higher_in_", group1_label))) %>%
+  group_by(family, direction) %>%
+  arrange(P.Value, desc(abs(logFC)), .by_group = TRUE) %>%
+  slice_head(n = 5) %>%
+  ungroup() %>%
+  mutate(pathway_label = factor(paste(family, pathway, sep = " | "), levels = rev(unique(paste(family, pathway, sep = " | ")))))
+
+pathway_rank_plot <- ggplot(pathway_rank_plot_tbl, aes(x = pathway_label, y = logFC, fill = family)) +
+  geom_col(width = 0.75) +
+  coord_flip() +
+  labs(title = "Top activated / suppressed pathway activities", x = NULL, y = paste0(group2_label, " - ", group1_label, " logFC")) +
+  theme_rnaseq_minimal()
+save_plot_versions(pathway_rank_plot, file.path(step14_dir, "17_9_pathway_activity_barplot.pdf"), width = 10, height = 8)
+
+activity_to_long <- function(activity_mat, family_label) {
+  if (is.null(activity_mat) || nrow(activity_mat) == 0) {
+    return(data.frame(pathway = character(), sample = character(), score = numeric(), family = character(), stringsAsFactors = FALSE))
+  }
+  as.data.frame(activity_mat, check.names = FALSE) %>%
+    rownames_to_column("pathway") %>%
+    pivot_longer(-pathway, names_to = "sample", values_to = "score") %>%
+    mutate(family = family_label)
+}
+
+pathway_score_long <- bind_rows(
+  activity_to_long(hallmark_activity, "Hallmark"),
+  activity_to_long(kegg_activity, "KEGG"),
+  activity_to_long(reactome_activity, "Reactome")
+) %>%
+  mutate(group = sample_info[sample, "group"]) %>%
+  semi_join(pathway_rank_plot_tbl %>% dplyr::select(family, pathway), by = c("family", "pathway"))
+
+if (nrow(pathway_score_long) > 0) {
+  pathway_boxplot <- ggplot(pathway_score_long, aes(x = group, y = score, fill = group)) +
+    geom_violin(trim = TRUE, alpha = 0.75) +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = viz_pal$neutral["light"]) +
+    facet_grid(family ~ pathway, scales = "free_y") +
+    scale_fill_manual(values = group_colors) +
+    labs(title = "Top differential pathway activity scores", x = NULL, y = "Pathway activity score") +
+    theme_rnaseq_bw(base_size = viz_style$compact_size) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  save_plot_versions(pathway_boxplot, file.path(step14_dir, "17_10_pathway_activity_boxplots.pdf"), width = 13, height = 8.5)
+}
+
+empty_gsea_activity_tbl <- function() {
+  data.frame(key = character(), family = character(), gsea_NES = numeric(), gsea_pvalue = numeric(), stringsAsFactors = FALSE)
+}
+
+make_gsea_activity_tbl <- function(gsea_tbl, family_label) {
+  gsea_tbl <- make_result_df(gsea_tbl)
+  if (nrow(gsea_tbl) == 0 || !"NES" %in% colnames(gsea_tbl) || !"pvalue" %in% colnames(gsea_tbl)) {
+    return(empty_gsea_activity_tbl())
+  }
+  id_col <- if ("Description" %in% colnames(gsea_tbl)) {
+    "Description"
+  } else if ("ID" %in% colnames(gsea_tbl)) {
+    "ID"
+  } else {
+    NA_character_
+  }
+  if (is.na(id_col)) {
+    return(empty_gsea_activity_tbl())
+  }
+  data.frame(
+    key = sanitize_pathway_key(gsea_tbl[[id_col]]),
+    family = family_label,
+    gsea_NES = suppressWarnings(as.numeric(gsea_tbl$NES)),
+    gsea_pvalue = suppressWarnings(as.numeric(gsea_tbl$pvalue)),
+    stringsAsFactors = FALSE
+  )
+}
+
+gsea_consistency_tbl <- bind_rows(
+  hallmark_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Hallmark"),
+  kegg_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "KEGG"),
+  reactome_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Reactome")
+) %>%
+  left_join(
+    bind_rows(
+      make_gsea_activity_tbl(gsea_hallmark_df, "Hallmark"),
+      make_gsea_activity_tbl(gsea_kegg, "KEGG"),
+      make_gsea_activity_tbl(gsea_reactome_df, "Reactome")
+    ),
+    by = c("key", "family")
+  ) %>%
+  filter(is.finite(gsea_NES))
+write.csv(gsea_consistency_tbl, file.path(step14_dir, "17_11_activity_vs_GSEA_consistency.csv"), row.names = FALSE)
+
+if (nrow(gsea_consistency_tbl) > 0) {
+  gsea_consistency_plot <- ggplot(gsea_consistency_tbl, aes(x = logFC, y = gsea_NES, color = family)) +
+    geom_point(alpha = 0.8, size = 1.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+    scale_color_manual(values = resolve_enrichment_category_colors(gsea_consistency_tbl$family, "GSEA")) +
+    labs(title = "Pathway activity vs Step7 GSEA consistency", x = "Activity logFC", y = "GSEA NES") +
+    theme_rnaseq_bw()
+  save_plot_versions(gsea_consistency_plot, file.path(step14_dir, "17_12_activity_vs_GSEA_consistency_scatter.pdf"), width = 8, height = 6)
+}
+```
+
+## 17.3 多证据整合与模块层汇总
+
+```{r}
+full_membership_tbl <- as_gene_membership %>%
+  mutate(
+    DSFA = gene_id_clean %in% dsfa_sig_ids,
+    APA = dplyr::coalesce(APA, gene_id_clean %in% apa_sig_ids, FALSE),
+    DER = dplyr::coalesce(DER, gene_id_clean %in% der_sig_ids, FALSE)
+  ) %>%
+  distinct(gene_id_clean, .keep_all = TRUE)
+write.csv(full_membership_tbl, file.path(step14_dir, "17_13_gene_level_membership_table.csv"), row.names = FALSE)
+
+build_membership_upset(
+  full_membership_tbl,
+  c("DE", "DAS", "DSFA", "APA", "DER"),
+  file.path(step14_dir, "17_14_DE_DAS_DSFA_APA_DER_upset.pdf"),
+  width = 10,
+  height = 6
+)
+
+effect_summary_long <- bind_rows(
+  {
+    make_effect_tbl <- function(tbl, method_label, effect_col) {
+      if (!is.data.frame(tbl) || nrow(tbl) == 0 || !"gene_id_clean" %in% colnames(tbl) || !effect_col %in% colnames(tbl)) {
+        return(data.frame(gene_id_clean = character(), gene_label = character(), method = character(), effect_size = numeric(), stringsAsFactors = FALSE))
+      }
+      gene_label_vec <- if ("gene_label" %in% colnames(tbl)) tbl$gene_label else tbl$gene_id_clean
+      data.frame(
+        gene_id_clean = tbl$gene_id_clean,
+        gene_label = dplyr::coalesce(gene_label_vec, tbl$gene_id_clean),
+        method = method_label,
+        effect_size = suppressWarnings(as.numeric(tbl[[effect_col]])),
+        stringsAsFactors = FALSE
+      )
+    }
+    bind_rows(
+      make_effect_tbl(as_gene_priority, "DAS", "max_abs_delta_psi"),
+      make_effect_tbl(dsfa_gene_burden, "DSFA", "max_abs_freq_diff"),
+      make_effect_tbl(apa_gene_summary_tbl, "APA", "max_abs_delta_PAU"),
+      make_effect_tbl(der_gene_summary_tbl, "DER", "max_abs_der_effect")
+    )
+  }
+) %>%
+  left_join(
+    de_result %>%
+      transmute(gene_id_clean = ensembl_id, de_log2FoldChange = log2FoldChange, de_pvalue = pvalue),
+    by = "gene_id_clean"
+  ) %>%
+  filter(is.finite(de_log2FoldChange), is.finite(effect_size))
+write.csv(effect_summary_long, file.path(step14_dir, "17_15_joint_effect_summary_table.csv"), row.names = FALSE)
+
+if (nrow(effect_summary_long) > 0) {
+  joint_effect_plot <- ggplot(effect_summary_long, aes(x = de_log2FoldChange, y = effect_size, color = method)) +
+    geom_point(alpha = 0.75, size = 1.7) +
+    facet_wrap(~ method, scales = "free_y") +
+    scale_color_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), effect_summary_long$method)) +
+    labs(title = "DE log2FC vs RNA processing effect size", x = "Gene log2FC", y = "Effect size") +
+    theme_rnaseq_bw()
+  save_plot_versions(joint_effect_plot, file.path(step14_dir, "17_16_joint_effect_scatter.pdf"), width = 11, height = 6)
+}
+
+if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
+  module_apa_enrichment <- save_module_target_enrichment(
+    module_df_annotated,
+    module_trait_tbl,
+    apa_sig_ids,
+    "APA",
+    file.path(step14_dir, "17_17_Module_APA_Enrichment.csv"),
+    file.path(step14_dir, "17_18_Module_APA_Enrichment_Bubble.pdf"),
+    viz_pal$accent["green"]
+  )
+  module_der_enrichment <- save_module_target_enrichment(
+    module_df_annotated,
+    module_trait_tbl,
+    der_sig_ids,
+    "DER",
+    file.path(step14_dir, "17_19_Module_DER_Enrichment.csv"),
+    file.path(step14_dir, "17_20_Module_DER_Enrichment_Bubble.pdf"),
+    viz_pal$accent["purple"]
+  )
+
+  module_evidence_summary_6way <- module_df_annotated %>%
+    mutate(gene_id_clean = ensembl_id) %>%
+    left_join(full_membership_tbl, by = "gene_id_clean") %>%
+    mutate(
+      DE = dplyr::coalesce(DE, FALSE),
+      DAS = dplyr::coalesce(DAS, FALSE),
+      DEU = dplyr::coalesce(DEU, FALSE),
+      IS = dplyr::coalesce(IS, FALSE),
+      APA = dplyr::coalesce(APA, FALSE),
+      DER = dplyr::coalesce(DER, FALSE)
+    ) %>%
+    group_by(module_label) %>%
+    summarise(
+      module_size = n(),
+      de_genes = sum(DE, na.rm = TRUE),
+      das_genes = sum(DAS, na.rm = TRUE),
+      deu_genes = sum(DEU, na.rm = TRUE),
+      is_genes = sum(IS, na.rm = TRUE),
+      apa_genes = sum(APA, na.rm = TRUE),
+      der_genes = sum(DER, na.rm = TRUE),
+      multi_evidence_genes = sum((DE + DAS + DEU + IS + APA + DER) >= 2, na.rm = TRUE),
+      high_support_genes = sum((DE + DAS + DEU + IS + APA + DER) >= 3, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    left_join(module_trait_tbl %>% dplyr::select(Module, module_trait_correlation = correlation), by = c("module_label" = "Module")) %>%
+    arrange(desc(multi_evidence_genes), desc(high_support_genes), desc(abs(module_trait_correlation)))
+  write.csv(module_evidence_summary_6way, file.path(step14_dir, "17_21_Module_MultiEvidence_Summary_6way.csv"), row.names = FALSE)
+
+  module_evidence_long_6way <- module_evidence_summary_6way %>%
+    pivot_longer(cols = c(de_genes, das_genes, deu_genes, is_genes, apa_genes, der_genes, multi_evidence_genes, high_support_genes), names_to = "evidence_type", values_to = "gene_count")
+  module_evidence_bubble_6way <- ggplot(module_evidence_long_6way, aes(x = module_trait_correlation, y = reorder(module_label, module_trait_correlation), size = gene_count, color = evidence_type)) +
+    geom_point(alpha = 0.85) +
+    labs(title = "Module multi-evidence summary (DE/DAS/DEU/IS/APA/DER)", x = "Module-trait correlation", y = NULL, size = "Gene count", color = "Evidence") +
+    theme_rnaseq_bw()
+  save_plot_versions(module_evidence_bubble_6way, file.path(step14_dir, "17_22_Module_MultiEvidence_Bubble_6way.pdf"), width = 9.5, height = max(5, 0.8 * nrow(module_evidence_summary_6way)))
+
+  module_evidence_heatmap_6way <- module_evidence_summary_6way %>%
+    dplyr::select(de_genes, das_genes, deu_genes, is_genes, apa_genes, der_genes, multi_evidence_genes, high_support_genes, module_trait_correlation) %>%
+    as.matrix()
+  rownames(module_evidence_heatmap_6way) <- module_evidence_summary_6way$module_label
+  module_evidence_heatmap_6way <- scale(module_evidence_heatmap_6way)
+  module_evidence_heatmap_6way[!is.finite(module_evidence_heatmap_6way)] <- 0
+  save_base_pdf_versions(
+    primary = file.path(step14_dir, "17_23_Module_MultiEvidence_Heatmap_6way.pdf"),
+    width = 8.5,
+    height = max(5, 0.5 * nrow(module_evidence_summary_6way) + 2),
+    expr = ComplexHeatmap::draw(
+      ComplexHeatmap::Heatmap(
+        module_evidence_heatmap_6way,
+        name = "z-score",
+        col = heatmap_diverging_col_fun(module_evidence_heatmap_6way),
+        cluster_rows = TRUE,
+        cluster_columns = FALSE,
+        column_names_rot = 45
+      )
+    )
+  )
+
+  if (exists("me_df") && is.data.frame(me_df) && nrow(me_df) > 0) {
+    top_immune_for_module <- immune_rank_tbl %>% slice_head(n = min(8, nrow(immune_rank_tbl)))
+    immune_score_wide <- immune_score_long %>%
+      semi_join(top_immune_for_module %>% dplyr::select(method, cell_type), by = c("method", "cell_type")) %>%
+      mutate(feature = paste(method, cell_type, sep = " | ")) %>%
+      dplyr::select(feature, sample, score) %>%
+      pivot_wider(names_from = sample, values_from = score) %>%
+      as.data.frame()
+    if (nrow(immune_score_wide) > 0) {
+      rownames(immune_score_wide) <- immune_score_wide$feature
+      immune_score_wide$feature <- NULL
+      module_me_tbl <- me_df[match(colnames(immune_score_wide), me_df$sample), grepl("^Module_", names(me_df)), drop = FALSE]
+      rownames(module_me_tbl) <- colnames(immune_score_wide)
+      module_immune_cor <- cor(t(as.matrix(immune_score_wide)), as.matrix(module_me_tbl), use = "pairwise.complete.obs")
+      write.csv(module_immune_cor, file.path(step14_dir, "17_24_Module_Immune_Correlation.csv"))
+    }
+
+    pathway_score_wide <- pathway_score_long %>%
+      semi_join(pathway_rank_plot_tbl %>% dplyr::select(family, pathway), by = c("family", "pathway")) %>%
+      mutate(feature = paste(family, pathway, sep = " | ")) %>%
+      dplyr::select(feature, sample, score) %>%
+      pivot_wider(names_from = sample, values_from = score) %>%
+      as.data.frame()
+    if (nrow(pathway_score_wide) > 0) {
+      rownames(pathway_score_wide) <- pathway_score_wide$feature
+      pathway_score_wide$feature <- NULL
+      module_me_tbl <- me_df[match(colnames(pathway_score_wide), me_df$sample), grepl("^Module_", names(me_df)), drop = FALSE]
+      rownames(module_me_tbl) <- colnames(pathway_score_wide)
+      module_pathway_cor <- cor(t(as.matrix(pathway_score_wide)), as.matrix(module_me_tbl), use = "pairwise.complete.obs")
+      write.csv(module_pathway_cor, file.path(step14_dir, "17_25_Module_Pathway_Correlation.csv"))
+    }
+  }
+}
+```
