@@ -24,9 +24,14 @@ if (nrow(count_qc_tbl) == 0 && !is.null(gene_count_mat)) {
   )
 }
 if (nrow(count_qc_tbl) == 0) {
-  count_qc_file <- file.path(result_02_dir, "2_4_count_based_qc_metrics.csv")
-  if (file.exists(resolve_existing_path(count_qc_file, preferred = "table"))) {
-    count_qc_tbl <- read.csv(count_qc_file, check.names = FALSE, stringsAsFactors = FALSE)
+  count_qc_candidates <- c(
+    file.path(result_02_dir, "sample_qc_overview.csv"),
+    file.path(result_02_dir, "2_4_count_based_qc_metrics.csv")
+  )
+  count_qc_resolved <- vapply(count_qc_candidates, resolve_existing_path, character(1), preferred = "table")
+  count_qc_file <- count_qc_resolved[file.exists(count_qc_resolved)]
+  if (length(count_qc_file) > 0) {
+    count_qc_tbl <- read.csv(count_qc_file[[1]], check.names = FALSE, stringsAsFactors = FALSE)
   }
 }
 
@@ -73,7 +78,17 @@ if (!is.null(gene_count_mat)) {
   log2_cpm_mat <- NULL
 }
 
-write.csv(sample_overview, "result/03_qc/3_1_selected_sample_overview.csv", row.names = FALSE)
+sample_qc_overview <- sample_overview
+if (nrow(count_qc_tbl) > 0) {
+  count_qc_extra <- count_qc_tbl %>%
+    dplyr::select(any_of(c("sample", "in_selected_set", "raw_sample_pool", "top100_gene_fraction"))) %>%
+    distinct(sample, .keep_all = TRUE)
+  sample_qc_overview <- sample_qc_overview %>%
+    left_join(count_qc_extra, by = "sample")
+}
+
+write_csv_safe(sample_qc_overview, "result/03_qc/sample_qc_overview.csv", row.names = FALSE)
+write_csv_compat(sample_overview, "result/03_qc/3_1_selected_sample_overview.csv", row.names = FALSE)
 
 expr_long <- as.data.frame(expr_plot_mat) %>%
   rownames_to_column("gene_id") %>%

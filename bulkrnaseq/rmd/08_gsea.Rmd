@@ -54,28 +54,49 @@ gsea_go_sets <- split_gsea_results_by_direction(gsea_go_df)
 gsea_kegg_sets <- split_gsea_results_by_direction(make_result_df(gsea_kegg))
 gsea_hallmark_sets <- split_gsea_results_by_direction(gsea_hallmark_df)
 gsea_reactome_sets <- split_gsea_results_by_direction(gsea_reactome_df)
+gsea_enrichment_results <- data.frame()
+gsea_leading_edge <- data.frame()
 
 for (one_direction in DIRECTION_LEVELS) {
   one_table_dir <- step7_table_dir(one_direction)
   one_plot_dir <- step7_plot_dir(one_direction)
   one_label <- direction_label(one_direction)
 
-  write_csv_safe(gsea_go_sets[[one_direction]], file.path(one_table_dir, "8_1_GSEA_GO_results.csv"), row.names = FALSE)
-  write_csv_safe(gsea_kegg_sets[[one_direction]], file.path(one_table_dir, "8_2_GSEA_KEGG_results.csv"), row.names = FALSE)
-  write_csv_safe(gsea_hallmark_sets[[one_direction]], file.path(one_table_dir, "8_3_GSEA_Hallmark_results.csv"), row.names = FALSE)
-  write_csv_safe(gsea_reactome_sets[[one_direction]], file.path(one_table_dir, "8_4_GSEA_Reactome_results.csv"), row.names = FALSE)
+  gsea_enrichment_results <- bind_rows(
+    gsea_enrichment_results,
+    standardize_enrichment_table(gsea_go_sets[[one_direction]], "GSEA", "GO", "08_gsea", direction = one_direction),
+    standardize_enrichment_table(gsea_kegg_sets[[one_direction]], "GSEA", "KEGG", "08_gsea", direction = one_direction),
+    standardize_enrichment_table(gsea_hallmark_sets[[one_direction]], "GSEA", "Hallmark", "08_gsea", direction = one_direction),
+    standardize_enrichment_table(gsea_reactome_sets[[one_direction]], "GSEA", "Reactome", "08_gsea", direction = one_direction)
+  )
+
+  write_csv_compat(gsea_go_sets[[one_direction]], file.path(one_table_dir, "8_1_GSEA_GO_results.csv"), row.names = FALSE)
+  write_csv_compat(gsea_kegg_sets[[one_direction]], file.path(one_table_dir, "8_2_GSEA_KEGG_results.csv"), row.names = FALSE)
+  write_csv_compat(gsea_hallmark_sets[[one_direction]], file.path(one_table_dir, "8_3_GSEA_Hallmark_results.csv"), row.names = FALSE)
+  write_csv_compat(gsea_reactome_sets[[one_direction]], file.path(one_table_dir, "8_4_GSEA_Reactome_results.csv"), row.names = FALSE)
 
   if (one_direction == "all") {
-    write_csv_safe(leading_edge_go, file.path(one_table_dir, "8_10_GSEA_GO_leading_edge.csv"), row.names = FALSE)
-    write_csv_safe(leading_edge_kegg, file.path(one_table_dir, "8_11_GSEA_KEGG_leading_edge.csv"), row.names = FALSE)
-    write_csv_safe(leading_edge_hallmark, file.path(one_table_dir, "8_12_GSEA_Hallmark_leading_edge.csv"), row.names = FALSE)
-    write_csv_safe(leading_edge_reactome, file.path(one_table_dir, "8_13_GSEA_Reactome_leading_edge.csv"), row.names = FALSE)
+    one_leading_go <- leading_edge_go
+    one_leading_kegg <- leading_edge_kegg
+    one_leading_hallmark <- leading_edge_hallmark
+    one_leading_reactome <- leading_edge_reactome
   } else {
-    write_csv_safe(subset_leading_edge_table(leading_edge_go, gsea_go_sets[[one_direction]]), file.path(one_table_dir, "8_10_GSEA_GO_leading_edge.csv"), row.names = FALSE)
-    write_csv_safe(subset_leading_edge_table(leading_edge_kegg, gsea_kegg_sets[[one_direction]]), file.path(one_table_dir, "8_11_GSEA_KEGG_leading_edge.csv"), row.names = FALSE)
-    write_csv_safe(subset_leading_edge_table(leading_edge_hallmark, gsea_hallmark_sets[[one_direction]], id_col = "pathway"), file.path(one_table_dir, "8_12_GSEA_Hallmark_leading_edge.csv"), row.names = FALSE)
-    write_csv_safe(subset_leading_edge_table(leading_edge_reactome, gsea_reactome_sets[[one_direction]]), file.path(one_table_dir, "8_13_GSEA_Reactome_leading_edge.csv"), row.names = FALSE)
+    one_leading_go <- subset_leading_edge_table(leading_edge_go, gsea_go_sets[[one_direction]])
+    one_leading_kegg <- subset_leading_edge_table(leading_edge_kegg, gsea_kegg_sets[[one_direction]])
+    one_leading_hallmark <- subset_leading_edge_table(leading_edge_hallmark, gsea_hallmark_sets[[one_direction]], id_col = "pathway")
+    one_leading_reactome <- subset_leading_edge_table(leading_edge_reactome, gsea_reactome_sets[[one_direction]])
   }
+  gsea_leading_edge <- bind_rows(
+    gsea_leading_edge,
+    standardize_leading_edge_table(one_leading_go, "GO", "08_gsea", direction = one_direction),
+    standardize_leading_edge_table(one_leading_kegg, "KEGG", "08_gsea", direction = one_direction),
+    standardize_leading_edge_table(one_leading_hallmark, "Hallmark", "08_gsea", direction = one_direction, pathway_col = "pathway"),
+    standardize_leading_edge_table(one_leading_reactome, "Reactome", "08_gsea", direction = one_direction)
+  )
+  write_csv_compat(one_leading_go, file.path(one_table_dir, "8_10_GSEA_GO_leading_edge.csv"), row.names = FALSE)
+  write_csv_compat(one_leading_kegg, file.path(one_table_dir, "8_11_GSEA_KEGG_leading_edge.csv"), row.names = FALSE)
+  write_csv_compat(one_leading_hallmark, file.path(one_table_dir, "8_12_GSEA_Hallmark_leading_edge.csv"), row.names = FALSE)
+  write_csv_compat(one_leading_reactome, file.path(one_table_dir, "8_13_GSEA_Reactome_leading_edge.csv"), row.names = FALSE)
 
   save_gsea_df_dotplot(
     gsea_go_sets[[one_direction]],
@@ -103,6 +124,9 @@ for (one_direction in DIRECTION_LEVELS) {
     top_n = 12
   )
 }
+
+write_csv_safe(gsea_enrichment_results, file.path(step7_table_dir("all"), "enrichment_results.csv"), row.names = FALSE)
+write_csv_safe(gsea_leading_edge, file.path(step7_table_dir("all"), "gsea_leading_edge.csv"), row.names = FALSE)
 
 if (nrow(make_result_df(gsea_go)) > 0) {
   save_gsea_family(gsea_go, list(

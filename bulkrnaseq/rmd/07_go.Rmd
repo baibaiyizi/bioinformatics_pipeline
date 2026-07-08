@@ -60,6 +60,8 @@ if (!has_enrichment_objects) {
   message("[07_go] 未检测到 06 对象缓存，cnet/tree 等对象型图将显式跳过；表格型输出继续生成。")
 }
 
+go_enrichment_results <- data.frame()
+
 go_family_paths <- function(out_dir, prefix) {
   list(
     bar = file.path(out_dir, paste0(prefix, "_barplot.pdf")),
@@ -78,10 +80,18 @@ for (one_direction in names(go_ora_sets)) {
   one_label <- direction_label(one_direction)
   one_go_set <- go_ora_sets[[one_direction]]
 
-  write_csv_safe(make_result_df(one_go_set$BP), file.path(one_table_dir, "7_1_GO_BP_enrichment_results.csv"), row.names = FALSE)
-  write_csv_safe(make_result_df(one_go_set$MF), file.path(one_table_dir, "7_2_GO_MF_enrichment_results.csv"), row.names = FALSE)
-  write_csv_safe(make_result_df(one_go_set$CC), file.path(one_table_dir, "7_3_GO_CC_enrichment_results.csv"), row.names = FALSE)
-  write_csv_safe(make_result_df(one_go_set$ALL), file.path(one_table_dir, "7_4_GO_ALL_enrichment_results.csv"), row.names = FALSE)
+  go_enrichment_results <- bind_rows(
+    go_enrichment_results,
+    standardize_enrichment_table(one_go_set$BP, "ORA", "GO", "07_go", direction = one_direction, ontology = "BP"),
+    standardize_enrichment_table(one_go_set$MF, "ORA", "GO", "07_go", direction = one_direction, ontology = "MF"),
+    standardize_enrichment_table(one_go_set$CC, "ORA", "GO", "07_go", direction = one_direction, ontology = "CC"),
+    standardize_enrichment_table(one_go_set$ALL, "ORA", "GO", "07_go", direction = one_direction, ontology = "ALL")
+  )
+
+  write_csv_compat(make_result_df(one_go_set$BP), file.path(one_table_dir, "7_1_GO_BP_enrichment_results.csv"), row.names = FALSE)
+  write_csv_compat(make_result_df(one_go_set$MF), file.path(one_table_dir, "7_2_GO_MF_enrichment_results.csv"), row.names = FALSE)
+  write_csv_compat(make_result_df(one_go_set$CC), file.path(one_table_dir, "7_3_GO_CC_enrichment_results.csv"), row.names = FALSE)
+  write_csv_compat(make_result_df(one_go_set$ALL), file.path(one_table_dir, "7_4_GO_ALL_enrichment_results.csv"), row.names = FALSE)
 
   save_go_family(one_go_set$BP, go_family_paths(one_plot_dir, "7_1_GO_BP"), paste("GO BP", one_label), "BP")
   save_go_family(one_go_set$MF, go_family_paths(one_plot_dir, "7_2_GO_MF"), paste("GO MF", one_label), "MF")
@@ -89,7 +99,8 @@ for (one_direction in names(go_ora_sets)) {
   save_go_all_family(one_go_set$ALL, one_plot_dir, paste("GO ORA", one_label))
 }
 
-write_csv_safe(go_directional_df, file.path(step6_table_dir("all"), "7_0_GO_directional_summary.csv"), row.names = FALSE)
+write_csv_safe(go_enrichment_results, file.path(step6_table_dir("all"), "enrichment_results.csv"), row.names = FALSE)
+write_csv_compat(go_directional_df, file.path(step6_table_dir("all"), "7_0_GO_directional_summary.csv"), row.names = FALSE)
 if (nrow(go_directional_df) > 0) {
   save_directional_ora_plot(
     go_directional_df %>% filter(source == "ALL"),

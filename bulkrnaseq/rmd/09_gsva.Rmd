@@ -114,19 +114,27 @@ write_gsva_matrix(hallmark_gsva, "result/09_gsva/09_1_Hallmark_GSVA_matrix.tsv")
 write_gsva_matrix(kegg_gsva, "result/09_gsva/09_2_KEGG_GSVA_matrix.tsv")
 write_gsva_matrix(reactome_gsva, "result/09_gsva/09_3_Reactome_GSVA_matrix.tsv")
 write_gsva_matrix(c5_gsva, "result/09_gsva/09_4_MSigDB_C5_GSVA_matrix.tsv")
-write.csv(hallmark_gsva_diff, "result/09_gsva/09_5_Hallmark_GSVA_differential.csv", row.names = FALSE)
-write.csv(kegg_gsva_diff, "result/09_gsva/09_6_KEGG_GSVA_differential.csv", row.names = FALSE)
-write.csv(reactome_gsva_diff, "result/09_gsva/09_7_Reactome_GSVA_differential.csv", row.names = FALSE)
-write.csv(c5_gsva_diff, "result/09_gsva/09_8_MSigDB_C5_GSVA_differential.csv", row.names = FALSE)
-write.csv(gsva_status, "result/09_gsva/09_0_GSVA_status.csv", row.names = FALSE)
+gsva_differential <- bind_rows(
+  hallmark_gsva_diff %>% mutate(collection = "Hallmark"),
+  kegg_gsva_diff %>% mutate(collection = "KEGG"),
+  reactome_gsva_diff %>% mutate(collection = "Reactome"),
+  c5_gsva_diff %>% mutate(collection = "MSigDB_C5")
+) %>%
+  dplyr::select(collection, everything())
+write_csv_safe(gsva_differential, "result/09_gsva/09_gsva_differential.csv", row.names = FALSE)
+write_csv_compat(hallmark_gsva_diff, "result/09_gsva/09_5_Hallmark_GSVA_differential.csv", row.names = FALSE)
+write_csv_compat(kegg_gsva_diff, "result/09_gsva/09_6_KEGG_GSVA_differential.csv", row.names = FALSE)
+write_csv_compat(reactome_gsva_diff, "result/09_gsva/09_7_Reactome_GSVA_differential.csv", row.names = FALSE)
+write_csv_compat(c5_gsva_diff, "result/09_gsva/09_8_MSigDB_C5_GSVA_differential.csv", row.names = FALSE)
+write_csv_safe(gsva_status, "result/09_gsva/09_0_GSVA_status.csv", row.names = FALSE)
 
-gsva_leading_summary <- bind_rows(hallmark_gsva_diff, kegg_gsva_diff, reactome_gsva_diff, c5_gsva_diff) %>%
+gsva_leading_summary <- gsva_differential %>%
   filter(is.finite(P.Value)) %>%
   group_by(family, direction) %>%
   arrange(P.Value, desc(abs(logFC)), .by_group = TRUE) %>%
   slice_head(n = 10) %>%
   ungroup()
-write.csv(gsva_leading_summary, "result/09_gsva/09_9_leading_GSVA_pathway_summary.csv", row.names = FALSE)
+write_csv_safe(gsva_leading_summary, "result/09_gsva/09_9_leading_GSVA_pathway_summary.csv", row.names = FALSE)
 ```
 
 ## 09.2 GSVA 图表

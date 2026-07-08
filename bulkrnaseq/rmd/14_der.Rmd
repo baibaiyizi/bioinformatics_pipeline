@@ -218,10 +218,13 @@ if (nrow(der_all_regions) > 0 && nrow(der_gene_summary_tbl) > 0) {
 }
 
 der_overlap_summary <- make_overlap_summary(der_sig_ids, unique(de_result$ensembl_id[de_result$direction != "ns"]), "DER", "DE")
-write.csv(der_all_regions, file.path(step13_dir, "14_1_all_DERs.csv"), row.names = FALSE)
-write.csv(der_sig_regions, file.path(step13_dir, "14_2_significant_DERs.csv"), row.names = FALSE)
-write.csv(der_gene_summary_tbl, file.path(step13_dir, "14_3_DER_gene_summary.csv"), row.names = FALSE)
-write.csv(der_overlap_summary, file.path(step13_dir, "14_4_DE_DER_overlap_summary.csv"), row.names = FALSE)
+der_summary <- prepend_metadata_columns(der_overlap_summary, list(summary_type = "DE_overlap"))
+write_csv_safe(der_all_regions, file.path(step13_dir, "14_1_all_DERs.csv"), row.names = FALSE)
+write_csv_safe(der_gene_summary_tbl, file.path(step13_dir, "14_DER_gene_evidence.csv"), row.names = FALSE)
+write_csv_safe(der_summary, file.path(step13_dir, "14_DER_summary.csv"), row.names = FALSE)
+write_csv_compat(der_sig_regions, file.path(step13_dir, "14_2_significant_DERs.csv"), row.names = FALSE)
+write_csv_compat(der_gene_summary_tbl, file.path(step13_dir, "14_3_DER_gene_summary.csv"), row.names = FALSE)
+write_csv_compat(der_overlap_summary, file.path(step13_dir, "14_4_DE_DER_overlap_summary.csv"), row.names = FALSE)
 ```
 
 ## 14.2 DER 图表
@@ -231,7 +234,12 @@ if (nrow(der_all_regions) > 0) {
   der_class_tbl <- der_all_regions %>%
     count(region_class, name = "region_count") %>%
     arrange(desc(region_count), region_class)
-  write.csv(der_class_tbl, file.path(step13_dir, "14_5_DER_region_class_summary.csv"), row.names = FALSE)
+  der_summary <- bind_rows(
+    der_summary,
+    prepend_metadata_columns(der_class_tbl, list(summary_type = "region_class"))
+  )
+  write_csv_safe(der_summary, file.path(step13_dir, "14_DER_summary.csv"), row.names = FALSE)
+  write_csv_compat(der_class_tbl, file.path(step13_dir, "14_5_DER_region_class_summary.csv"), row.names = FALSE)
 
   der_class_plot <- ggplot(der_class_tbl, aes(x = reorder(region_class, region_count), y = region_count, fill = region_class)) +
     geom_col(width = 0.75) +

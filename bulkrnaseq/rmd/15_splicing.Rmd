@@ -415,9 +415,9 @@ if (nrow(rmats_combined) == 0) {
     filter(significant_as) %>%
     arrange(event_pvalue, desc(abs_delta_psi))
 
-  write.csv(rmats_file_index, step10_event_table_path("15_0_rMATS_file_index.csv"), row.names = FALSE)
-  write.csv(rmats_combined, step10_event_table_path("15_1_rMATS_all_events.csv"), row.names = FALSE)
-  write.csv(rmats_sig, step10_event_table_path("15_2_significant_rMATS_events.csv"), row.names = FALSE)
+  write_csv_safe(rmats_file_index, step10_event_table_path("15_0_rMATS_file_index.csv"), row.names = FALSE)
+  write_csv_safe(rmats_combined, step10_event_table_path("15_1_rMATS_all_events.csv"), row.names = FALSE)
+  write_csv_compat(rmats_sig, step10_event_table_path("15_2_significant_rMATS_events.csv"), row.names = FALSE)
 }
 ```
 
@@ -436,7 +436,9 @@ if (nrow(rmats_combined) > 0) {
       .groups = "drop"
     )
 
-  write.csv(rmats_summary, step10_event_table_path("15_3_rMATS_event_summary.csv"), row.names = FALSE)
+  rmats_event_summary <- prepend_metadata_columns(rmats_summary, list(summary_type = "event_count"))
+  write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
+  write_csv_compat(rmats_summary, step10_event_table_path("15_3_rMATS_event_summary.csv"), row.names = FALSE)
 
   event_barplot <- ggplot(rmats_summary, aes(x = event_type, y = significant_events, fill = count_mode)) +
     geom_col(position = "dodge", width = 0.7) +
@@ -447,7 +449,12 @@ if (nrow(rmats_combined) > 0) {
   direction_summary <- rmats_sig %>%
     group_by(count_mode, event_type, splice_direction) %>%
     summarise(event_count = n(), .groups = "drop")
-  write.csv(direction_summary, step10_event_table_path("15_4b_rMATS_direction_summary.csv"), row.names = FALSE)
+  rmats_event_summary <- bind_rows(
+    rmats_event_summary,
+    prepend_metadata_columns(direction_summary, list(summary_type = "direction_count"))
+  )
+  write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
+  write_csv_compat(direction_summary, step10_event_table_path("15_4b_rMATS_direction_summary.csv"), row.names = FALSE)
 
   direction_plot <- ggplot(direction_summary, aes(x = event_type, y = event_count, fill = splice_direction)) +
     geom_col(position = "stack", width = 0.7) +
@@ -489,7 +496,7 @@ if (nrow(rmats_combined) > 0) {
       de_pvalue
     ) %>%
     slice_head(n = 50)
-  write.csv(top_rmats_events, step10_event_table_path("15_6_top_rMATS_events.csv"), row.names = FALSE)
+  write_csv_safe(top_rmats_events, step10_event_table_path("15_6_top_rMATS_events.csv"), row.names = FALSE)
 }
 ```
 
@@ -518,7 +525,7 @@ if (nrow(rmats_combined) > 0) {
           jcec_pvalue < 0.05
       )
 
-    write.csv(concordance_tbl, step10_event_table_path("15_6b_JC_JCEC_event_concordance.csv"), row.names = FALSE)
+    write_csv_safe(concordance_tbl, step10_event_table_path("15_6b_JC_JCEC_event_concordance.csv"), row.names = FALSE)
 
     concordance_summary <- concordance_tbl %>%
       group_by(event_type) %>%
@@ -530,7 +537,12 @@ if (nrow(rmats_combined) > 0) {
         pvalue_cor = safe_cor(-log10(jc_pvalue + 1e-300), -log10(jcec_pvalue + 1e-300)),
         .groups = "drop"
       )
-    write.csv(concordance_summary, step10_event_table_path("15_6c_JC_JCEC_concordance_summary.csv"), row.names = FALSE)
+    rmats_event_summary <- bind_rows(
+      rmats_event_summary %||% data.frame(),
+      prepend_metadata_columns(concordance_summary, list(summary_type = "JC_JCEC_concordance"))
+    )
+    write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
+    write_csv_compat(concordance_summary, step10_event_table_path("15_6c_JC_JCEC_concordance_summary.csv"), row.names = FALSE)
 
     concordance_plot <- ggplot(concordance_tbl, aes(x = jc_delta_psi, y = jcec_delta_psi, color = event_type)) +
       geom_point(alpha = 0.55, size = 1.2) +
@@ -552,7 +564,7 @@ if (nrow(rmats_combined) > 0) {
       arrange(PValue, desc(abs_delta_psi))
   }
 
-  write.csv(high_confidence_events, step10_event_table_path("15_6e_high_confidence_AS_events.csv"), row.names = FALSE)
+  write_csv_safe(high_confidence_events, step10_event_table_path("15_6e_high_confidence_AS_events.csv"), row.names = FALSE)
 
   de_sig_ids <- unique(de_result$ensembl_id[de_result$direction != "ns"])
   das_ids <- unique(rmats_sig$gene_id_clean[!is.na(rmats_sig$gene_id_clean) & rmats_sig$gene_id_clean != ""])
@@ -566,7 +578,12 @@ if (nrow(rmats_combined) > 0) {
     ),
     stringsAsFactors = FALSE
   )
-  write.csv(overlap_summary, step10_event_table_path("15_7_DE_DAS_overlap_summary.csv"), row.names = FALSE)
+  rmats_event_summary <- bind_rows(
+    rmats_event_summary %||% data.frame(),
+    prepend_metadata_columns(overlap_summary, list(summary_type = "DE_DAS_overlap"))
+  )
+  write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
+  write_csv_compat(overlap_summary, step10_event_table_path("15_7_DE_DAS_overlap_summary.csv"), row.names = FALSE)
 
   overlap_plot <- ggplot(overlap_summary, aes(x = category, y = count, fill = category)) +
     geom_col(width = 0.7) +
@@ -665,9 +682,9 @@ if (nrow(rmats_combined) > 0) {
     ) %>%
     arrange(best_dsfa_pvalue, desc(max_abs_freq_diff))
 
-  write.csv(dsfa_event_table, step10_event_table_path("15_8b_DSFA_event_table.csv"), row.names = FALSE)
-  write.csv(dsfa_sig_events, step10_event_table_path("15_8c_significant_DSFA_events.csv"), row.names = FALSE)
-  write.csv(dsfa_gene_burden, step10_event_table_path("15_8d_DSFA_gene_burden.csv"), row.names = FALSE)
+  write_csv_safe(dsfa_event_table, step10_event_table_path("15_8b_DSFA_event_table.csv"), row.names = FALSE)
+  write_csv_compat(dsfa_sig_events, step10_event_table_path("15_8c_significant_DSFA_events.csv"), row.names = FALSE)
+  write_csv_safe(dsfa_gene_burden, step10_event_table_path("15_8d_DSFA_gene_burden.csv"), row.names = FALSE)
 
   if (nrow(dsfa_event_table) > 0) {
     dsfa_scatter_plot <- dsfa_event_table %>%
@@ -686,7 +703,15 @@ if (nrow(rmats_combined) > 0) {
     dsfa_type_summary <- dsfa_sig_events %>%
       count(event_type, name = "event_count") %>%
       arrange(desc(event_count), event_type)
-    write.csv(dsfa_type_summary, step10_event_table_path("15_8f_DSFA_event_type_summary.csv"), row.names = FALSE)
+    if (!exists("rmats_event_summary") || !is.data.frame(rmats_event_summary)) {
+      rmats_event_summary <- data.frame()
+    }
+    rmats_event_summary <- bind_rows(
+      rmats_event_summary,
+      prepend_metadata_columns(dsfa_type_summary, list(summary_type = "DSFA_event_type"))
+    )
+    write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
+    write_csv_compat(dsfa_type_summary, step10_event_table_path("15_8f_DSFA_event_type_summary.csv"), row.names = FALSE)
 
     dsfa_bar_plot <- ggplot(dsfa_type_summary, aes(x = reorder(event_type, event_count), y = event_count, fill = event_type)) +
       geom_col(width = 0.75) +

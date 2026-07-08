@@ -1035,7 +1035,7 @@ pdf_device_fn <- function() {
 }
 
 base_pdf_device_fn <- function(path, width, height) {
-  grDevices::pdf(path, width = width, height = height, useDingbats = FALSE, bg = "#FFFFFF")
+  grDevices::pdf(path, width = width, height = height, useDingbats = FALSE)
 }
 
 FIG_PNG_DPI <- suppressWarnings(as.numeric(Sys.getenv("FIG_PNG_DPI", "300")))
@@ -1054,9 +1054,9 @@ png_path_from_pdf <- function(path) {
 save_png_device <- function(path, width, height, expr) {
   ensure_parent_dir(path)
   tryCatch({
-    grDevices::png(path, width = width, height = height, units = "in", res = FIG_PNG_DPI, type = "cairo", bg = "#FFFFFF")
+    grDevices::png(path, width = width, height = height, units = "in", res = FIG_PNG_DPI, type = "cairo")
   }, error = function(e) {
-    grDevices::png(path, width = width, height = height, units = "in", res = FIG_PNG_DPI, bg = "#FFFFFF")
+    grDevices::png(path, width = width, height = height, units = "in", res = FIG_PNG_DPI)
   })
   force(expr)
   grDevices::dev.off()
@@ -1243,6 +1243,86 @@ write_csv_safe <- function(x, path, row.names = FALSE, ...) {
   utils::write.csv(sanitize_table_for_export(x), path, row.names = row.names, ...)
 }
 
+write_compat_tables <- function() {
+  truthy_env("RNASEQ_WRITE_COMPAT_TABLES", default = FALSE)
+}
+
+write_csv_compat <- function(x, path, row.names = FALSE, ...) {
+  if (write_compat_tables()) {
+    write_csv_safe(x, path, row.names = row.names, ...)
+  }
+  invisible(x)
+}
+
+prepend_metadata_columns <- function(tbl, metadata) {
+  tbl <- sanitize_table_for_export(tbl)
+  if (nrow(tbl) == 0) {
+    for (nm in rev(names(metadata))) {
+      tbl[[nm]] <- character(0)
+    }
+    return(tbl[, c(names(metadata), setdiff(colnames(tbl), names(metadata))), drop = FALSE])
+  }
+  for (nm in rev(names(metadata))) {
+    tbl[[nm]] <- metadata[[nm]]
+  }
+  tbl[, c(names(metadata), setdiff(colnames(tbl), names(metadata))), drop = FALSE]
+}
+
+standardize_enrichment_table <- function(tbl, analysis_type, database, source_module, direction = NULL, ontology = NULL) {
+  tbl <- make_result_df(tbl)
+  if (is.null(direction)) {
+    if ("direction" %in% colnames(tbl)) {
+      direction <- tbl$direction
+    } else if ("NES" %in% colnames(tbl)) {
+      direction <- ifelse(suppressWarnings(as.numeric(tbl$NES)) >= 0, "up", "down")
+    } else {
+      direction <- "all"
+    }
+  }
+  if (is.null(ontology)) {
+    if ("ONTOLOGY" %in% colnames(tbl)) {
+      ontology <- tbl$ONTOLOGY
+    } else if ("source" %in% colnames(tbl)) {
+      ontology <- tbl$source
+    } else {
+      ontology <- NA_character_
+    }
+  }
+  metadata <- list(
+    analysis_type = analysis_type,
+    database = database,
+    direction = direction,
+    ontology = ontology,
+    source_module = source_module
+  )
+  prepend_metadata_columns(tbl, metadata)
+}
+
+standardize_leading_edge_table <- function(tbl, database, source_module, direction = NULL, pathway_col = NULL) {
+  tbl <- sanitize_table_for_export(tbl)
+  if (is.null(direction)) {
+    direction <- if ("direction" %in% colnames(tbl)) {
+      tbl$direction
+    } else if ("NES" %in% colnames(tbl)) {
+      ifelse(suppressWarnings(as.numeric(tbl$NES)) >= 0, "up", "down")
+    } else {
+      "all"
+    }
+  }
+  if (is.null(pathway_col)) {
+    pathway_col <- intersect(c("ID", "pathway", "pathway_id", "Description"), colnames(tbl))
+    pathway_col <- if (length(pathway_col) > 0) pathway_col[[1]] else NA_character_
+  }
+  pathway_id <- if (!is.na(pathway_col) && pathway_col %in% colnames(tbl)) tbl[[pathway_col]] else rep(NA_character_, nrow(tbl))
+  metadata <- list(
+    database = database,
+    direction = direction,
+    pathway_id = pathway_id,
+    source_module = source_module
+  )
+  prepend_metadata_columns(tbl, metadata)
+}
+
 plot_audit_records <- list()
 
 plot_audit_path_for_primary <- function(primary) {
@@ -1320,36 +1400,10 @@ flush_plot_audit <- function(path = file.path(result_root_dir, "00_audit", "tabl
   invisible(audit_tbl)
 }
 
-polish_ggplot_for_export <- function(plot) {
-  if (!inherits(plot, "ggplot") && !inherits(plot, "patchwork")) {
-    return(plot)
-  }
-  tryCatch(
-    plot +
-      theme(
-        plot.background = element_rect(fill = viz_pal$neutral["paper"], color = NA),
-        panel.background = element_rect(fill = viz_pal$neutral["paper"], color = NA),
-        legend.background = element_rect(fill = viz_pal$neutral["paper"], color = NA),
-        legend.key = element_rect(fill = viz_pal$neutral["paper"], color = NA),
-        plot.margin = grid::unit(viz_style$plot_margin, "pt")
-      ),
-    error = function(e) plot
-  )
-}
-
 save_plot_versions <- function(plot, primary, width = 8, height = 6) {
   primary <- route_output_path(primary, preferred = "plot")
   ensure_parent_dir(primary)
-  plot <- polish_ggplot_for_export(plot)
-  ggsave(
-    primary,
-    plot = plot,
-    width = width,
-    height = height,
-    device = pdf_device_fn(),
-    bg = unname(viz_pal$neutral["paper"]),
-    limitsize = FALSE
-  )
+  ggsave(primary, plot = plot, width = width, height = height, device = pdf_device_fn())
   ggsave(
     png_path_from_pdf(primary),
     plot = plot,
@@ -1357,11 +1411,8 @@ save_plot_versions <- function(plot, primary, width = 8, height = 6) {
     height = height,
     units = "in",
     dpi = FIG_PNG_DPI,
-    device = "png",
-    bg = unname(viz_pal$neutral["paper"]),
-    limitsize = FALSE
+    device = "png"
   )
-  record_plot_status(primary, status = "generated", input_rows = NA_integer_)
 }
 
 save_placeholder_plot <- function(primary, title = "Plot skipped", reason = "No plottable data", width = 8, height = 6, input_rows = NA_integer_) {
@@ -1387,13 +1438,12 @@ save_base_pdf_versions <- function(primary, width = 8, height = 6, expr) {
   png_primary <- png_path_from_pdf(primary)
   ensure_parent_dir(png_primary)
   tryCatch({
-    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI, type = "cairo", bg = "#FFFFFF")
+    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI, type = "cairo")
   }, error = function(e) {
-    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI, bg = "#FFFFFF")
+    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI)
   })
   eval(expr_sub, envir = expr_env)
   dev.off()
-  record_plot_status(primary, status = "generated", input_rows = NA_integer_)
 }
 
 save_pheatmap_versions <- function(primary, width = 8, height = 6, expr) {
@@ -1421,13 +1471,12 @@ save_pheatmap_versions <- function(primary, width = 8, height = 6, expr) {
   png_primary <- png_path_from_pdf(primary)
   ensure_parent_dir(png_primary)
   tryCatch({
-    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI, type = "cairo", bg = "#FFFFFF")
+    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI, type = "cairo")
   }, error = function(e) {
-    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI, bg = "#FFFFFF")
+    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI)
   })
   draw_once()
   grDevices::dev.off()
-  record_plot_status(primary, status = "generated", input_rows = NA_integer_)
 }
 
 write.csv <- function(x, file = "", ...) {
@@ -3432,22 +3481,8 @@ group1_color <- unname(rna_group_palette[[group1_label]])
 group2_color <- unname(rna_group_palette[[group2_label]])
 rna_de_palette <- c("up" = "#FF9F9B", "down" = "#A1C9F4", "ns" = "#D4D9DE")
 rna_sig_palette <- c("significant" = "#FF9F9B", "ns" = "#D4D9DE")
-rna_neutral_palette <- c(
-  "paper" = "#FFFFFF",
-  "light" = "#FFFDF8",
-  "grid" = "#D4D9DE",
-  "mid" = "#D4D9DE",
-  "dark" = "#5C6B73",
-  "ink" = "#5C6B73"
-)
-rna_accent_palette <- c(
-  "warm" = "#FFB482",
-  "green" = "#8DE5A1",
-  "purple" = "#B39FDB",
-  "yellow" = "#FDFFB6",
-  "teal" = "#9ED9CC",
-  "peach" = "#FFD3A8"
-)
+rna_neutral_palette <- c("light" = "#FFFDF8", "mid" = "#D4D9DE", "dark" = "#5C6B73")
+rna_accent_palette <- c("warm" = "#FFB482", "green" = "#8DE5A1", "purple" = "#B39FDB", "yellow" = "#FDFFB6", "teal" = "#9ED9CC", "peach" = "#FFD3A8")
 rna_red_yellow_blue_palette <- c("low" = "#A1C9F4", "mid" = "#FDFFB6", "high" = "#FF9F9B")
 rna_red_yellow_blue_binary_palette <- c(
   "zero" = unname(rna_red_yellow_blue_palette["low"]),
@@ -3480,10 +3515,10 @@ viz_pal <- list(
     "DAS_splicing" = "#8DE5A1",
     "Background_splicing" = "#D4D9DE"
   ),
-  go_category = c("BP" = "#FF9F9B", "CC" = "#A1C9F4", "MF" = "#B39FDB"),
-  enrich_p = rna_red_yellow_blue_palette,
-  score = c("pos" = "#FF9F9B", "neg" = "#A1C9F4"),
-  upset = c("sets" = "#FF9F9B", "main" = "#A1C9F4"),
+  go_category = c("BP" = "#FF9F9B", "CC" = "#A1C9F4", "MF" = "#B39FDB"),   
+  enrich_p = rna_red_yellow_blue_palette,  ## #FFE6A7
+  score = c("pos" = "#FF9F9B", "neg" = "#A1C9F4"),     
+  upset = c("sets" = "#FF9F9B", "main" = "#A1C9F4"),  
   diverging = rna_red_yellow_blue_palette,
   heatmap_diverging = rna_red_yellow_blue_palette,
   heatmap_sequential = rna_red_yellow_blue_palette,
@@ -3501,72 +3536,62 @@ if (length(extra_groups) > 0) {
 }
 
 viz_style <- list(
-  base_size = 11.5,
+  base_size = 11,
   compact_size = 10,
-  line = 0.65,
-  point = 3.0,
-  alpha = 0.86,
-  legend = "right",
-  font_family = first_nonempty(Sys.getenv("RNASEQ_FIG_FONT", unset = ""), "sans"),
-  axis_line = 0.55,
-  grid_line = 0.28,
-  plot_margin = c(10, 12, 8, 10)
+  line = 0.5,
+  point = 2.8,
+  alpha = 0.85,
+  legend = "right"
 )
 
-theme_rnaseq_common <- function(base_size = viz_style$base_size, legend = viz_style$legend, grid = TRUE, border = FALSE) {
-  grid_line <- if (isTRUE(grid)) {
-    element_line(color = alpha(viz_pal$neutral["grid"], 0.85), linewidth = viz_style$grid_line)
-  } else {
-    element_blank()
-  }
-  border_line <- if (isTRUE(border)) {
-    element_rect(color = alpha(viz_pal$neutral["dark"], 0.38), fill = NA, linewidth = viz_style$axis_line)
-  } else {
-    element_blank()
-  }
-
-  theme(
-    text = element_text(family = viz_style$font_family, color = viz_pal$neutral["ink"]),
-    plot.background = element_rect(fill = viz_pal$neutral["paper"], color = NA),
-    panel.background = element_rect(fill = viz_pal$neutral["paper"], color = NA),
-    plot.title = element_text(hjust = 0, face = "bold", size = base_size * 1.18, color = viz_pal$neutral["ink"], margin = margin(b = 5)),
-    plot.subtitle = element_text(hjust = 0, size = base_size * 0.92, color = viz_pal$neutral["dark"], margin = margin(b = 8)),
-    plot.caption = element_text(hjust = 1, size = base_size * 0.78, color = viz_pal$neutral["mid"]),
-    plot.margin = do.call(grid::unit, list(viz_style$plot_margin, "pt")),
-    axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral["ink"], margin = margin(t = 4, r = 4)),
-    axis.title.y = element_text(margin = margin(r = 6)),
-    axis.text = element_text(size = base_size * 0.86, color = viz_pal$neutral["dark"]),
-    axis.ticks = element_line(color = alpha(viz_pal$neutral["dark"], 0.55), linewidth = viz_style$axis_line),
-    axis.line = element_line(color = alpha(viz_pal$neutral["dark"], 0.75), linewidth = viz_style$axis_line),
-    panel.grid.major = grid_line,
-    panel.grid.minor = element_blank(),
-    panel.border = border_line,
-    strip.background = element_rect(fill = viz_pal$neutral["light"], color = alpha(viz_pal$neutral["grid"], 0.9), linewidth = 0.3),
-    strip.text = element_text(size = base_size * 0.88, face = "bold", color = viz_pal$neutral["ink"], margin = margin(t = 5, b = 5)),
-    legend.position = legend,
-    legend.background = element_rect(fill = viz_pal$neutral["paper"], color = NA),
-    legend.key = element_rect(fill = viz_pal$neutral["paper"], color = NA),
-    legend.title = element_text(size = base_size * 0.86, face = "bold", color = viz_pal$neutral["ink"]),
-    legend.text = element_text(size = base_size * 0.8, color = viz_pal$neutral["dark"]),
-    legend.key.size = grid::unit(0.45, "cm"),
-    legend.spacing.y = grid::unit(2, "pt"),
-    panel.spacing = grid::unit(0.55, "lines")
-  )
-}
-
 theme_rnaseq_classic <- function(base_size = viz_style$base_size, legend = viz_style$legend) {
-  theme_classic(base_size = base_size, base_family = viz_style$font_family) +
-    theme_rnaseq_common(base_size = base_size, legend = legend, grid = FALSE, border = FALSE)
+  theme_classic(base_size = base_size) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral["dark"]),
+      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral["dark"]),
+      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral["dark"]),
+      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
+      strip.background = element_rect(fill = viz_pal$neutral["light"], color = NA),
+      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral["dark"]),
+      legend.position = legend,
+      legend.title = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
+      legend.text = element_text(size = base_size * 0.82, color = viz_pal$neutral["dark"])
+    )
 }
 
 theme_rnaseq_minimal <- function(base_size = viz_style$base_size, legend = viz_style$legend) {
-  theme_minimal(base_size = base_size, base_family = viz_style$font_family) +
-    theme_rnaseq_common(base_size = base_size, legend = legend, grid = TRUE, border = FALSE)
+  theme_minimal(base_size = base_size) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral["dark"]),
+      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral["dark"]),
+      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral["dark"]),
+      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
+      panel.grid.major = element_line(color = alpha(viz_pal$neutral["mid"], 0.45), linewidth = 0.35),
+      panel.grid.minor = element_blank(),
+      strip.background = element_rect(fill = viz_pal$neutral["light"], color = NA),
+      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral["dark"]),
+      legend.position = legend,
+      legend.title = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
+      legend.text = element_text(size = base_size * 0.82, color = viz_pal$neutral["dark"])
+    )
 }
 
 theme_rnaseq_bw <- function(base_size = viz_style$base_size, legend = viz_style$legend) {
-  theme_bw(base_size = base_size, base_family = viz_style$font_family) +
-    theme_rnaseq_common(base_size = base_size, legend = legend, grid = TRUE, border = TRUE)
+  theme_bw(base_size = base_size) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral["dark"]),
+      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral["dark"]),
+      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral["dark"]),
+      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
+      panel.grid.major = element_line(color = alpha(viz_pal$neutral["mid"], 0.45), linewidth = 0.35),
+      panel.grid.minor = element_blank(),
+      panel.border = element_rect(color = alpha(viz_pal$neutral["dark"], 0.35), linewidth = 0.5),
+      strip.background = element_rect(fill = viz_pal$neutral["light"], color = NA),
+      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral["dark"]),
+      legend.position = legend,
+      legend.title = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
+      legend.text = element_text(size = base_size * 0.82, color = viz_pal$neutral["dark"])
+    )
 }
 
 heatmap_group_palette <- function(groups, palette = group_colors) {

@@ -17,6 +17,147 @@ CACHE_09_GSVA_STATE="${CACHE_DIR}/09_gsva_state.rds"
 CACHE_15_STATE="${CACHE_DIR}/15_splicing_state.rds"
 CACHE_16_STATE="${CACHE_DIR}/16_immune_state.rds"
 
+# 用户入口：用法和命令行开关集中放在这里。
+OPT_HELP_LONG="--help"
+OPT_HELP_SHORT="-h"
+OPT_LIST="--list"
+OPT_ALL="--all"
+OPT_MODULES="--modules"
+OPT_CLEAN="--clean"
+OPT_NO_CLEAN="--no-clean"
+
+# 一键开关：只改这一行即可决定默认是否保留旧结果和模块缓存。
+# true=保留旧结果和模块缓存；false=运行前清理旧结果和模块缓存。
+KEEP_OLD_RESULTS=true
+
+MODULE_ARGS=()
+RUN_ALL=false
+CLEAN_MODE=""
+
+usage() {
+  cat <<EOF
+Usage:
+  ${SCRIPT_NAME}
+  ${SCRIPT_NAME} ${OPT_ALL}
+  ${SCRIPT_NAME} ${OPT_LIST}
+  ${SCRIPT_NAME} ${OPT_NO_CLEAN} ${OPT_MODULES} 6,8,17
+  ${SCRIPT_NAME} ${OPT_CLEAN} ${OPT_MODULES} 6,8,17
+  ${SCRIPT_NAME} ${OPT_MODULES} 6,8,17
+  ${SCRIPT_NAME} ${OPT_MODULES} 6 8 17
+  ${SCRIPT_NAME} 6 8 17
+  ${SCRIPT_NAME} 6,8,17
+
+Options:
+  ${OPT_HELP_LONG}, ${OPT_HELP_SHORT}    显示帮助
+  ${OPT_LIST}        列出模块编号
+  ${OPT_ALL}         执行全模块
+  ${OPT_MODULES}     指定模块，例如: ${OPT_MODULES} 6,8,17 或 ${OPT_MODULES} 6 8 17
+  ${OPT_CLEAN}       运行前清理对应模块旧结果和模块缓存
+  ${OPT_NO_CLEAN}    运行前保留旧结果和模块缓存
+
+Top Switch:
+  KEEP_OLD_RESULTS=${KEEP_OLD_RESULTS}
+    true  = 默认保留旧结果和模块缓存
+    false = 默认清理旧结果和模块缓存
+
+Behavior:
+  1) 默认无参数/${OPT_ALL} 执行全模块，顺序为: $(print_default_order)
+  2) 模块 02-18 自动补 01
+  3) 模块 09/10/13/14/15/16/17 自动加载 post context；11/12/18 仅加载 01
+  4) 运行 07/08/09/10/13-18 时，仅当 ${CACHE_06_TABLES} 缺失才补跑 06
+  5) 运行 10 时，若 ${CACHE_09_GSVA_STATE} 缺失，会先补跑 09
+  6) 运行 17 时，若 ${CACHE_15_STATE} 或 ${CACHE_16_STATE} 缺失，会按 13/14/15/16 补齐整合缓存
+  7) 可选环境变量 RNASEQ_SPECIES=mouse|human（默认 mouse）
+  8) 默认是否清理由脚本顶部 KEEP_OLD_RESULTS 决定
+  9) ${OPT_NO_CLEAN} 临时保留旧结果和模块缓存；${OPT_CLEAN} 临时清理
+
+Modules:
+$(print_module_table)
+EOF
+}
+
+parse_cli_args() {
+  if [[ $# -eq 0 ]]; then
+    RUN_ALL=true
+    return 0
+  fi
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      "${OPT_HELP_LONG}"|"${OPT_HELP_SHORT}")
+        usage
+        exit 0
+        ;;
+      "${OPT_LIST}")
+        print_module_table
+        exit 0
+        ;;
+      "${OPT_ALL}")
+        RUN_ALL=true
+        shift
+        ;;
+      "${OPT_CLEAN}")
+        CLEAN_MODE="clean"
+        shift
+        ;;
+      "${OPT_NO_CLEAN}")
+        CLEAN_MODE="no-clean"
+        shift
+        ;;
+      "${OPT_MODULES}")
+        shift
+        if [[ $# -eq 0 || "$1" == --* ]]; then
+          echo "[ERROR] ${OPT_MODULES} requires module ids" >&2
+          exit 1
+        fi
+        while [[ $# -gt 0 && "$1" != --* ]]; do
+          MODULE_ARGS+=("$1")
+          shift
+        done
+        ;;
+      *)
+        MODULE_ARGS+=("$1")
+        shift
+        ;;
+    esac
+  done
+}
+
+apply_clean_mode() {
+  local keep_old_results="${KEEP_OLD_RESULTS}"
+
+  if [[ "${CLEAN_MODE}" == "clean" ]]; then
+    keep_old_results=false
+  elif [[ "${CLEAN_MODE}" == "no-clean" ]]; then
+    keep_old_results=true
+  fi
+
+  case "${keep_old_results}" in
+    true|TRUE|1|yes|YES|y|Y|on|ON)
+      export RNASEQ_CLEAN_MODULE_RESULT=false
+      export RNASEQ_CLEAN_MODULE_CACHE=false
+      ;;
+    false|FALSE|0|no|NO|n|N|off|OFF)
+      export RNASEQ_CLEAN_MODULE_RESULT=true
+      export RNASEQ_CLEAN_MODULE_CACHE=true
+      ;;
+    *)
+      echo "[ERROR] KEEP_OLD_RESULTS must be true or false, got: ${KEEP_OLD_RESULTS}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+clean_mode_label() {
+  if [[ "${RNASEQ_CLEAN_MODULE_RESULT}" == "true" && "${RNASEQ_CLEAN_MODULE_CACHE}" == "true" ]]; then
+    printf 'clean'
+  elif [[ "${RNASEQ_CLEAN_MODULE_RESULT}" == "false" && "${RNASEQ_CLEAN_MODULE_CACHE}" == "false" ]]; then
+    printf 'keep old'
+  else
+    printf 'custom'
+  fi
+}
+
 mkdir -p "${LOG_DIR}" "${CACHE_DIR}"
 
 TOTAL_MODULES=18
@@ -95,32 +236,6 @@ print_module_table() {
 
 print_default_order() {
   printf '%s\n' "${DEFAULT_MODULES[*]}"
-}
-
-usage() {
-  cat <<EOF
-Usage:
-  ${SCRIPT_NAME}
-  ${SCRIPT_NAME} --all
-  ${SCRIPT_NAME} --list
-  ${SCRIPT_NAME} --modules 6,8,17
-  ${SCRIPT_NAME} --modules 6 8 17
-  ${SCRIPT_NAME} 6 8 17
-  ${SCRIPT_NAME} 6,8,17
-
-Behavior:
-  1) 默认无参数/--all 执行全模块，顺序为: $(print_default_order)
-  2) 模块 02-18 自动补 01
-  3) 模块 09/10/13/14/15/16/17 自动加载 post context；11/12/18 仅加载 01
-  4) 运行 07/08/09/10/13-18 时，仅当 ${CACHE_06_TABLES} 缺失才补跑 06
-  5) 运行 10 时，若 ${CACHE_09_GSVA_STATE} 缺失，会先补跑 09
-  6) 运行 17 时，若 ${CACHE_15_STATE} 或 ${CACHE_16_STATE} 缺失，会按 13/14/15/16 补齐整合缓存
-  7) 可选环境变量 RNASEQ_SPECIES=mouse|human（默认 mouse）
-  8) 每个实际执行模块开始时清理 result/<module> 和该模块缓存；可用 RNASEQ_CLEAN_MODULE_RESULT=false 或 RNASEQ_CLEAN_MODULE_CACHE=false 关闭
-
-Modules:
-$(print_module_table)
-EOF
 }
 
 ensure_rscript() {
@@ -314,44 +429,8 @@ run_module() {
   echo "[INFO] Done module ${module_id} at $(date '+%Y-%m-%d %H:%M:%S')"
 }
 
-MODULE_ARGS=()
-RUN_ALL=false
-
-if [[ $# -eq 0 ]]; then
-  RUN_ALL=true
-else
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --help|-h)
-        usage
-        exit 0
-        ;;
-      --list)
-        print_module_table
-        exit 0
-        ;;
-      --all)
-        RUN_ALL=true
-        shift
-        ;;
-      --modules)
-        shift
-        if [[ $# -eq 0 ]]; then
-          echo "[ERROR] --modules requires module ids" >&2
-          exit 1
-        fi
-        while [[ $# -gt 0 && "$1" != --* ]]; do
-          MODULE_ARGS+=("$1")
-          shift
-        done
-        ;;
-      *)
-        MODULE_ARGS+=("$1")
-        shift
-        ;;
-    esac
-  done
-fi
+parse_cli_args "$@"
+apply_clean_mode
 
 ensure_rscript
 
@@ -394,6 +473,9 @@ echo "[INFO] Project root: ${ROOT_DIR}"
 echo "[INFO] Rmd template dir: ${RMD_DIR}"
 echo "[INFO] Requested modules (dedup): ${REQUESTED_MODULES[*]}"
 echo "[INFO] Final run order: ${RUN_ORDER[*]}"
+echo "[INFO] Clean mode: $(clean_mode_label)"
+echo "[INFO] Clean module result: ${RNASEQ_CLEAN_MODULE_RESULT}"
+echo "[INFO] Clean module cache: ${RNASEQ_CLEAN_MODULE_CACHE}"
 
 for module_id in "${RUN_ORDER[@]}"; do
   run_module "${module_id}"

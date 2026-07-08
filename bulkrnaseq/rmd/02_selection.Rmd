@@ -14,12 +14,14 @@ selected_sample_overview <- data.frame(
 )
 selected_sample_overview$raw_sample_pool <- ncol(gene_exp_full)
 
-write.csv(selected_sample_overview, "result/02_selection/2_1_selected_sample_table.csv", row.names = FALSE)
+sample_qc_overview <- selected_sample_overview
+write_csv_safe(sample_qc_overview, "result/02_selection/sample_qc_overview.csv", row.names = FALSE)
+write_csv_compat(selected_sample_overview, "result/02_selection/2_1_selected_sample_table.csv", row.names = FALSE)
 
 group_count_tbl <- selected_sample_overview %>%
   count(group, name = "sample_count") %>%
   arrange(group)
-write.csv(group_count_tbl, "result/02_selection/2_2_selected_group_counts.csv", row.names = FALSE)
+write_csv_compat(group_count_tbl, "result/02_selection/2_2_selected_group_counts.csv", row.names = FALSE)
 
 group_count_plot <- ggplot(group_count_tbl, aes(x = group, y = sample_count, fill = group)) +
   geom_col(width = 0.7) +
@@ -66,7 +68,7 @@ if (!is.null(auto_selection_summary) && nrow(auto_selection_summary) > 0) {
       arrange(desc(score), max_outlier_distance, desc(between_group_distance), sample_key) %>%
       slice_head(n = 5) %>%
       ungroup()
-    write.csv(top_by_type, "result/04_pca/4_4_top_combinations_by_type.csv", row.names = FALSE)
+    write_csv_compat(top_by_type, "result/04_pca/4_4_top_combinations_by_type.csv", row.names = FALSE)
 }
 
 if (!is.null(gene_exp_full) && ncol(gene_exp_full) >= ncol(gene_exp)) {
@@ -110,6 +112,7 @@ if (!is.null(gene_count_mat)) {
   count_qc_tbl <- data.frame(
     sample = colnames(gene_count_mat),
     group = sample_info[colnames(gene_count_mat), "group"],
+    stage = sample_info[colnames(gene_count_mat), "stage"],
     raw_counts = colSums(gene_count_mat),
     detected_genes_cpm1 = colSums(edgeR::cpm(gene_count_mat, log = FALSE) >= 1),
     detected_genes_cpm5 = colSums(edgeR::cpm(gene_count_mat, log = FALSE) >= 5),
@@ -120,8 +123,15 @@ if (!is.null(gene_count_mat)) {
     stringsAsFactors = FALSE
   )
 
-  write.csv(count_qc_tbl, "result/02_selection/2_1_sample_overview.csv", row.names = FALSE)
-  write.csv(count_qc_tbl, "result/02_selection/2_4_count_based_qc_metrics.csv", row.names = FALSE)
+  sample_qc_overview <- selected_sample_overview %>%
+    dplyr::select(sample, group, stage, in_selected_set, raw_sample_pool) %>%
+    left_join(
+      count_qc_tbl %>% dplyr::select(-group, -stage),
+      by = "sample"
+    )
+  write_csv_safe(sample_qc_overview, "result/02_selection/sample_qc_overview.csv", row.names = FALSE)
+  write_csv_compat(count_qc_tbl, "result/02_selection/2_1_sample_overview.csv", row.names = FALSE)
+  write_csv_compat(count_qc_tbl, "result/02_selection/2_4_count_based_qc_metrics.csv", row.names = FALSE)
 
   complexity_plot <- ggplot(count_qc_tbl, aes(x = raw_counts / 1e6, y = detected_genes_cpm1, color = group, label = sample)) +
     geom_point(size = 3) +

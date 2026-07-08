@@ -281,17 +281,40 @@ leading_edge_reactome <- extract_leading_edge_table(gsea_reactome_df, id_col = "
 leading_edge_msigdb_c2 <- extract_leading_edge_table(gsea_msigdb_c2_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
 leading_edge_msigdb_c5 <- extract_leading_edge_table(gsea_msigdb_c5_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
 
+enrichment_results <- bind_rows(
+  standardize_enrichment_table(go_directional_df, "ORA", "GO", "06_enrichment"),
+  standardize_enrichment_table(kegg_directional_df, "ORA", "KEGG", "06_enrichment"),
+  standardize_enrichment_table(reactome_directional_df, "ORA", "Reactome", "06_enrichment"),
+  standardize_enrichment_table(gsea_go_df, "GSEA", "GO", "06_enrichment"),
+  standardize_enrichment_table(make_result_df(gsea_kegg), "GSEA", "KEGG", "06_enrichment"),
+  standardize_enrichment_table(gsea_hallmark_df, "GSEA", "Hallmark", "06_enrichment"),
+  standardize_enrichment_table(gsea_reactome_df, "GSEA", "Reactome", "06_enrichment"),
+  standardize_enrichment_table(gsea_msigdb_c2_df, "GSEA", "MSigDB_C2", "06_enrichment"),
+  standardize_enrichment_table(gsea_msigdb_c5_df, "GSEA", "MSigDB_C5", "06_enrichment")
+)
+write_csv_safe(enrichment_results, file.path(step5_table_dir("all"), "enrichment_results.csv"), row.names = FALSE)
+
+gsea_leading_edge <- bind_rows(
+  standardize_leading_edge_table(leading_edge_go, "GO", "06_enrichment"),
+  standardize_leading_edge_table(leading_edge_kegg, "KEGG", "06_enrichment"),
+  standardize_leading_edge_table(leading_edge_hallmark, "Hallmark", "06_enrichment", pathway_col = "pathway"),
+  standardize_leading_edge_table(leading_edge_reactome, "Reactome", "06_enrichment"),
+  standardize_leading_edge_table(leading_edge_msigdb_c2, "MSigDB_C2", "06_enrichment", pathway_col = "pathway"),
+  standardize_leading_edge_table(leading_edge_msigdb_c5, "MSigDB_C5", "06_enrichment", pathway_col = "pathway")
+)
+write_csv_safe(gsea_leading_edge, file.path(step5_table_dir("all"), "gsea_leading_edge.csv"), row.names = FALSE)
+
 for (one_direction in names(kegg_ora_sets)) {
   one_table_dir <- step5_table_dir(one_direction)
-  write_csv_safe(make_result_df(kegg_ora_sets[[one_direction]]), file.path(one_table_dir, "6_1_KEGG_ORA_results.csv"), row.names = FALSE)
-  write_csv_safe(make_result_df(reactome_ora_sets[[one_direction]]), file.path(one_table_dir, "6_2_Reactome_ORA_results.csv"), row.names = FALSE)
+  write_csv_compat(make_result_df(kegg_ora_sets[[one_direction]]), file.path(one_table_dir, "6_1_KEGG_ORA_results.csv"), row.names = FALSE)
+  write_csv_compat(make_result_df(reactome_ora_sets[[one_direction]]), file.path(one_table_dir, "6_2_Reactome_ORA_results.csv"), row.names = FALSE)
 }
-write_csv_safe(kegg_directional_df, file.path(step5_table_dir("all"), "6_0_KEGG_directional_summary.csv"), row.names = FALSE)
-write_csv_safe(reactome_directional_df, file.path(step5_table_dir("all"), "6_0_Reactome_directional_summary.csv"), row.names = FALSE)
-write_csv_safe(gsea_msigdb_c2_df, file.path(step5_table_dir("all"), "6_3_MSigDB_C2_GSEA_results.csv"), row.names = FALSE)
-write_csv_safe(gsea_msigdb_c5_df, file.path(step5_table_dir("all"), "6_4_MSigDB_C5_GSEA_results.csv"), row.names = FALSE)
-write_csv_safe(leading_edge_msigdb_c2, file.path(step5_table_dir("all"), "6_3_MSigDB_C2_leading_edge.csv"), row.names = FALSE)
-write_csv_safe(leading_edge_msigdb_c5, file.path(step5_table_dir("all"), "6_4_MSigDB_C5_leading_edge.csv"), row.names = FALSE)
+write_csv_compat(kegg_directional_df, file.path(step5_table_dir("all"), "6_0_KEGG_directional_summary.csv"), row.names = FALSE)
+write_csv_compat(reactome_directional_df, file.path(step5_table_dir("all"), "6_0_Reactome_directional_summary.csv"), row.names = FALSE)
+write_csv_compat(gsea_msigdb_c2_df, file.path(step5_table_dir("all"), "6_3_MSigDB_C2_GSEA_results.csv"), row.names = FALSE)
+write_csv_compat(gsea_msigdb_c5_df, file.path(step5_table_dir("all"), "6_4_MSigDB_C5_GSEA_results.csv"), row.names = FALSE)
+write_csv_compat(leading_edge_msigdb_c2, file.path(step5_table_dir("all"), "6_3_MSigDB_C2_leading_edge.csv"), row.names = FALSE)
+write_csv_compat(leading_edge_msigdb_c5, file.path(step5_table_dir("all"), "6_4_MSigDB_C5_leading_edge.csv"), row.names = FALSE)
 
 go_all_df <- make_result_df(go_all)
 kegg_ora_df <- make_result_df(kegg_ora)
@@ -320,6 +343,8 @@ enrichment_tables <- list(
   leading_edge_reactome = leading_edge_reactome,
   leading_edge_msigdb_c2 = leading_edge_msigdb_c2,
   leading_edge_msigdb_c5 = leading_edge_msigdb_c5,
+  enrichment_results = enrichment_results,
+  gsea_leading_edge = gsea_leading_edge,
   go_circle_data = go_circle_data,
   kegg_circle_data = kegg_circle_data,
   gsea_circle_data = gsea_circle_data
@@ -339,7 +364,7 @@ enrichment_objects <- list(
 )
 saveRDS(enrichment_objects, cache_06_objects_path)
 
-write.csv(
+write_csv_safe(
   data.frame(
     cache = c("tables", "objects"),
     path = c(cache_06_tables_path, cache_06_objects_path),

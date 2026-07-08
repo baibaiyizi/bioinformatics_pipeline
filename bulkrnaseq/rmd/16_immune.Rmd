@@ -45,7 +45,6 @@ immune_ssgsea_diff <- run_limma_contrast_table(immune_ssgsea_mat, immune_group_f
     significant = !is.na(P.Value) & P.Value < 0.05
   ) %>%
   arrange(P.Value, desc(abs(logFC)))
-write.csv(immune_ssgsea_diff, file.path(step12_dir, "16_3_ssgsea_differential_scores.csv"), row.names = FALSE)
 
 if (rnaseq_species == "mouse") {
   ensure_github_package("mMCPcounter", "cit-bioinfo/mMCP-counter")
@@ -81,7 +80,11 @@ if (rnaseq_species == "mouse") {
 }
 
 write.table(mmcp_mat, file.path(step12_dir, "16_2_mmcpcounter_score_matrix.tsv"), sep = "\t", quote = FALSE, col.names = NA)
-write.csv(immune_mmcp_diff, file.path(step12_dir, "16_4_mmcpcounter_differential_scores.csv"), row.names = FALSE)
+immune_differential_scores <- bind_rows(immune_ssgsea_diff, immune_mmcp_diff) %>%
+  dplyr::select(method, everything())
+write_csv_safe(immune_differential_scores, file.path(step12_dir, "16_immune_differential_scores.csv"), row.names = FALSE)
+write_csv_compat(immune_ssgsea_diff, file.path(step12_dir, "16_3_ssgsea_differential_scores.csv"), row.names = FALSE)
+write_csv_compat(immune_mmcp_diff, file.path(step12_dir, "16_4_mmcpcounter_differential_scores.csv"), row.names = FALSE)
 
 immune_ssgsea_diff$key <- sanitize_pathway_key(immune_ssgsea_diff$cell_type)
 immune_mmcp_diff$key <- sanitize_pathway_key(immune_mmcp_diff$cell_type)
@@ -91,7 +94,7 @@ immune_method_concordance <- inner_join(
   by = "key"
 ) %>%
   mutate(effect_cor = safe_cor(logFC_ssgsea, logFC_mmcp))
-write.csv(immune_method_concordance, file.path(step12_dir, "16_5_method_concordance.csv"), row.names = FALSE)
+write_csv_safe(immune_method_concordance, file.path(step12_dir, "16_5_method_concordance.csv"), row.names = FALSE)
 ```
 
 ## 16.2 免疫浸润图表

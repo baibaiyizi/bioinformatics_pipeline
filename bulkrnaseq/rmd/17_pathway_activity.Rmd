@@ -196,17 +196,24 @@ reactome_activity_diff <- run_activity_diff(reactome_activity, "Reactome")
 write_activity_matrix(hallmark_activity, file.path(step14_dir, "17_1_Hallmark_activity_matrix.tsv"))
 write_activity_matrix(kegg_activity, file.path(step14_dir, "17_2_KEGG_activity_matrix.tsv"))
 write_activity_matrix(reactome_activity, file.path(step14_dir, "17_3_Reactome_activity_matrix.tsv"))
-write.csv(hallmark_activity_diff, file.path(step14_dir, "17_4_Hallmark_activity_differential.csv"), row.names = FALSE)
-write.csv(kegg_activity_diff, file.path(step14_dir, "17_5_KEGG_activity_differential.csv"), row.names = FALSE)
-write.csv(reactome_activity_diff, file.path(step14_dir, "17_6_Reactome_activity_differential.csv"), row.names = FALSE)
+pathway_activity_differential <- bind_rows(
+  hallmark_activity_diff %>% mutate(collection = "Hallmark"),
+  kegg_activity_diff %>% mutate(collection = "KEGG"),
+  reactome_activity_diff %>% mutate(collection = "Reactome")
+) %>%
+  dplyr::select(collection, everything())
+write_csv_safe(pathway_activity_differential, file.path(step14_dir, "17_pathway_activity_differential.csv"), row.names = FALSE)
+write_csv_compat(hallmark_activity_diff, file.path(step14_dir, "17_4_Hallmark_activity_differential.csv"), row.names = FALSE)
+write_csv_compat(kegg_activity_diff, file.path(step14_dir, "17_5_KEGG_activity_differential.csv"), row.names = FALSE)
+write_csv_compat(reactome_activity_diff, file.path(step14_dir, "17_6_Reactome_activity_differential.csv"), row.names = FALSE)
 
-pathway_leading_summary <- bind_rows(hallmark_activity_diff, kegg_activity_diff, reactome_activity_diff) %>%
+pathway_leading_summary <- pathway_activity_differential %>%
   mutate(direction = ifelse(logFC > 0, paste0("higher_in_", group2_label), paste0("higher_in_", group1_label))) %>%
   group_by(family) %>%
   arrange(P.Value, desc(abs(logFC)), .by_group = TRUE) %>%
   slice_head(n = 15) %>%
   ungroup()
-write.csv(pathway_leading_summary, file.path(step14_dir, "17_7_leading_pathway_activity_summary.csv"), row.names = FALSE)
+write_csv_safe(pathway_leading_summary, file.path(step14_dir, "17_7_leading_pathway_activity_summary.csv"), row.names = FALSE)
 ```
 
 ## 17.2 pathway activity 图表

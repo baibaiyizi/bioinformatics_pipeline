@@ -2433,10 +2433,69 @@ empty_standardized_apa <- function() {
   )
 }
 
+apadiff_testable_rows <- function(mutiraw_df, pas_type) {
+  if (!apa_test_method %in% c("unpaired t-test", "paired t-test")) {
+    return(rep(TRUE, nrow(mutiraw_df)))
+  }
+
+  suffix <- if (identical(pas_type, "IPA")) "_IPA_RE" else "_3UTR_RE"
+  trt_samples <- sample_table_apa$samplename[sample_table_apa$condition == group2]
+  con_samples <- sample_table_apa$samplename[sample_table_apa$condition == group1]
+  trt_cols <- paste0(trt_samples, suffix)
+  con_cols <- paste0(con_samples, suffix)
+  if (length(trt_cols) <= 1 || length(con_cols) <= 1) {
+    return(rep(TRUE, nrow(mutiraw_df)))
+  }
+  paired <- identical(apa_test_method, "paired t-test")
+  if (paired && length(trt_cols) != length(con_cols)) {
+    stop("APAdiff paired t-test 需要 treatment/control 样本数量一致")
+  }
+
+  re_cols <- c(trt_cols, con_cols)
+  missing_cols <- setdiff(re_cols, colnames(mutiraw_df))
+  if (length(missing_cols) > 0) {
+    stop(sprintf(
+      "APAdiff %s 缺少样本 RE 列: %s",
+      pas_type,
+      paste(missing_cols, collapse = ", ")
+    ))
+  }
+
+  apply(mutiraw_df[, re_cols, drop = FALSE], 1, function(x) {
+    x <- suppressWarnings(as.numeric(x))
+    if (any(!is.finite(x))) {
+      return(FALSE)
+    }
+    tryCatch({
+      stats::t.test(
+        x[seq_along(trt_cols)],
+        x[length(trt_cols) + seq_along(con_cols)],
+        paired = paired
+      )$p.value
+      TRUE
+    }, error = function(e) FALSE)
+  })
+}
+
 safe_apadiff <- function(mutiraw, pas_type) {
   mutiraw_df <- as.data.frame(mutiraw, stringsAsFactors = FALSE, check.names = FALSE)
   if (nrow(mutiraw_df) == 0) {
     message(sprintf("APAdiff 输入为空，%s 将写出空结果表。", pas_type))
+    return(empty_apa_diff())
+  }
+  testable <- as.logical(apadiff_testable_rows(mutiraw_df, pas_type))
+  testable[is.na(testable)] <- FALSE
+  if (sum(!testable, na.rm = TRUE) > 0) {
+    message(sprintf(
+      "APAdiff 在 %s 上过滤 %d 个无法进行 %s 的常量/非有限事件。",
+      pas_type,
+      sum(!testable, na.rm = TRUE),
+      apa_test_method
+    ))
+  }
+  mutiraw_df <- mutiraw_df[testable, , drop = FALSE]
+  if (nrow(mutiraw_df) == 0) {
+    message(sprintf("APAdiff 在 %s 上无可检验事件，写出空结果表。", pas_type))
     return(empty_apa_diff())
   }
   tryCatch(

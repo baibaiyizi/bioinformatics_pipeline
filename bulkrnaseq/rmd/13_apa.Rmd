@@ -69,10 +69,13 @@ apa_de_scatter_tbl <- apa_gene_summary_tbl %>%
   ) %>%
   mutate(gene_label_plot = dplyr::coalesce(gene_label_de, gene_label, gene_id_clean))
 
-write.csv(apa_all_events, file.path(step11_dir, "13_1_APA_all_events.csv"), row.names = FALSE)
-write.csv(apa_sig_events, file.path(step11_dir, "13_2_significant_APA_events.csv"), row.names = FALSE)
-write.csv(apa_gene_summary_tbl, file.path(step11_dir, "13_3_APA_gene_summary.csv"), row.names = FALSE)
-write.csv(apa_overlap_summary, file.path(step11_dir, "13_4_DE_APA_overlap_summary.csv"), row.names = FALSE)
+apa_summary <- prepend_metadata_columns(apa_overlap_summary, list(summary_type = "DE_overlap"))
+write_csv_safe(apa_all_events, file.path(step11_dir, "13_1_APA_all_events.csv"), row.names = FALSE)
+write_csv_safe(apa_de_scatter_tbl, file.path(step11_dir, "13_APA_gene_evidence.csv"), row.names = FALSE)
+write_csv_safe(apa_summary, file.path(step11_dir, "13_APA_summary.csv"), row.names = FALSE)
+write_csv_compat(apa_sig_events, file.path(step11_dir, "13_2_significant_APA_events.csv"), row.names = FALSE)
+write_csv_compat(apa_gene_summary_tbl, file.path(step11_dir, "13_3_APA_gene_summary.csv"), row.names = FALSE)
+write_csv_compat(apa_overlap_summary, file.path(step11_dir, "13_4_DE_APA_overlap_summary.csv"), row.names = FALSE)
 ```
 
 ## 13.2 APA 图表
@@ -89,7 +92,12 @@ if (nrow(apa_all_events) > 0) {
       .groups = "drop"
     ) %>%
     arrange(desc(significant_events), event_type)
-  write.csv(apa_event_summary, file.path(step11_dir, "13_5_APA_event_summary.csv"), row.names = FALSE)
+  apa_summary <- bind_rows(
+    apa_summary,
+    prepend_metadata_columns(apa_event_summary, list(summary_type = "event_type"))
+  )
+  write_csv_safe(apa_summary, file.path(step11_dir, "13_APA_summary.csv"), row.names = FALSE)
+  write_csv_compat(apa_event_summary, file.path(step11_dir, "13_5_APA_event_summary.csv"), row.names = FALSE)
 
   apa_bar_plot <- ggplot(apa_event_summary, aes(x = event_type, y = significant_events, fill = event_type)) +
     geom_col(width = 0.75) +
