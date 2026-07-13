@@ -105,9 +105,9 @@ annotate_der_nearest_genes <- function(der_tbl) {
   der_has_chr <- any(grepl("^chr", der_valid$.seqnames))
   gene_has_chr <- any(grepl("^chr", gene_levels))
   if (der_has_chr && !gene_has_chr) {
-    gene_gr <- GenomeInfoDb::`seqlevels<-`(gene_gr, paste0("chr", gene_levels))
+    gene_gr <- GenomeInfoDb::renameSeqlevels(gene_gr, paste0("chr", gene_levels))
   } else if (!der_has_chr && gene_has_chr) {
-    gene_gr <- GenomeInfoDb::`seqlevels<-`(gene_gr, sub("^chr", "", gene_levels))
+    gene_gr <- GenomeInfoDb::renameSeqlevels(gene_gr, sub("^chr", "", gene_levels))
   }
 
   der_gr <- GenomicRanges::GRanges(

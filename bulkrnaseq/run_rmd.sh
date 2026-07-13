@@ -25,14 +25,21 @@ OPT_ALL="--all"
 OPT_MODULES="--modules"
 OPT_CLEAN="--clean"
 OPT_NO_CLEAN="--no-clean"
+OPT_COMPAT="--compat"
+OPT_NO_COMPAT="--no-compat"
 
 # 一键开关：只改这一行即可决定默认是否保留旧结果和模块缓存。
 # true=保留旧结果和模块缓存；false=运行前清理旧结果和模块缓存。
-KEEP_OLD_RESULTS=true
+KEEP_OLD_RESULTS=false
+
+# 默认只写规范化主表；需要旧编号分表时显式使用 --compat。
+: "${RNASEQ_WRITE_COMPAT_TABLES:=false}"
+export RNASEQ_WRITE_COMPAT_TABLES
 
 MODULE_ARGS=()
 RUN_ALL=false
 CLEAN_MODE=""
+COMPAT_MODE=""
 
 usage() {
   cat <<EOF
@@ -42,6 +49,7 @@ Usage:
   ${SCRIPT_NAME} ${OPT_LIST}
   ${SCRIPT_NAME} ${OPT_NO_CLEAN} ${OPT_MODULES} 6,8,17
   ${SCRIPT_NAME} ${OPT_CLEAN} ${OPT_MODULES} 6,8,17
+  ${SCRIPT_NAME} ${OPT_COMPAT} ${OPT_MODULES} 6,8
   ${SCRIPT_NAME} ${OPT_MODULES} 6,8,17
   ${SCRIPT_NAME} ${OPT_MODULES} 6 8 17
   ${SCRIPT_NAME} 6 8 17
@@ -54,11 +62,16 @@ Options:
   ${OPT_MODULES}     指定模块，例如: ${OPT_MODULES} 6,8,17 或 ${OPT_MODULES} 6 8 17
   ${OPT_CLEAN}       运行前清理对应模块旧结果和模块缓存
   ${OPT_NO_CLEAN}    运行前保留旧结果和模块缓存
+  ${OPT_COMPAT}      同时写出旧编号分表
+  ${OPT_NO_COMPAT}   只写规范化主表（默认）
 
 Top Switch:
   KEEP_OLD_RESULTS=${KEEP_OLD_RESULTS}
     true  = 默认保留旧结果和模块缓存
     false = 默认清理旧结果和模块缓存
+  RNASEQ_WRITE_COMPAT_TABLES=${RNASEQ_WRITE_COMPAT_TABLES}
+    true  = 规范化主表和旧编号分表都写出
+    false = 只写规范化主表，跳过旧编号分表（默认）
 
 Behavior:
   1) 默认无参数/${OPT_ALL} 执行全模块，顺序为: $(print_default_order)
@@ -70,6 +83,11 @@ Behavior:
   7) 可选环境变量 RNASEQ_SPECIES=mouse|human（默认 mouse）
   8) 默认是否清理由脚本顶部 KEEP_OLD_RESULTS 决定
   9) ${OPT_NO_CLEAN} 临时保留旧结果和模块缓存；${OPT_CLEAN} 临时清理
+  10) ${OPT_COMPAT}/${OPT_NO_COMPAT} 或 RNASEQ_WRITE_COMPAT_TABLES 控制旧编号分表
+  11) DE 参数环境变量（当前默认保持 2cell 原口径）：
+      RNASEQ_DE_USE_PADJ=false
+      RNASEQ_DE_PVALUE_CUTOFF=0.05
+      RNASEQ_DE_LOG2FC_CUTOFF=1
 
 Modules:
 $(print_module_table)
@@ -104,6 +122,14 @@ parse_cli_args() {
         CLEAN_MODE="no-clean"
         shift
         ;;
+      "${OPT_COMPAT}")
+        COMPAT_MODE="compat"
+        shift
+        ;;
+      "${OPT_NO_COMPAT}")
+        COMPAT_MODE="no-compat"
+        shift
+        ;;
       "${OPT_MODULES}")
         shift
         if [[ $# -eq 0 || "$1" == --* ]]; then
@@ -121,6 +147,27 @@ parse_cli_args() {
         ;;
     esac
   done
+}
+
+apply_compat_mode() {
+  if [[ "${COMPAT_MODE}" == "compat" ]]; then
+    RNASEQ_WRITE_COMPAT_TABLES=true
+  elif [[ "${COMPAT_MODE}" == "no-compat" ]]; then
+    RNASEQ_WRITE_COMPAT_TABLES=false
+  fi
+
+  case "${RNASEQ_WRITE_COMPAT_TABLES}" in
+    true|TRUE|1|yes|YES|y|Y|on|ON)
+      export RNASEQ_WRITE_COMPAT_TABLES=true
+      ;;
+    false|FALSE|0|no|NO|n|N|off|OFF)
+      export RNASEQ_WRITE_COMPAT_TABLES=false
+      ;;
+    *)
+      echo "[ERROR] RNASEQ_WRITE_COMPAT_TABLES must be true or false, got: ${RNASEQ_WRITE_COMPAT_TABLES}" >&2
+      exit 1
+      ;;
+  esac
 }
 
 apply_clean_mode() {
@@ -161,8 +208,8 @@ clean_mode_label() {
 mkdir -p "${LOG_DIR}" "${CACHE_DIR}"
 
 TOTAL_MODULES=18
-# 文件编号已经按科学顺序重排，默认/--all 顺序即 01-18。
-DEFAULT_MODULES=($(seq 1 "${TOTAL_MODULES}"))
+# WGCNA must exist before GSVA/TF so their cross-module integration is not skipped.
+DEFAULT_MODULES=(1 2 3 4 5 6 7 8 11 12 9 10 13 14 15 16 17 18)
 
 declare -A MODULE_FILES=(
   [1]="01_main_setup.R"
@@ -423,7 +470,7 @@ run_module() {
   else
     setup_file="$(module_abs_path 1)"
 
-    RNASEQ_ACTIVE_RESULT_STEP="${active_result_step}" Rscript -e "module_id <- as.integer('${module_id}'); root_dir <- '${ROOT_DIR}'; rmd_dir <- '${RMD_DIR}'; Sys.setenv(RNASEQ_ROOT_DIR = root_dir, RNASEQ_RMD_DIR = rmd_dir); input_file <- '${input_file}'; setup_file <- '${setup_file}'; setwd(root_dir); if (!file.exists(setup_file)) stop('Missing setup file: ', setup_file); source(setup_file, local = globalenv()); if (module_id %in% c(9L, 10L, 13L, 14L, 15L, 16L, 17L)) load_post_context(globalenv()); knitr::opts_knit\$set(root.dir = root_dir); temp_output <- tempfile(sprintf('module_%02d_', module_id), fileext = '.md'); on.exit(unlink(temp_output, force = TRUE), add = TRUE); invisible(knitr::knit(input_file, output = temp_output, envir = globalenv(), quiet = TRUE))"
+    RNASEQ_ACTIVE_RESULT_STEP="${active_result_step}" Rscript -e "module_id <- as.integer('${module_id}'); root_dir <- '${ROOT_DIR}'; rmd_dir <- '${RMD_DIR}'; Sys.setenv(RNASEQ_ROOT_DIR = root_dir, RNASEQ_RMD_DIR = rmd_dir); input_file <- '${input_file}'; setup_file <- '${setup_file}'; setwd(root_dir); if (!file.exists(setup_file)) stop('Missing setup file: ', setup_file); source(setup_file, local = globalenv()); if (module_id %in% c(9L, 10L, 13L, 14L, 15L, 16L, 17L)) load_post_context(globalenv()); knitr::opts_knit\$set(root.dir = root_dir); knitr::opts_chunk\$set(error = FALSE); temp_output <- tempfile(sprintf('module_%02d_', module_id), fileext = '.md'); on.exit(unlink(temp_output, force = TRUE), add = TRUE); invisible(knitr::knit(input_file, output = temp_output, envir = globalenv(), quiet = TRUE))"
   fi
 
   echo "[INFO] Done module ${module_id} at $(date '+%Y-%m-%d %H:%M:%S')"
@@ -431,6 +478,7 @@ run_module() {
 
 parse_cli_args "$@"
 apply_clean_mode
+apply_compat_mode
 
 ensure_rscript
 
@@ -476,6 +524,7 @@ echo "[INFO] Final run order: ${RUN_ORDER[*]}"
 echo "[INFO] Clean mode: $(clean_mode_label)"
 echo "[INFO] Clean module result: ${RNASEQ_CLEAN_MODULE_RESULT}"
 echo "[INFO] Clean module cache: ${RNASEQ_CLEAN_MODULE_CACHE}"
+echo "[INFO] Write compat tables: ${RNASEQ_WRITE_COMPAT_TABLES}"
 
 for module_id in "${RUN_ORDER[@]}"; do
   run_module "${module_id}"

@@ -19,6 +19,15 @@ coexp_source_label <- if (wgcna_use_full_snapshot) "full_sample_snapshot" else "
 coexp_enabled <- !is.null(coexp_expr) && ncol(coexp_expr) >= 12
 cat("WGCNA 是否启用：", coexp_enabled, "\n")
 cat("WGCNA 输入样本集：", coexp_source_label, " (n=", ncol(coexp_expr), ")\n", sep = "")
+wgcna_status <- data.frame(
+  enabled = coexp_enabled,
+  input_source = coexp_source_label,
+  sample_count = if (is.null(coexp_expr)) 0L else ncol(coexp_expr),
+  minimum_sample_count = 12L,
+  status = if (coexp_enabled) "enabled" else "skipped_insufficient_samples",
+  stringsAsFactors = FALSE
+)
+write_csv_safe(wgcna_status, "result/12_wgcna/12_WGCNA_status.csv", row.names = FALSE)
 if (!coexp_enabled) {
   cat("提示：当前 WGCNA 输入样本数少于 12，按项目规则跳过 WGCNA。\n")
 }
@@ -331,6 +340,7 @@ if (nrow(module_pathway_ora) > 0 && all(c("Module", "Description", "pvalue", "so
 }
 
 wgcna_state <- list(
+  status = wgcna_status,
   module_df_annotated = module_df_annotated,
   module_trait_tbl = module_trait_tbl,
   me_df = me_df,

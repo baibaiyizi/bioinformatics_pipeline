@@ -26,33 +26,47 @@ if (nrow(apa_gene_summary_tbl) == 0) {
   apa_gene_summary_tbl <- read.csv(file.path(apa_dir, "apa_gene_summary.csv"), check.names = FALSE, stringsAsFactors = FALSE)
 }
 
-apa_all_events <- apa_all_events %>%
-  mutate(
-    gene_id_clean = sub("\\.[0-9]+$", "", dplyr::coalesce(gene_id_clean, gene_id, ENSEMBL, gene_label)),
-    gene_label = dplyr::coalesce(gene_label, gene_symbol, gene_name, gene_id_clean),
-    delta_PAU = suppressWarnings(as.numeric(delta_PAU)),
-    apa_pvalue = suppressWarnings(as.numeric(dplyr::coalesce(apa_pvalue, pvalue))),
-    apa_padj = suppressWarnings(as.numeric(dplyr::coalesce(apa_padj, p_adj))),
-    # 保留当前项目 APA nominal pvalue < 0.05 + |delta PAU| >= 0.1 口径；
-    # 更严格汇报时建议同步查看 apa_padj / BH FDR。
-    significant_apa = dplyr::coalesce(as.logical(significant_apa), is.finite(apa_pvalue) & apa_pvalue < 0.05 & is.finite(delta_PAU) & abs(delta_PAU) >= 0.1)
-  ) %>%
-  arrange(apa_pvalue, desc(abs(delta_PAU)))
+apa_all_events$gene_id_clean <- sub(
+  "\\.[0-9]+$", "",
+  coalesce_chr_columns(apa_all_events, c("gene_id_clean", "gene_id", "ENSEMBL", "gene_label"))
+)
+apa_all_events$gene_label <- coalesce_chr_columns(
+  apa_all_events,
+  c("gene_label", "gene_symbol", "gene_name", "gene_id_clean")
+)
+apa_all_events$delta_PAU <- coalesce_num_columns(apa_all_events, c("delta_PAU", "RED"))
+apa_all_events$apa_pvalue <- coalesce_num_columns(apa_all_events, c("apa_pvalue", "pvalue"))
+apa_all_events$apa_padj <- coalesce_num_columns(apa_all_events, c("apa_padj", "p_adj", "padj"))
+apa_significant_default <- with(
+  apa_all_events,
+  is.finite(apa_pvalue) & apa_pvalue < 0.05 & is.finite(delta_PAU) & abs(delta_PAU) >= 0.1
+)
+if ("significant_apa" %in% colnames(apa_all_events)) {
+  apa_significant_input <- as.logical(apa_all_events$significant_apa)
+  apa_significant_input[is.na(apa_significant_input)] <- apa_significant_default[is.na(apa_significant_input)]
+  apa_all_events$significant_apa <- apa_significant_input
+} else {
+  apa_all_events$significant_apa <- apa_significant_default
+}
+apa_all_events <- apa_all_events %>% arrange(apa_pvalue, desc(abs(delta_PAU)))
 
 apa_sig_events <- apa_all_events %>%
   filter(significant_apa) %>%
   arrange(apa_pvalue, desc(abs(delta_PAU)))
 apa_sig_ids <- unique(stats::na.omit(apa_sig_events$gene_id_clean))
 
-apa_gene_summary_tbl <- apa_gene_summary_tbl %>%
-  mutate(
-    gene_id_clean = sub("\\.[0-9]+$", "", dplyr::coalesce(gene_id_clean, gene_id, ENSEMBL, gene_label)),
-    gene_label = dplyr::coalesce(gene_label, gene_symbol, gene_name, gene_id_clean),
-    best_apa_pvalue = suppressWarnings(as.numeric(best_apa_pvalue)),
-    best_apa_padj = suppressWarnings(as.numeric(best_apa_padj)),
-    max_abs_delta_PAU = suppressWarnings(as.numeric(max_abs_delta_PAU))
-  ) %>%
-  arrange(best_apa_pvalue, desc(max_abs_delta_PAU))
+apa_gene_summary_tbl$gene_id_clean <- sub(
+  "\\.[0-9]+$", "",
+  coalesce_chr_columns(apa_gene_summary_tbl, c("gene_id_clean", "gene_id", "ENSEMBL", "gene_label"))
+)
+apa_gene_summary_tbl$gene_label <- coalesce_chr_columns(
+  apa_gene_summary_tbl,
+  c("gene_label", "gene_symbol", "gene_name", "gene_id_clean")
+)
+apa_gene_summary_tbl$best_apa_pvalue <- coalesce_num_columns(apa_gene_summary_tbl, c("best_apa_pvalue"))
+apa_gene_summary_tbl$best_apa_padj <- coalesce_num_columns(apa_gene_summary_tbl, c("best_apa_padj"))
+apa_gene_summary_tbl$max_abs_delta_PAU <- coalesce_num_columns(apa_gene_summary_tbl, c("max_abs_delta_PAU"))
+apa_gene_summary_tbl <- apa_gene_summary_tbl %>% arrange(best_apa_pvalue, desc(max_abs_delta_PAU))
 if (nrow(apa_all_events) > 0) {
   apa_gene_summary_tbl <- apa_gene_summary_tbl %>%
     filter(gene_id_clean %in% unique(stats::na.omit(apa_all_events$gene_id_clean)))

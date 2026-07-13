@@ -28,11 +28,11 @@ de_result <- de_result %>%
   left_join(anno, by = c("ensembl_id" = "ENSEMBL")) %>%
   mutate(
     gene_label = dplyr::coalesce(SYMBOL, ensembl_id),
-    # 保留当前项目既有筛选口径：nominal pvalue < 0.05 且 abs(log2FC) >= 1。
-    # 正式发表/更严格汇报时，建议同时报告 padj/FDR < 0.05 的辅助计数和敏感性结果。
+    significance_value = .data[[de_significance_column]],
     direction = case_when(
-      is.na(pvalue) | pvalue >= 0.05 | is.na(log2FoldChange) | abs(log2FoldChange) < 1 ~ "ns",
-      log2FoldChange >= 1 ~ "up",
+      is.na(significance_value) | significance_value >= de_pvalue_cutoff |
+        is.na(log2FoldChange) | abs(log2FoldChange) < de_log2fc_cutoff ~ "ns",
+      log2FoldChange >= de_log2fc_cutoff ~ "up",
       TRUE ~ "down"
     ),
     rank_score = sign(dplyr::coalesce(log2FoldChange, 0)) * -log10(dplyr::coalesce(pvalue, 1) + 1e-300)
@@ -53,20 +53,20 @@ de_summary <- de_result %>%
 
 threshold_advisory <- data.frame(
   threshold = c(
-    "pvalue_lt_0.05",
-    "pvalue_lt_0.05_abs_log2fc_ge_1",
+    "configured_significance_only",
+    "configured_main_DE",
     "padj_lt_0.05",
-    "padj_lt_0.05_abs_log2fc_ge_1"
+    "padj_lt_0.05_abs_log2fc_ge_configured"
   ),
   gene_count = c(
-    sum(!is.na(de_result$pvalue) & de_result$pvalue < 0.05),
-    sum(!is.na(de_result$pvalue) & de_result$pvalue < 0.05 & !is.na(de_result$log2FoldChange) & abs(de_result$log2FoldChange) >= 1),
+    sum(!is.na(de_result$significance_value) & de_result$significance_value < de_pvalue_cutoff),
+    sum(!is.na(de_result$significance_value) & de_result$significance_value < de_pvalue_cutoff & !is.na(de_result$log2FoldChange) & abs(de_result$log2FoldChange) >= de_log2fc_cutoff),
     sum(!is.na(de_result$padj) & de_result$padj < 0.05),
-    sum(!is.na(de_result$padj) & de_result$padj < 0.05 & !is.na(de_result$log2FoldChange) & abs(de_result$log2FoldChange) >= 1)
+    sum(!is.na(de_result$padj) & de_result$padj < 0.05 & !is.na(de_result$log2FoldChange) & abs(de_result$log2FoldChange) >= de_log2fc_cutoff)
   ),
   note = c(
-    "current nominal screening support count",
-    "current main DE definition",
+    paste0(de_significance_column, " < ", de_pvalue_cutoff),
+    paste0(de_significance_column, " < ", de_pvalue_cutoff, " and |log2FC| >= ", de_log2fc_cutoff),
     "recommended FDR support count for stricter reporting",
     "recommended stricter DE support count for reporting sensitivity"
   ),
@@ -104,7 +104,7 @@ save_plot_versions(
 
 volcano_tbl <- de_result %>%
   mutate(
-    label_score = ifelse(is.na(pvalue) | is.na(log2FoldChange), 0, abs(log2FoldChange) * -log10(pvalue + 1e-300)),
+    label_score = ifelse(is.na(significance_value) | is.na(log2FoldChange), 0, abs(log2FoldChange) * -log10(significance_value + 1e-300)),
     label = ifelse(direction != "ns" & rank(-label_score, ties.method = "first") <= 20, gene_label, NA)
   )
 
@@ -116,15 +116,15 @@ volcano_count_tbl <- de_summary %>%
       max(volcano_tbl$log2FoldChange, na.rm = TRUE) * 0.98,
       min(volcano_tbl$log2FoldChange, na.rm = TRUE) * 0.98
     ),
-    y = max(-log10(volcano_tbl$pvalue + 1e-300), na.rm = TRUE) * 0.98,
+    y = max(-log10(volcano_tbl$significance_value + 1e-300), na.rm = TRUE) * 0.98,
     hjust = ifelse(direction == "up", 1, 0),
     label = ifelse(direction == "up", paste0("Up: ", gene_count), paste0("Down: ", gene_count))
   )
 
-volcano_plot <- ggplot(volcano_tbl, aes(x = log2FoldChange, y = -log10(pvalue + 1e-300), color = direction)) +
+volcano_plot <- ggplot(volcano_tbl, aes(x = log2FoldChange, y = -log10(significance_value + 1e-300), color = direction)) +
   geom_point(alpha = 0.75, size = 1.5) +
-  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
-  geom_vline(xintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = -log10(de_pvalue_cutoff), linetype = "dashed") +
+  geom_vline(xintercept = c(-de_log2fc_cutoff, de_log2fc_cutoff), linetype = "dashed") +
   geom_text_repel(aes(label = label), size = 3, na.rm = TRUE, show.legend = FALSE) +
   geom_text(
     data = volcano_count_tbl,
@@ -134,7 +134,7 @@ volcano_plot <- ggplot(volcano_tbl, aes(x = log2FoldChange, y = -log10(pvalue + 
     show.legend = FALSE
   ) +
   scale_color_manual(values = viz_pal$de) +
-  labs(title = "差异表达火山图", x = "log2 Fold Change", y = "-log10(PValue)") +
+  labs(title = "差异表达火山图", x = "log2 Fold Change", y = paste0("-log10(", de_significance_column, ")")) +
   theme_rnaseq_bw()
 
 save_plot_versions(
@@ -146,7 +146,7 @@ save_plot_versions(
 
 ma_plot <- ggplot(de_result, aes(x = log10(baseMean + 1), y = log2FoldChange, color = direction)) +
   geom_point(alpha = 0.7, size = 1.2) +
-  geom_hline(yintercept = c(-1, 1), linetype = "dashed") +
+  geom_hline(yintercept = c(-de_log2fc_cutoff, de_log2fc_cutoff), linetype = "dashed") +
   scale_color_manual(values = viz_pal$de) +
   labs(title = "差异表达 MA 图", x = "log10(baseMean + 1)", y = "log2 Fold Change") +
   theme_rnaseq_bw()
@@ -270,9 +270,11 @@ if (!is.null(gene_count_full) && !is.null(gene_count_mat) && !is.null(full_sampl
       left_join(anno, by = c("ensembl_id" = "ENSEMBL")) %>%
       mutate(
         gene_label = dplyr::coalesce(SYMBOL, ensembl_id),
+        significance_value = .data[[de_significance_column]],
         direction = case_when(
-          is.na(pvalue) | pvalue >= 0.05 | is.na(log2FoldChange) | abs(log2FoldChange) < 1 ~ "ns",
-          log2FoldChange >= 1 ~ "up",
+          is.na(significance_value) | significance_value >= de_pvalue_cutoff |
+            is.na(log2FoldChange) | abs(log2FoldChange) < de_log2fc_cutoff ~ "ns",
+          log2FoldChange >= de_log2fc_cutoff ~ "up",
           TRUE ~ "down"
         )
       ) %>%
@@ -363,7 +365,8 @@ if (!is.null(gene_count_full) && !is.null(gene_count_mat) && !is.null(full_sampl
 if (exists("full_de_result") && is.data.frame(full_de_result) && nrow(full_de_result) > 0) {
   full_de_plot_tbl <- full_de_result %>%
     mutate(
-      neg_log10_p = -log10(dplyr::coalesce(pvalue, 1) + 1e-300),
+      significance_value = .data[[de_significance_column]],
+      neg_log10_p = -log10(dplyr::coalesce(significance_value, 1) + 1e-300),
       direction = factor(direction, levels = c("up", "down", "ns"))
     )
 
@@ -383,8 +386,8 @@ if (exists("full_de_result") && is.data.frame(full_de_result) && nrow(full_de_re
 
   full_volcano <- ggplot(full_de_plot_tbl, aes(x = log2FoldChange, y = neg_log10_p, color = direction)) +
     geom_point(alpha = 1, size = 1) +
-    geom_vline(xintercept = c(-1, 1), linetype = "dashed", color = viz_pal$neutral["dark"]) +
-    geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = viz_pal$neutral["dark"]) +
+    geom_vline(xintercept = c(-de_log2fc_cutoff, de_log2fc_cutoff), linetype = "dashed", color = viz_pal$neutral["dark"]) +
+    geom_hline(yintercept = -log10(de_pvalue_cutoff), linetype = "dashed", color = viz_pal$neutral["dark"]) +
     geom_text(
       data = full_volcano_count_tbl,
       aes(x = x, y = y, label = label, color = direction, hjust = hjust),
@@ -393,13 +396,13 @@ if (exists("full_de_result") && is.data.frame(full_de_result) && nrow(full_de_re
       show.legend = FALSE
     ) +
     scale_color_manual(values = viz_pal$de, drop = FALSE) +
-    labs(title = "全样本快照 DE 火山图", x = paste0(group2_label, " vs ", group1_label, " log2FC"), y = "-log10(pvalue)") +
+    labs(title = "全样本快照 DE 火山图", x = paste0(group2_label, " vs ", group1_label, " log2FC"), y = paste0("-log10(", de_significance_column, ")")) +
     theme_rnaseq_bw()
   save_plot_versions(full_volcano, "result/05_de/5_14_full_sample_sensitivity_volcano.pdf", width = 8.5, height = 6)
 
   full_ma_plot <- ggplot(full_de_plot_tbl, aes(x = log10(baseMean + 1), y = log2FoldChange, color = direction)) +
     geom_point(alpha = 1, size = 1) +
-    geom_hline(yintercept = c(-1, 0, 1), linetype = c("dashed", "solid", "dashed"), color = viz_pal$neutral["dark"]) +
+    geom_hline(yintercept = c(-de_log2fc_cutoff, 0, de_log2fc_cutoff), linetype = c("dashed", "solid", "dashed"), color = viz_pal$neutral["dark"]) +
     scale_color_manual(values = viz_pal$de, drop = FALSE) +
     labs(title = "全样本快照 DE MA 图", x = "log10(baseMean + 1)", y = paste0(group2_label, " vs ", group1_label, " log2FC")) +
     theme_rnaseq_bw()

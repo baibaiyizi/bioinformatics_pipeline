@@ -496,7 +496,7 @@ if (nrow(rmats_combined) > 0) {
       de_pvalue
     ) %>%
     slice_head(n = 50)
-  write_csv_safe(top_rmats_events, step10_event_table_path("15_6_top_rMATS_events.csv"), row.names = FALSE)
+  write_csv_compat(top_rmats_events, step10_event_table_path("15_6_top_rMATS_events.csv"), row.names = FALSE)
 }
 ```
 
@@ -564,7 +564,7 @@ if (nrow(rmats_combined) > 0) {
       arrange(PValue, desc(abs_delta_psi))
   }
 
-  write_csv_safe(high_confidence_events, step10_event_table_path("15_6e_high_confidence_AS_events.csv"), row.names = FALSE)
+  write_csv_compat(high_confidence_events, step10_event_table_path("15_6e_high_confidence_AS_events.csv"), row.names = FALSE)
 
   de_sig_ids <- unique(de_result$ensembl_id[de_result$direction != "ns"])
   das_ids <- unique(rmats_sig$gene_id_clean[!is.na(rmats_sig$gene_id_clean) & rmats_sig$gene_id_clean != ""])
@@ -799,7 +799,7 @@ if (nrow(rmats_sig) > 0) {
     ) %>%
     arrange(desc(priority), best_event_pvalue)
 
-  write.csv(as_gene_priority, step10_gene_table_path("15_9_DAS_gene_priority_table.csv"), row.names = FALSE)
+  write_csv_compat(as_gene_priority, step10_gene_table_path("15_9_DAS_gene_priority_table.csv"), row.names = FALSE)
 
   save_das_gene_burden_plot(
     as_gene_priority,
@@ -834,7 +834,7 @@ if (nrow(rmats_combined) > 0) {
         priority = -log10(P.Value + 1e-300) * ifelse(is.finite(FDR), pmax(1 - FDR, 0.001), 1)
       ) %>%
       arrange(P.Value, FDR)
-    write.csv(deu_gene_priority, step10_gene_table_path("15_28b_DEU_gene_priority_table.csv"), row.names = FALSE)
+    write_csv_compat(deu_gene_priority, step10_gene_table_path("15_28b_DEU_gene_priority_table.csv"), row.names = FALSE)
 
     deu_overlap_summary <- data.frame(
       category = c("DEU_only", "DE_only", "DE_and_DEU"),
@@ -1161,9 +1161,10 @@ if (nrow(rmats_combined) > 0) {
       arrange(desc(evidence_score), gene_switch_q_value, gene_simes_pvalue, best_event_pvalue, de_pvalue)
   }
 
-  write.csv(as_gene_membership, step10_integr_table_path("15_31_gene_method_membership.csv"), row.names = FALSE)
-  write.csv(as_gene_evidence, step10_integr_table_path("15_32_as_gene_evidence_table.csv"), row.names = FALSE)
-  write.csv(top_as_candidates, step10_integr_table_path("15_32b_top_as_candidates.csv"), row.names = FALSE)
+  write_csv_safe(as_gene_evidence, step10_integr_table_path("15_splicing_gene_evidence.csv"), row.names = FALSE)
+  write_csv_compat(as_gene_membership, step10_integr_table_path("15_31_gene_method_membership.csv"), row.names = FALSE)
+  write_csv_compat(as_gene_evidence, step10_integr_table_path("15_32_as_gene_evidence_table.csv"), row.names = FALSE)
+  write_csv_compat(top_as_candidates, step10_integr_table_path("15_32b_top_as_candidates.csv"), row.names = FALSE)
 
   build_psi_matrix_step6 <- function(event_df) {
     if (!all(c("IncLevel1", "IncLevel2") %in% colnames(event_df)) || nrow(event_df) == 0) {
@@ -1485,7 +1486,7 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
     slice_head(n = 10) %>%
     ungroup() %>%
     mutate(integrated_priority = event_priority * ifelse(!is.na(de_direction) & de_direction != "ns", 1.5, 1))
-  write.csv(top_events_by_type, step10_gene_table_path("15_16_top_events_by_type.csv"), row.names = FALSE)
+  write_csv_compat(top_events_by_type, step10_gene_table_path("15_16_top_events_by_type.csv"), row.names = FALSE)
 
   top_heatmap_events <- preferred_sig_events %>% slice_head(n = 30)
   psi_mat <- build_psi_matrix(top_heatmap_events)
@@ -1718,7 +1719,7 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
 
     candidate_splicing_regulators <- splicing_regulator_tbl %>%
       filter(!is.na(log2FoldChange), !is.na(pvalue))
-    write.csv(candidate_splicing_regulators, step10_gene_table_path("15_21_candidate_splicing_regulators.csv"), row.names = FALSE)
+    write_csv_compat(candidate_splicing_regulators, step10_gene_table_path("15_21_candidate_splicing_regulators.csv"), row.names = FALSE)
 
     if (nrow(candidate_splicing_regulators) > 0) {
       label_tbl <- candidate_splicing_regulators %>% slice_head(n = 15)
@@ -1774,7 +1775,7 @@ if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
   write.csv(isoform_switch_isoforms, step10_isoform_table_path("15_41_significant_switch_isoforms.csv"), row.names = FALSE)
   write.csv(isoform_switch_summary, step10_isoform_table_path("15_42_switch_summary.csv"), row.names = FALSE)
   write.csv(isoform_consequence_summary, step10_isoform_table_path("15_43_consequence_summary.csv"), row.names = FALSE)
-  write.csv(isoform_switch_pairs, step10_isoform_table_path("15_44_representative_switch_pairs.csv"), row.names = FALSE)
+  write_csv_compat(isoform_switch_pairs, step10_isoform_table_path("15_44_representative_switch_pairs.csv"), row.names = FALSE)
 
   if (nrow(isoform_switch_genes) > 0) {
     isoform_gene_rank <- isoform_switch_genes %>%
@@ -1860,7 +1861,7 @@ if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
     count = c(nrow(isoform_switch_genes), nrow(isoform_switch_isoforms), nrow(isoform_switch_pairs)),
     stringsAsFactors = FALSE
   )
-  write.csv(isoform_summary_tbl, step10_isoform_table_path("15_48_isoform_switch_summary_table.csv"), row.names = FALSE)
+  write_csv_compat(isoform_summary_tbl, step10_isoform_table_path("15_48_isoform_switch_summary_table.csv"), row.names = FALSE)
   isoform_summary_plot <- ggplot(isoform_summary_tbl, aes(x = metric, y = count, fill = metric)) +
     geom_col(width = 0.7) +
     scale_fill_manual(values = resolve_named_colors(viz_pal$accent, isoform_summary_tbl$metric)) +

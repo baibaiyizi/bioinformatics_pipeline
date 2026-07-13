@@ -159,6 +159,22 @@ bioc_pkgs <- unique(c(
 install_and_load(cran_pkgs, bioc = FALSE)
 install_and_load(bioc_pkgs, bioc = TRUE)
 
+# Several Bioconductor packages export common verb names such as count(),
+# filter(), select(), and rename(). Keep report code bound to dplyr semantics.
+dplyr_preferred_verbs <- c(
+  "count", "filter", "select", "rename", "mutate", "transmute",
+  "summarise", "summarize", "arrange", "group_by", "ungroup",
+  "left_join", "inner_join", "semi_join", "anti_join", "full_join", "right_join",
+  "distinct", "slice_head", "slice_max", "slice_min", "pull",
+  "across", "recode", "case_when", "coalesce", "desc", "n",
+  "everything", "any_of", "all_of", "starts_with", "ends_with", "matches", "contains",
+  "row_number"
+)
+for (dplyr_preferred_verb in dplyr_preferred_verbs) {
+  assign(dplyr_preferred_verb, getExportedValue("dplyr", dplyr_preferred_verb), envir = globalenv())
+}
+rm(dplyr_preferred_verb, dplyr_preferred_verbs)
+
 ensure_github_package <- function(pkg, repo) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
     if (!requireNamespace("remotes", quietly = TRUE)) {
@@ -429,6 +445,22 @@ truthy_env <- function(name, default = TRUE) {
   raw_value <- Sys.getenv(name, unset = if (isTRUE(default)) "true" else "false")
   tolower(trimws(raw_value)) %in% c("1", "true", "yes", "y", "on")
 }
+
+numeric_env <- function(name, default, lower = -Inf, upper = Inf) {
+  raw_value <- Sys.getenv(name, unset = as.character(default))
+  value <- suppressWarnings(as.numeric(raw_value))
+  if (length(value) != 1L || !is.finite(value) || value < lower || value > upper) {
+    stop(name, " 必须是 [", lower, ", ", upper, "] 范围内的数值，当前值: ", raw_value)
+  }
+  value
+}
+
+# Preserve the current 2cell definition by default, while making it explicit and reproducible.
+de_pvalue_cutoff <- numeric_env("RNASEQ_DE_PVALUE_CUTOFF", 0.05, lower = 0, upper = 1)
+de_log2fc_cutoff <- numeric_env("RNASEQ_DE_LOG2FC_CUTOFF", 1, lower = 0)
+de_use_padj <- truthy_env("RNASEQ_DE_USE_PADJ", default = FALSE)
+de_significance_column <- if (de_use_padj) "padj" else "pvalue"
+de_significance_label <- if (de_use_padj) "adjusted p-value" else "nominal p-value"
 
 cleaned_module_result_steps <- new.env(parent = emptyenv())
 
@@ -721,10 +753,12 @@ load_post_context <- function(env = parent.frame()) {
   module_df_annotated <- data.frame()
   module_trait_tbl <- data.frame()
   me_df <- data.frame()
+  wgcna_status <- data.frame()
 
   if (file.exists(cache_12_wgcna_path)) {
     wgcna_state <- readRDS(cache_12_wgcna_path)
     if (is.list(wgcna_state)) {
+      wgcna_status <- wgcna_state$status %||% wgcna_status
       module_df_annotated <- wgcna_state$module_df_annotated %||% module_df_annotated
       module_trait_tbl <- wgcna_state$module_trait_tbl %||% module_trait_tbl
       me_df <- wgcna_state$me_df %||% me_df
@@ -736,6 +770,7 @@ load_post_context <- function(env = parent.frame()) {
       file.path(step8_wgcna_dir, "12_2_WGCNA_Module_Assignment.csv"),
       file.path(step8_wgcna_dir, "9_2_WGCNA_Module_Assignment.csv")
     )
+    f_candidates <- vapply(f_candidates, resolve_existing_path, character(1), preferred = "table")
     f <- f_candidates[file.exists(f_candidates)]
     if (length(f) > 0) {
       f <- f[[1]]
@@ -747,6 +782,7 @@ load_post_context <- function(env = parent.frame()) {
       file.path(step8_wgcna_dir, "12_4_Module_Trait_Correlation.csv"),
       file.path(step8_wgcna_dir, "9_4_Module_Trait_Correlation.csv")
     )
+    f_candidates <- vapply(f_candidates, resolve_existing_path, character(1), preferred = "table")
     f <- f_candidates[file.exists(f_candidates)]
     if (length(f) > 0) {
       f <- f[[1]]
@@ -758,6 +794,7 @@ load_post_context <- function(env = parent.frame()) {
       file.path(step8_wgcna_dir, "12_3b_Module_Eigengene_Table.csv"),
       file.path(step8_wgcna_dir, "9_3b_Module_Eigengene_Table.csv")
     )
+    f_candidates <- vapply(f_candidates, resolve_existing_path, character(1), preferred = "table")
     f <- f_candidates[file.exists(f_candidates)]
     if (length(f) > 0) {
       f <- f[[1]]
@@ -766,13 +803,22 @@ load_post_context <- function(env = parent.frame()) {
   }
 
   if (nrow(module_df_annotated) == 0 || nrow(module_trait_tbl) == 0 || nrow(me_df) == 0) {
-    message(
-      "[post_context] 未恢复到有效 WGCNA 输入；后续模块将跳过 WGCNA 相关整合。候选输入：",
-      "\n1) ", cache_12_wgcna_path,
-      "\n2) ", file.path(step8_wgcna_dir, "12_2_WGCNA_Module_Assignment.csv"),
-      " + ", file.path(step8_wgcna_dir, "12_4_Module_Trait_Correlation.csv"),
-      " + ", file.path(step8_wgcna_dir, "12_3b_Module_Eigengene_Table.csv")
-    )
+    if (nrow(wgcna_status) > 0 && "status" %in% colnames(wgcna_status) && any(grepl("^skipped_", wgcna_status$status))) {
+      message(
+        "[post_context] WGCNA 已由模块 12 按规则跳过（",
+        paste(unique(wgcna_status$status), collapse = ", "),
+        "；n=", paste(unique(wgcna_status$sample_count), collapse = ", "),
+        "）；后续模块不执行 WGCNA 整合。"
+      )
+    } else {
+      message(
+        "[post_context] 未恢复到有效 WGCNA 输入；后续模块将跳过 WGCNA 相关整合。候选输入：",
+        "\n1) ", cache_12_wgcna_path,
+        "\n2) ", file.path(step8_wgcna_dir, "12_2_WGCNA_Module_Assignment.csv"),
+        " + ", file.path(step8_wgcna_dir, "12_4_Module_Trait_Correlation.csv"),
+        " + ", file.path(step8_wgcna_dir, "12_3b_Module_Eigengene_Table.csv")
+      )
+    }
   }
 
   context_objects <- list(
@@ -811,6 +857,7 @@ load_post_context <- function(env = parent.frame()) {
     module_df_annotated = module_df_annotated,
     module_trait_tbl = module_trait_tbl,
     me_df = me_df,
+    wgcna_status = wgcna_status,
     rmats_file_index = data.frame(),
     rmats_combined = data.frame(),
     rmats_sig = data.frame(),
@@ -1268,59 +1315,111 @@ prepend_metadata_columns <- function(tbl, metadata) {
   tbl[, c(names(metadata), setdiff(colnames(tbl), names(metadata))), drop = FALSE]
 }
 
-standardize_enrichment_table <- function(tbl, analysis_type, database, source_module, direction = NULL, ontology = NULL) {
-  tbl <- make_result_df(tbl)
-  if (is.null(direction)) {
-    if ("direction" %in% colnames(tbl)) {
-      direction <- tbl$direction
-    } else if ("NES" %in% colnames(tbl)) {
-      direction <- ifelse(suppressWarnings(as.numeric(tbl$NES)) >= 0, "up", "down")
-    } else {
-      direction <- "all"
-    }
+canonical_column <- function(tbl, candidates, default = NA_character_, mode = c("character", "numeric", "integer")) {
+  mode <- match.arg(mode)
+  n <- nrow(tbl)
+  hit <- intersect(candidates, colnames(tbl))
+  value <- if (length(hit) > 0) tbl[[hit[[1]]]] else rep(default, n)
+  if (is.list(value)) {
+    value <- vapply(value, function(x) paste(as.character(x), collapse = "/"), character(1))
   }
-  if (is.null(ontology)) {
-    if ("ONTOLOGY" %in% colnames(tbl)) {
-      ontology <- tbl$ONTOLOGY
-    } else if ("source" %in% colnames(tbl)) {
-      ontology <- tbl$source
-    } else {
-      ontology <- NA_character_
-    }
-  }
-  metadata <- list(
-    analysis_type = analysis_type,
-    database = database,
-    direction = direction,
-    ontology = ontology,
-    source_module = source_module
+  if (length(value) == 1L && n != 1L) value <- rep(value, n)
+  switch(
+    mode,
+    character = as.character(value),
+    numeric = suppressWarnings(as.numeric(value)),
+    integer = suppressWarnings(as.integer(value))
   )
-  prepend_metadata_columns(tbl, metadata)
 }
 
-standardize_leading_edge_table <- function(tbl, database, source_module, direction = NULL, pathway_col = NULL) {
-  tbl <- sanitize_table_for_export(tbl)
+canonical_metadata_column <- function(value, n, default = NA_character_) {
+  if (is.null(value) || length(value) == 0) value <- default
+  value <- as.character(value)
+  if (length(value) == 1L && n != 1L) value <- rep(value, n)
+  value
+}
+
+coalesce_chr_columns <- function(tbl, cols, default = NA_character_) {
+  out <- rep(default, nrow(tbl))
+  for (one_col in cols[cols %in% colnames(tbl)]) {
+    vals <- as.character(tbl[[one_col]])
+    fill <- (is.na(out) | out == "" | out == "NA") & !is.na(vals) & vals != "" & vals != "NA"
+    out[fill] <- vals[fill]
+  }
+  out
+}
+
+coalesce_num_columns <- function(tbl, cols, default = NA_real_) {
+  out <- rep(default, nrow(tbl))
+  for (one_col in cols[cols %in% colnames(tbl)]) {
+    vals <- suppressWarnings(as.numeric(tbl[[one_col]]))
+    fill <- !is.finite(out) & is.finite(vals)
+    out[fill] <- vals[fill]
+  }
+  out
+}
+
+# Only fields with the same meaning and row grain enter the canonical table.
+# Package-specific raw columns remain available through optional compatibility tables.
+standardize_enrichment_table <- function(tbl, analysis_type, database, source_module, direction = NULL, ontology = NULL) {
+  tbl <- make_result_df(tbl)
+  n <- nrow(tbl)
+  nes <- canonical_column(tbl, "NES", NA_real_, "numeric")
   if (is.null(direction)) {
     direction <- if ("direction" %in% colnames(tbl)) {
       tbl$direction
-    } else if ("NES" %in% colnames(tbl)) {
-      ifelse(suppressWarnings(as.numeric(tbl$NES)) >= 0, "up", "down")
-    } else {
-      "all"
-    }
+    } else ifelse(is.na(nes), "all", ifelse(nes >= 0, "up", "down"))
   }
-  if (is.null(pathway_col)) {
-    pathway_col <- intersect(c("ID", "pathway", "pathway_id", "Description"), colnames(tbl))
-    pathway_col <- if (length(pathway_col) > 0) pathway_col[[1]] else NA_character_
+  if (is.null(ontology)) {
+    ontology <- canonical_column(tbl, c("ONTOLOGY", "source"), NA_character_, "character")
   }
-  pathway_id <- if (!is.na(pathway_col) && pathway_col %in% colnames(tbl)) tbl[[pathway_col]] else rep(NA_character_, nrow(tbl))
-  metadata <- list(
-    database = database,
-    direction = direction,
-    pathway_id = pathway_id,
-    source_module = source_module
+  tibble::tibble(
+    analysis_type = canonical_metadata_column(analysis_type, n),
+    database = canonical_metadata_column(database, n),
+    direction = canonical_metadata_column(direction, n, "all"),
+    ontology = canonical_metadata_column(ontology, n),
+    pathway_id = canonical_column(tbl, c("ID", "pathway", "pathway_id", "gs_name", "Description")),
+    description = canonical_column(tbl, c("Description", "pathway", "gs_name", "ID")),
+    gene_ratio = canonical_column(tbl, "GeneRatio"),
+    background_ratio = canonical_column(tbl, "BgRatio"),
+    enrichment_score = canonical_column(tbl, c("enrichmentScore", "ES"), NA_real_, "numeric"),
+    NES = nes,
+    pvalue = canonical_column(tbl, c("pvalue", "pval"), NA_real_, "numeric"),
+    padj = canonical_column(tbl, c("p.adjust", "padj"), NA_real_, "numeric"),
+    qvalue = canonical_column(tbl, c("qvalue", "qvalues"), NA_real_, "numeric"),
+    set_size = canonical_column(tbl, c("setSize", "size"), NA_integer_, "integer"),
+    gene_count = canonical_column(tbl, "Count", NA_integer_, "integer"),
+    gene_ids = canonical_column(tbl, "geneID"),
+    source_module = canonical_metadata_column(source_module, n)
   )
-  prepend_metadata_columns(tbl, metadata)
+}
+
+standardize_leading_edge_table <- function(tbl, database, source_module, direction = NULL, pathway_col = NULL) {
+  tbl <- make_result_df(tbl)
+  n <- nrow(tbl)
+  nes <- canonical_column(tbl, "NES", NA_real_, "numeric")
+  if (is.null(direction)) {
+    direction <- if ("direction" %in% colnames(tbl)) {
+      tbl$direction
+    } else ifelse(is.na(nes), "all", ifelse(nes >= 0, "up", "down"))
+  }
+  pathway_candidates <- unique(c(pathway_col, "pathway_id", "ID", "pathway", "Description"))
+  out <- tibble::tibble(
+    database = canonical_metadata_column(database, n),
+    direction = canonical_metadata_column(direction, n, "all"),
+    pathway_id = canonical_column(tbl, pathway_candidates),
+    description = canonical_column(tbl, c("Description", "pathway", "pathway_id", "ID")),
+    NES = nes,
+    pvalue = canonical_column(tbl, c("pvalue", "pval"), NA_real_, "numeric"),
+    padj = canonical_column(tbl, c("p.adjust", "padj"), NA_real_, "numeric"),
+    leading_edge_gene = canonical_column(tbl, c("leading_edge", "leadingEdge", "core_enrichment")),
+    source_module = canonical_metadata_column(source_module, n)
+  )
+  if (nrow(out) == 0) return(out)
+  out %>%
+    tidyr::separate_rows(leading_edge_gene, sep = "[/;]") %>%
+    mutate(leading_edge_gene = trimws(as.character(leading_edge_gene))) %>%
+    filter(!is.na(leading_edge_gene), nzchar(leading_edge_gene))
 }
 
 plot_audit_records <- list()
@@ -1701,6 +1800,7 @@ extract_leading_edge_table <- function(gsea_df, id_col = "ID", gene_col = "core_
     leading_edge = gene_values
   ) %>%
     tidyr::separate_rows(leading_edge, sep = "/") %>%
+    mutate(leading_edge = as.character(leading_edge)) %>%
     filter(!is.na(leading_edge), leading_edge != "")
 }
 
@@ -3711,6 +3811,10 @@ analysis_context <- data.frame(
     "kegg_organism_code",
     "reactome_organism",
     "msigdb_species",
+    "de_significance_column",
+    "de_pvalue_cutoff",
+    "de_log2fc_cutoff",
+    "write_compat_tables",
     "selected_samples_n",
     "selected_genes_n",
     "selected_logcpm_available",
@@ -3733,6 +3837,10 @@ analysis_context <- data.frame(
     kegg_organism_code,
     reactome_organism,
     msigdb_species,
+    de_significance_column,
+    de_pvalue_cutoff,
+    de_log2fc_cutoff,
+    write_compat_tables(),
     ncol(gene_exp),
     nrow(gene_exp),
     !is.null(gene_logcpm),
