@@ -1,0 +1,918 @@
+# Step 11: STRING PPI 网络与 hub 基因
+
+## 11.1 STRINGdb 映射与 PPI 边表
+
+```{r}
+ensure_module_result_layout("11_ppi")
+
+de_result <- restore_main_de_result(required = TRUE)
+ppi_status <- data.frame(step = "initialization", status = "started", detail = "", stringsAsFactors = FALSE)
+ppi_edges <- data.frame()
+ppi_hubs <- data.frame()
+ppi_subnetworks <- data.frame()
+ppi_subnetwork_membership <- data.frame()
+ppi_centrality <- data.frame()
+ppi_threshold_sensitivity <- data.frame()
+ppi_string_enrichment <- data.frame()
+string_mapped <- data.frame()
+string_db <- NULL
+
+sig_de_symbols <- de_result %>%
+  filter(direction != "ns", !is.na(gene_label), gene_label != "") %>%
+  group_by(gene_label) %>%
+  slice_max(order_by = abs(rank_score), n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  transmute(
+    gene_label = as.character(gene_label),
+    gene_id = as.character(gene_id),
+    ensembl_id = as.character(ensembl_id),
+    ENTREZID = as.character(ENTREZID),
+    log2FoldChange,
+    pvalue,
+    padj,
+    direction,
+    rank_score
+  ) %>%
+  as.data.frame(stringsAsFactors = FALSE)
+
+string_species_id <- if (identical(rnaseq_species, "mouse")) 10090 else 9606
+pkg_state <- try_install_and_load("STRINGdb", bioc = TRUE)
+if (!isTRUE(pkg_state$ok)) {
+  ppi_status <- data.frame(step = "dependency", status = "skipped", detail = paste(pkg_state$messages, collapse = " | "), stringsAsFactors = FALSE)
+} else if (nrow(sig_de_symbols) < 5) {
+  ppi_status <- data.frame(step = "input", status = "skipped", detail = "fewer than 5 significant DE symbols", stringsAsFactors = FALSE)
+} else {
+  default_string_input_dir <- "/home/h1028/workspace/reference/GRCm39/ppi"
+  string_input_dir <- normalizePath(first_nonempty(Sys.getenv("RNASEQ_STRINGDB_DIR", unset = ""), default_string_input_dir), winslash = "/", mustWork = FALSE)
+  if (!identical(rnaseq_species, "mouse") && identical(string_input_dir, default_string_input_dir)) {
+    stop("当前公共 STRINGdb 目录是 GRCm39/mouse: ", default_string_input_dir, "。非 mouse 分析请通过 RNASEQ_STRINGDB_DIR 指定对应物种的 STRINGdb 目录。")
+  }
+  dir.create(string_input_dir, recursive = TRUE, showWarnings = FALSE)
+  string_db <- tryCatch({
+    STRINGdb::STRINGdb$new(version = "12.0", species = string_species_id, score_threshold = 400, input_directory = string_input_dir)
+  }, error = function(e) {
+    message("STRINGdb initialization failed: ", conditionMessage(e))
+    NULL
+  })
+
+  if (is.null(string_db)) {
+    ppi_status <- data.frame(step = "stringdb", status = "skipped", detail = "STRINGdb initialization failed", stringsAsFactors = FALSE)
+  } else {
+    string_mapped <- tryCatch({
+      string_db$map(sig_de_symbols, c("gene_label", "ensembl_id", "ENTREZID"), removeUnmappedRows = TRUE, quiet = TRUE)
+    }, error = function(e) {
+      message("STRINGdb mapping failed: ", conditionMessage(e))
+      data.frame()
+    })
+    write.csv(string_mapped, "result/11_ppi/11_1_STRING_mapping.csv", row.names = FALSE)
+
+    if (nrow(string_mapped) >= 2 && "STRING_id" %in% colnames(string_mapped)) {
+      string_interactions <- tryCatch({
+        string_db$get_interactions(unique(string_mapped$STRING_id))
+      }, error = function(e) {
+        message("STRINGdb interaction fetch failed: ", conditionMessage(e))
+        data.frame()
+      })
+      if (nrow(string_interactions) > 0) {
+        id_to_symbol <- string_mapped$gene_label
+        names(id_to_symbol) <- string_mapped$STRING_id
+        ppi_edges <- string_interactions %>%
+          filter(from %in% names(id_to_symbol), to %in% names(id_to_symbol), from != to) %>%
+          mutate(
+            from_symbol = id_to_symbol[from],
+            to_symbol = id_to_symbol[to],
+            combined_score = suppressWarnings(as.numeric(combined_score))
+          ) %>%
+          mutate(
+            edge_from = pmin(from_symbol, to_symbol),
+            edge_to = pmax(from_symbol, to_symbol)
+          ) %>%
+          distinct(edge_from, edge_to, .keep_all = TRUE) %>%
+          dplyr::select(-edge_from, -edge_to) %>%
+          arrange(dplyr::desc(combined_score))
+      }
+    }
+
+    if (nrow(ppi_edges) > 0) {
+      write.csv(ppi_edges, "result/11_ppi/11_2_STRING_PPI_edges.csv", row.names = FALSE)
+      endpoint_tbl <- table(c(ppi_edges$from_symbol, ppi_edges$to_symbol))
+      ppi_hubs <- data.frame(gene_label = names(endpoint_tbl), degree = as.integer(endpoint_tbl), stringsAsFactors = FALSE) %>%
+        left_join(sig_de_symbols, by = "gene_label") %>%
+        arrange(dplyr::desc(degree), pvalue)
+      write.csv(ppi_hubs, "result/11_ppi/11_3_PPI_hub_genes.csv", row.names = FALSE)
+      ppi_status <- data.frame(step = "ppi", status = "ok", detail = paste0("nodes=", nrow(ppi_hubs), ";edges=", nrow(ppi_edges)), stringsAsFactors = FALSE)
+    } else {
+      ppi_status <- data.frame(step = "ppi", status = "skipped", detail = "no STRING interactions among significant DE genes", stringsAsFactors = FALSE)
+      write.csv(data.frame(), "result/11_ppi/11_2_STRING_PPI_edges.csv", row.names = FALSE)
+      write.csv(data.frame(), "result/11_ppi/11_3_PPI_hub_genes.csv", row.names = FALSE)
+    }
+  }
+}
+write.csv(ppi_status, "result/11_ppi/11_0_PPI_status.csv", row.names = FALSE)
+```
+
+## 11.2 网络拓扑、子网络与模块图表
+
+本节基于 STRING combined score 构建无向 PPI 图。网络拓扑和中心性指标使用全部检出的 PPI 边；可视化默认保留最高置信度的前 300 条边，以减少高度连通网络中的边遮挡。
+
+```{r}
+ppi_topology <- data.frame()
+if (nrow(ppi_edges) > 0) {
+  ig_state <- try_install_and_load("igraph", bioc = FALSE)
+  if (isTRUE(ig_state$ok)) {
+    ppi_scale01 <- function(x) {
+      x <- suppressWarnings(as.numeric(x))
+      out <- rep(NA_real_, length(x))
+      ok <- is.finite(x)
+      if (!any(ok)) {
+        return(out)
+      }
+      rng <- range(x[ok], na.rm = TRUE)
+      if (!is.finite(rng[[1]]) || !is.finite(rng[[2]]) || rng[[1]] == rng[[2]]) {
+        out[ok] <- 1
+      } else {
+        out[ok] <- (x[ok] - rng[[1]]) / diff(rng)
+      }
+      out
+    }
+
+    ppi_edge_input <- ppi_edges %>%
+      transmute(
+        from = from_symbol,
+        to = to_symbol,
+        combined_score = suppressWarnings(as.numeric(combined_score))
+      ) %>%
+      filter(!is.na(from), !is.na(to), from != to, is.finite(combined_score))
+    plot_edges <- ppi_edge_input %>% arrange(dplyr::desc(combined_score)) %>% slice_head(n = 300)
+    g_all <- igraph::graph_from_data_frame(ppi_edge_input, directed = FALSE)
+    g_plot <- igraph::graph_from_data_frame(plot_edges, directed = FALSE)
+    deg <- igraph::degree(g_all)
+    component_info <- igraph::components(g_all)
+    ppi_topology <- data.frame(
+      node_count = igraph::vcount(g_all),
+      edge_count = igraph::ecount(g_all),
+      plotted_edge_count = igraph::ecount(g_plot),
+      density = igraph::edge_density(g_all, loops = FALSE),
+      connected_components = component_info$no,
+      largest_component_nodes = ifelse(length(component_info$csize) > 0, max(component_info$csize), NA_integer_),
+      mean_degree = mean(deg),
+      max_degree = max(deg),
+      stringsAsFactors = FALSE
+    )
+
+    community <- tryCatch(igraph::cluster_louvain(g_all, weights = igraph::E(g_all)$combined_score), error = function(e) NULL)
+    if (!is.null(community)) {
+      ppi_topology$modularity <- igraph::modularity(community)
+      ppi_subnetwork_membership <- data.frame(
+        gene_label = names(igraph::membership(community)),
+        subnetwork = paste0("PPI_cluster_", igraph::membership(community)),
+        stringsAsFactors = FALSE
+      )
+      ppi_subnetworks <- ppi_subnetwork_membership %>%
+        left_join(ppi_hubs, by = "gene_label") %>%
+        group_by(subnetwork) %>%
+        summarise(
+          gene_count = n(),
+          mean_degree = mean(degree, na.rm = TRUE),
+          max_degree = max(degree, na.rm = TRUE),
+          up_count = sum(direction == "up", na.rm = TRUE),
+          down_count = sum(direction == "down", na.rm = TRUE),
+          up_fraction = up_count / pmax(up_count + down_count, 1),
+          top_hub_genes = paste(head(gene_label[order(-dplyr::coalesce(degree, 0L))], 10), collapse = ";"),
+          .groups = "drop"
+        )
+      subnetwork_edge_stats <- ppi_edge_input %>%
+        left_join(ppi_subnetwork_membership %>% transmute(from = gene_label, from_subnetwork = subnetwork), by = "from") %>%
+        left_join(ppi_subnetwork_membership %>% transmute(to = gene_label, to_subnetwork = subnetwork), by = "to") %>%
+        filter(!is.na(from_subnetwork), from_subnetwork == to_subnetwork) %>%
+        group_by(subnetwork = from_subnetwork) %>%
+        summarise(
+          edge_count = n(),
+          mean_combined_score = mean(combined_score, na.rm = TRUE),
+          .groups = "drop"
+        )
+      ppi_subnetworks <- ppi_subnetworks %>%
+        left_join(subnetwork_edge_stats, by = "subnetwork") %>%
+        mutate(
+          edge_count = dplyr::coalesce(edge_count, 0L),
+          density = ifelse(gene_count > 1, 2 * edge_count / (gene_count * (gene_count - 1)), NA_real_)
+        ) %>%
+        arrange(dplyr::desc(gene_count), dplyr::desc(mean_degree))
+      write.csv(ppi_subnetworks, "result/11_ppi/11_5_PPI_subnetworks.csv", row.names = FALSE)
+      write.csv(ppi_subnetwork_membership, "result/11_ppi/11_9_PPI_subnetwork_membership.csv", row.names = FALSE)
+    }
+    write.csv(ppi_topology, "result/11_ppi/11_4_PPI_network_topology.csv", row.names = FALSE)
+
+    edge_distance <- 1 / pmax(igraph::E(g_all)$combined_score, 1)
+    ppi_centrality <- data.frame(
+      gene_label = igraph::V(g_all)$name,
+      degree = as.numeric(igraph::degree(g_all)),
+      strength = as.numeric(igraph::strength(g_all, weights = igraph::E(g_all)$combined_score)),
+      betweenness = suppressWarnings(as.numeric(igraph::betweenness(g_all, directed = FALSE, weights = edge_distance, normalized = TRUE))),
+      closeness = suppressWarnings(as.numeric(igraph::closeness(g_all, mode = "all", weights = edge_distance, normalized = TRUE))),
+      eigenvector = suppressWarnings(as.numeric(igraph::eigen_centrality(g_all, directed = FALSE, weights = igraph::E(g_all)$combined_score)$vector)),
+      pagerank = suppressWarnings(as.numeric(igraph::page_rank(g_all, directed = FALSE, weights = igraph::E(g_all)$combined_score)$vector)),
+      local_clustering = suppressWarnings(as.numeric(igraph::transitivity(g_all, type = "local", isolates = "zero"))),
+      stringsAsFactors = FALSE
+    ) %>%
+      mutate(across(c(betweenness, closeness, eigenvector, pagerank, local_clustering), ~ ifelse(is.finite(.x), .x, NA_real_))) %>%
+      left_join(ppi_subnetwork_membership, by = "gene_label") %>%
+      left_join(sig_de_symbols, by = "gene_label") %>%
+      mutate(
+        degree_scaled = ppi_scale01(degree),
+        strength_scaled = ppi_scale01(strength),
+        betweenness_scaled = ppi_scale01(betweenness),
+        closeness_scaled = ppi_scale01(closeness),
+        eigenvector_scaled = ppi_scale01(eigenvector),
+        pagerank_scaled = ppi_scale01(pagerank),
+        consensus_score = rowMeans(
+          cbind(degree_scaled, strength_scaled, betweenness_scaled, closeness_scaled, eigenvector_scaled, pagerank_scaled),
+          na.rm = TRUE
+        )
+      ) %>%
+      arrange(dplyr::desc(consensus_score), dplyr::desc(degree), pvalue) %>%
+      mutate(
+        consensus_rank = dplyr::row_number(),
+        degree_rank = dplyr::dense_rank(dplyr::desc(degree)),
+        betweenness_rank = dplyr::dense_rank(dplyr::desc(betweenness)),
+        closeness_rank = dplyr::dense_rank(dplyr::desc(closeness)),
+        eigenvector_rank = dplyr::dense_rank(dplyr::desc(eigenvector)),
+        pagerank_rank = dplyr::dense_rank(dplyr::desc(pagerank))
+      )
+    write.csv(ppi_centrality, "result/11_ppi/11_8_PPI_node_centrality.csv", row.names = FALSE)
+
+    set.seed(1)
+    coords <- as.data.frame(igraph::layout_with_fr(g_plot, weights = igraph::E(g_plot)$combined_score / 1000))
+    colnames(coords) <- c("x", "y")
+    node_tbl <- data.frame(gene_label = igraph::V(g_plot)$name, coords, stringsAsFactors = FALSE) %>%
+      left_join(ppi_centrality, by = "gene_label") %>%
+      mutate(
+        direction = dplyr::coalesce(direction, "ns"),
+        subnetwork = dplyr::coalesce(subnetwork, "unclustered")
+      )
+    edge_tbl <- igraph::as_data_frame(g_plot, what = "edges") %>%
+      left_join(node_tbl %>% dplyr::select(from = gene_label, x_from = x, y_from = y, from_subnetwork = subnetwork), by = "from") %>%
+      left_join(node_tbl %>% dplyr::select(to = gene_label, x_to = x, y_to = y, to_subnetwork = subnetwork), by = "to")
+    subnetwork_palette <- resolve_named_colors(c(viz_pal$group, viz_pal$accent, viz_pal$neutral[c("dark", "mid")]), node_tbl$subnetwork)
+    label_nodes <- node_tbl %>% arrange(consensus_rank, dplyr::desc(degree), pvalue) %>% slice_head(n = 20)
+    ppi_network_plot <- ggplot() +
+      geom_segment(
+        data = edge_tbl,
+        aes(x = x_from, y = y_from, xend = x_to, yend = y_to, alpha = combined_score, linewidth = combined_score),
+        color = viz_pal$neutral["mid"],
+        lineend = "round"
+      ) +
+      geom_point(
+        data = node_tbl,
+        aes(x = x, y = y, size = degree, fill = subnetwork, color = direction),
+        shape = 21,
+        stroke = 0.8
+      ) +
+      ggrepel::geom_text_repel(
+        data = label_nodes,
+        aes(x = x, y = y, label = gene_label),
+        size = 3,
+        max.overlaps = 60,
+        box.padding = 0.45,
+        min.segment.length = 0,
+        segment.alpha = 0.45
+      ) +
+      scale_fill_manual(values = subnetwork_palette, drop = FALSE) +
+      scale_color_manual(values = viz_pal$de, drop = FALSE) +
+      scale_alpha(range = c(0.12, 0.55), guide = "none") +
+      scale_linewidth(range = c(0.2, 1.1), guide = "none") +
+      labs(
+        title = "STRING PPI network of DE genes",
+        subtitle = "Node fill: Louvain subnetwork; node outline: DE direction; edge weight: STRING combined score",
+        x = NULL,
+        y = NULL,
+        size = "Degree",
+        fill = "Subnetwork",
+        color = "DE direction"
+      ) +
+      theme_void() +
+      theme(
+        legend.position = "right",
+        plot.background = element_rect(fill = "white", color = NA),
+        panel.background = element_rect(fill = "white", color = NA),
+        plot.title = element_text(hjust = 0.5, face = "bold", color = viz_pal$neutral["dark"]),
+        plot.subtitle = element_text(hjust = 0.5, color = viz_pal$neutral["dark"])
+      )
+    save_plot_versions(ppi_network_plot, "result/11_ppi/11_6_STRING_PPI_network.pdf", width = 10, height = 8)
+
+    if (nrow(ppi_subnetworks) > 0) {
+      subnetwork_bubble_tbl <- ppi_subnetworks %>%
+        mutate(subnetwork = factor(subnetwork, levels = rev(subnetwork)))
+      subnetwork_bubble_plot <- ggplot(subnetwork_bubble_tbl, aes(x = gene_count, y = mean_degree)) +
+        geom_point(aes(size = edge_count, color = up_fraction), alpha = 0.9) +
+        ggrepel::geom_text_repel(aes(label = subnetwork), size = 3, max.overlaps = 40) +
+        scale_color_gradientn(colors = unname(viz_pal$heatmap_diverging), limits = c(0, 1), name = "Up fraction") +
+        scale_size_continuous(range = c(3, 10), name = "Internal edges") +
+        labs(title = "PPI subnetwork summary", x = "Genes in subnetwork", y = "Mean degree") +
+        theme_rnaseq_minimal()
+      save_plot_versions(subnetwork_bubble_plot, "result/11_ppi/11_8_PPI_subnetwork_bubble.pdf", width = 8.5, height = 6)
+
+      top_subnetworks <- ppi_subnetworks %>% slice_head(n = 6) %>% pull(subnetwork)
+      subnetwork_edge_tbl <- edge_tbl %>%
+        filter(from_subnetwork %in% top_subnetworks, from_subnetwork == to_subnetwork) %>%
+        mutate(subnetwork = from_subnetwork)
+      subnetwork_node_tbl <- node_tbl %>% filter(subnetwork %in% top_subnetworks)
+      subnetwork_label_tbl <- subnetwork_node_tbl %>%
+        group_by(subnetwork) %>%
+        arrange(consensus_rank, dplyr::desc(degree), .by_group = TRUE) %>%
+        slice_head(n = 3) %>%
+        ungroup()
+      if (nrow(subnetwork_node_tbl) > 0 && nrow(subnetwork_edge_tbl) > 0) {
+        subnetwork_panel_plot <- ggplot() +
+          geom_segment(
+            data = subnetwork_edge_tbl,
+            aes(x = x_from, y = y_from, xend = x_to, yend = y_to, alpha = combined_score),
+            color = viz_pal$neutral["mid"],
+            linewidth = 0.45
+          ) +
+          geom_point(
+            data = subnetwork_node_tbl,
+            aes(x = x, y = y, size = degree, fill = direction),
+            shape = 21,
+            color = viz_pal$neutral["dark"],
+            stroke = 0.5
+          ) +
+          ggrepel::geom_text_repel(
+            data = subnetwork_label_tbl,
+            aes(x = x, y = y, label = gene_label),
+            size = 2.6,
+            max.overlaps = 30,
+            min.segment.length = 0
+          ) +
+          facet_wrap(~ subnetwork, scales = "free", ncol = 3) +
+          scale_fill_manual(values = viz_pal$de, drop = FALSE) +
+          scale_alpha(range = c(0.15, 0.65), guide = "none") +
+          labs(title = "Top PPI subnetworks", x = NULL, y = NULL, size = "Degree", fill = "DE direction") +
+          theme_void() +
+          theme(
+            legend.position = "right",
+            plot.background = element_rect(fill = "white", color = NA),
+            panel.background = element_rect(fill = "white", color = NA),
+            strip.background = element_rect(fill = viz_pal$neutral["light"], color = NA),
+            strip.text = element_text(face = "bold", color = viz_pal$neutral["dark"]),
+            plot.title = element_text(hjust = 0.5, face = "bold", color = viz_pal$neutral["dark"])
+          )
+        save_plot_versions(subnetwork_panel_plot, "result/11_ppi/11_9_PPI_top_subnetwork_panels.pdf", width = 11, height = 7.5)
+      }
+    }
+  } else {
+    write.csv(data.frame(status = "skipped_missing_igraph"), "result/11_ppi/11_4_PPI_network_topology.csv", row.names = FALSE)
+    write.csv(data.frame(status = "skipped_missing_igraph"), "result/11_ppi/11_5_PPI_subnetworks.csv", row.names = FALSE)
+  }
+}
+```
+
+## 11.3 Hub 基因稳健性与表达效应
+
+Hub 基因仅用 degree 排名容易受单一拓扑指标影响。这里同时报告 degree、strength、betweenness、closeness、eigenvector 和 PageRank，并用 min-max 标准化后的平均值作为 consensus score，用于辅助评估候选 hub 的稳定性。
+
+```{r}
+if (nrow(ppi_centrality) > 0) {
+  centrality_heat_tbl <- ppi_centrality %>%
+    arrange(consensus_rank, dplyr::desc(degree)) %>%
+    slice_head(n = 30) %>%
+    dplyr::select(
+      gene_label,
+      degree_scaled,
+      strength_scaled,
+      betweenness_scaled,
+      closeness_scaled,
+      eigenvector_scaled,
+      pagerank_scaled
+    ) %>%
+    tidyr::pivot_longer(-gene_label, names_to = "metric", values_to = "scaled_score") %>%
+    mutate(
+      metric = dplyr::recode(
+        metric,
+        degree_scaled = "Degree",
+        strength_scaled = "Strength",
+        betweenness_scaled = "Betweenness",
+        closeness_scaled = "Closeness",
+        eigenvector_scaled = "Eigenvector",
+        pagerank_scaled = "PageRank"
+      ),
+      gene_label = factor(gene_label, levels = rev(unique(gene_label))),
+      metric = factor(metric, levels = c("Degree", "Strength", "Betweenness", "Closeness", "Eigenvector", "PageRank"))
+    )
+  centrality_heatmap <- ggplot(centrality_heat_tbl, aes(x = metric, y = gene_label, fill = scaled_score)) +
+    geom_tile(color = "white", linewidth = 0.35) +
+    scale_fill_heatmap_sequential(limits = c(0, 1), na.value = viz_pal$neutral["light"], name = "Scaled\ncentrality") +
+    labs(title = "Consensus PPI hub centrality", x = NULL, y = NULL) +
+    theme_rnaseq_minimal() +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1), panel.grid = element_blank())
+  save_plot_versions(centrality_heatmap, "result/11_ppi/11_10_PPI_centrality_heatmap.pdf", width = 9, height = 7)
+}
+
+if (nrow(ppi_hubs) > 0) {
+  hub_plot_tbl <- ppi_hubs %>%
+    arrange(dplyr::desc(degree), pvalue) %>%
+    slice_head(n = 30) %>%
+    mutate(gene_label = factor(gene_label, levels = rev(gene_label)))
+  hub_plot <- ggplot(hub_plot_tbl, aes(x = gene_label, y = degree, fill = direction)) +
+    geom_col(width = 0.75) +
+    coord_flip() +
+    scale_fill_manual(values = viz_pal$de, drop = FALSE) +
+    labs(title = "Top PPI hub genes", x = NULL, y = "STRING network degree") +
+    theme_rnaseq_minimal()
+  save_plot_versions(hub_plot, "result/11_ppi/11_7_PPI_hub_degree_barplot.pdf", width = 8.5, height = 7)
+}
+
+if (nrow(ppi_centrality) > 0) {
+  hub_scatter_tbl <- ppi_centrality %>%
+    mutate(
+      direction = dplyr::coalesce(direction, "ns"),
+      pvalue_plot = pmax(dplyr::coalesce(suppressWarnings(as.numeric(pvalue)), 1), 1e-300),
+      neg_log10_pvalue = -log10(pvalue_plot)
+    )
+  hub_scatter_labels <- hub_scatter_tbl %>%
+    arrange(consensus_rank, dplyr::desc(degree), pvalue) %>%
+    slice_head(n = 18)
+  hub_scatter <- ggplot(hub_scatter_tbl, aes(x = log2FoldChange, y = degree)) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral["mid"]) +
+    geom_point(aes(size = neg_log10_pvalue, color = direction, alpha = consensus_score)) +
+    ggrepel::geom_text_repel(data = hub_scatter_labels, aes(label = gene_label), size = 3, max.overlaps = 50) +
+    scale_color_manual(values = viz_pal$de, drop = FALSE) +
+    scale_alpha(range = c(0.35, 0.95), guide = "none") +
+    scale_size_continuous(range = c(1.8, 7), name = "-log10(p)") +
+    labs(
+      title = "Expression change versus PPI centrality",
+      x = "log2 fold change",
+      y = "PPI degree",
+      color = "DE direction"
+    ) +
+    theme_rnaseq_minimal()
+  save_plot_versions(hub_scatter, "result/11_ppi/11_11_PPI_hub_expression_centrality_scatter.pdf", width = 8.5, height = 6.5)
+}
+```
+
+## 11.4 互作置信度与 hub 邻接结构
+
+STRING combined score 反映互作证据强度。这里同时展示 score 分布和常用阈值下的节点/边保留情况，并对 consensus hub 的直接互作关系绘制邻接热图。
+
+```{r}
+if (nrow(ppi_edges) > 0) {
+  edge_score_tbl <- ppi_edges %>%
+    mutate(combined_score = suppressWarnings(as.numeric(combined_score))) %>%
+    filter(is.finite(combined_score))
+  threshold_values <- c(400, 500, 700, 900)
+  ppi_threshold_sensitivity <- bind_rows(lapply(threshold_values, function(one_threshold) {
+    kept_edges <- edge_score_tbl %>% filter(combined_score >= one_threshold)
+    data.frame(
+      combined_score_threshold = one_threshold,
+      edge_count = nrow(kept_edges),
+      node_count = length(unique(c(kept_edges$from_symbol, kept_edges$to_symbol))),
+      stringsAsFactors = FALSE
+    )
+  }))
+  write.csv(ppi_threshold_sensitivity, "result/11_ppi/11_10_PPI_score_threshold_sensitivity.csv", row.names = FALSE)
+
+  if (nrow(edge_score_tbl) > 0) {
+    edge_score_hist <- ggplot(edge_score_tbl, aes(x = combined_score)) +
+      geom_histogram(binwidth = 50, boundary = 400, fill = viz_pal$accent["teal"], color = "white") +
+      geom_vline(xintercept = threshold_values, linetype = "dashed", color = viz_pal$neutral["dark"], linewidth = 0.35) +
+      scale_x_continuous(limits = c(400, 1000), breaks = seq(400, 1000, 100)) +
+      labs(title = "STRING combined score distribution", x = "Combined score", y = "PPI edges") +
+      theme_rnaseq_minimal(legend = "none")
+    threshold_long <- ppi_threshold_sensitivity %>%
+      tidyr::pivot_longer(c(edge_count, node_count), names_to = "metric", values_to = "count") %>%
+      mutate(metric = dplyr::recode(metric, edge_count = "Edges", node_count = "Nodes"))
+    threshold_plot <- ggplot(threshold_long, aes(x = combined_score_threshold, y = count, color = metric)) +
+      geom_line(linewidth = 0.8) +
+      geom_point(size = 2.6) +
+      scale_color_manual(values = c(Edges = unname(viz_pal$accent["warm"]), Nodes = unname(viz_pal$accent["purple"]))) +
+      scale_x_continuous(breaks = threshold_values) +
+      labs(x = "Minimum combined score", y = "Retained count", color = NULL) +
+      theme_rnaseq_minimal()
+    edge_score_plot <- patchwork::wrap_plots(edge_score_hist, threshold_plot, ncol = 1, heights = c(2, 1.15))
+    save_plot_versions(edge_score_plot, "result/11_ppi/11_12_PPI_edge_score_threshold_sensitivity.pdf", width = 8.5, height = 7)
+  }
+}
+
+if (nrow(ppi_centrality) > 1 && nrow(ppi_edges) > 0) {
+  top_hub_order <- ppi_centrality %>%
+    arrange(consensus_rank, dplyr::desc(degree), pvalue) %>%
+    slice_head(n = 40) %>%
+    pull(gene_label)
+  adjacency_tbl <- bind_rows(
+    ppi_edges %>% transmute(from = from_symbol, to = to_symbol, combined_score = suppressWarnings(as.numeric(combined_score))),
+    ppi_edges %>% transmute(from = to_symbol, to = from_symbol, combined_score = suppressWarnings(as.numeric(combined_score)))
+  ) %>%
+    filter(from %in% top_hub_order, to %in% top_hub_order)
+  adjacency_grid <- expand.grid(from = top_hub_order, to = top_hub_order, stringsAsFactors = FALSE) %>%
+    left_join(adjacency_tbl, by = c("from", "to")) %>%
+    mutate(
+      combined_score = ifelse(from == to, NA_real_, combined_score),
+      from = factor(from, levels = rev(top_hub_order)),
+      to = factor(to, levels = top_hub_order)
+    )
+  adjacency_heatmap <- ggplot(adjacency_grid, aes(x = to, y = from, fill = combined_score)) +
+    geom_tile(color = "white", linewidth = 0.15) +
+    scale_fill_heatmap_sequential(na.value = viz_pal$neutral["light"], name = "STRING\nscore") +
+    coord_equal() +
+    labs(title = "Top consensus hub adjacency matrix", x = NULL, y = NULL) +
+    theme_rnaseq_minimal() +
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), panel.grid = element_blank())
+  save_plot_versions(adjacency_heatmap, "result/11_ppi/11_13_PPI_top_hub_adjacency_heatmap.pdf", width = 10, height = 9.5)
+}
+```
+
+## 11.5 STRING 功能富集
+
+STRING 富集用于解释 PPI 节点是否集中于特定生物过程、分子功能、细胞组分或通路。此处只对成功映射且进入 PPI 网络的节点进行富集，避免把未参与互作的差异基因混入网络功能解释。
+
+```{r}
+fetch_string_enrichment_table <- function(string_ids, species_id) {
+  if (!requireNamespace("httr", quietly = TRUE)) {
+    stop("missing httr package")
+  }
+  request_url <- "https://version-12-0.string-db.org/api/tsv/enrichment"
+  response <- httr::POST(
+    request_url,
+    body = list(
+      identifiers = paste(unique(string_ids), collapse = "\r"),
+      species = species_id,
+      caller_identity = "rna_seq_liver_ppi"
+    ),
+    encode = "form"
+  )
+  if (httr::http_error(response)) {
+    stop("STRING API HTTP ", httr::status_code(response))
+  }
+  response_text <- httr::content(response, as = "text", encoding = "UTF-8")
+  if (!nzchar(trimws(response_text))) {
+    return(data.frame())
+  }
+  utils::read.delim(
+    text = response_text,
+    sep = "\t",
+    quote = "",
+    fill = TRUE,
+    header = TRUE,
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+}
+
+if (!is.null(string_db) && nrow(string_mapped) > 0 && nrow(ppi_hubs) > 1) {
+  ppi_string_ids <- unique(string_mapped$STRING_id[string_mapped$gene_label %in% ppi_hubs$gene_label])
+  ppi_string_ids <- ppi_string_ids[!is.na(ppi_string_ids) & nzchar(ppi_string_ids)]
+  enrichment_categories <- c("Process", "Function", "Component", "KEGG", "RCTM", "WikiPathways", "NetworkNeighborAL", "COMPARTMENTS")
+  if (length(ppi_string_ids) >= 2) {
+    ppi_string_enrichment <- tryCatch({
+      fetch_string_enrichment_table(ppi_string_ids, string_species_id) %>%
+        filter(category %in% enrichment_categories) %>%
+        mutate(requested_category = category)
+    }, error = function(e) {
+      message("STRING enrichment skipped: ", conditionMessage(e))
+      data.frame(status = "skipped", detail = conditionMessage(e), stringsAsFactors = FALSE)
+    })
+  }
+}
+write.csv(ppi_string_enrichment, "result/11_ppi/11_11_STRING_PPI_node_enrichment.csv", row.names = FALSE)
+
+if (nrow(ppi_string_enrichment) > 0) {
+  first_existing_col <- function(df, candidates) {
+    hits <- intersect(candidates, colnames(df))
+    if (length(hits) == 0) {
+      return(NULL)
+    }
+    hits[[1]]
+  }
+  fdr_col <- first_existing_col(ppi_string_enrichment, c("fdr", "FDR", "p.adjust", "padj", "p_value"))
+  gene_count_col <- first_existing_col(ppi_string_enrichment, c("number_of_genes", "gene_count", "Count", "count"))
+  description_col <- first_existing_col(ppi_string_enrichment, c("description", "Description", "term", "ID"))
+  category_col <- first_existing_col(ppi_string_enrichment, c("requested_category", "category"))
+  if (!is.null(fdr_col) && !is.null(gene_count_col) && !is.null(description_col) && !is.null(category_col)) {
+    string_enrichment_plot_tbl <- ppi_string_enrichment %>%
+      mutate(
+        category_plot = dplyr::recode(
+          as.character(.data[[category_col]]),
+          COMPARTMENTS = "Compartments",
+          NetworkNeighborAL = "STRING clusters",
+          RCTM = "Reactome",
+          .default = as.character(.data[[category_col]])
+        ),
+        term_description = as.character(.data[[description_col]]),
+        fdr_value = suppressWarnings(as.numeric(.data[[fdr_col]])),
+        gene_count = suppressWarnings(as.numeric(.data[[gene_count_col]])),
+        enrichment_signal = -log10(pmax(fdr_value, 1e-300))
+      ) %>%
+      filter(is.finite(enrichment_signal), is.finite(gene_count), !is.na(term_description), nzchar(term_description)) %>%
+      group_by(category_plot) %>%
+      arrange(fdr_value, dplyr::desc(gene_count), .by_group = TRUE) %>%
+      slice_head(n = 8) %>%
+      ungroup() %>%
+      mutate(term_label = stringr::str_trunc(term_description, width = 58))
+    if (nrow(string_enrichment_plot_tbl) > 0) {
+      string_enrichment_plot <- ggplot(
+        string_enrichment_plot_tbl,
+        aes(x = enrichment_signal, y = reorder(term_label, enrichment_signal))
+      ) +
+        geom_point(aes(size = gene_count, color = fdr_value), alpha = 0.92) +
+        facet_wrap(~ category_plot, scales = "free_y", ncol = 2) +
+        scale_color_gradientn(colors = rev(unname(viz_pal$enrich_p)), name = "FDR") +
+        scale_size_continuous(range = c(2.2, 8), name = "Genes") +
+        labs(
+          title = "STRING functional enrichment of PPI nodes",
+          x = "-log10(FDR)",
+          y = NULL
+        ) +
+        theme_rnaseq_minimal() +
+        theme(panel.grid.major.y = element_blank())
+      save_plot_versions(string_enrichment_plot, "result/11_ppi/11_14_STRING_PPI_node_enrichment_dotplot.pdf", width = 11, height = 8)
+    }
+  }
+}
+```
+
+## 11.6 度分布与 scale-free 拓扑检验
+
+PPI 网络若服从 scale-free 拓扑，则度分布在对数坐标下近似线性。此处绘制 log-log 度分布并拟合幂律，报告 R² 作为 scale-free 适配度。
+
+```{r}
+if (nrow(ppi_edges) > 0 && isTRUE(ig_state$ok)) {
+  deg_all <- igraph::degree(g_all)
+  deg_tbl <- as.data.frame(table(deg_all), stringsAsFactors = FALSE)
+  colnames(deg_tbl) <- c("degree", "frequency")
+  deg_tbl$degree <- as.numeric(deg_tbl$degree)
+  deg_tbl <- deg_tbl %>% filter(degree > 0, frequency > 0)
+
+  # log-log 线性拟合
+  if (nrow(deg_tbl) >= 3) {
+    lm_fit <- lm(log10(frequency) ~ log10(degree), data = deg_tbl)
+    r_squared <- summary(lm_fit)$r.squared
+    slope <- coef(lm_fit)[2]
+    deg_tbl$fitted <- 10^predict(lm_fit)
+
+    degree_dist_plot <- ggplot(deg_tbl, aes(x = degree, y = frequency)) +
+      geom_point(color = unname(viz_pal$accent["teal"]), size = 2.5, alpha = 0.85) +
+      geom_line(aes(y = fitted), color = viz_pal$neutral["dark"], linetype = "dashed", linewidth = 0.7) +
+      scale_x_log10() +
+      scale_y_log10() +
+      annotate("label",
+        x = Inf, y = Inf, hjust = 1.1, vjust = 1.3,
+        label = sprintf("R² = %.3f\nSlope = %.2f", r_squared, slope),
+        size = 3.5, fontface = "italic",
+        fill = "white", label.size = 0.3, color = viz_pal$neutral["dark"]
+      ) +
+      labs(
+        title = "PPI degree distribution (log-log)",
+        subtitle = "Dashed line: power-law fit; higher R² suggests scale-free topology",
+        x = "Degree (log10)", y = "Frequency (log10)"
+      ) +
+      theme_rnaseq_minimal()
+    save_plot_versions(degree_dist_plot, "result/11_ppi/11_15_PPI_degree_distribution.pdf", width = 7.5, height = 6)
+  }
+}
+```
+
+## 11.7 中心性指标相关性分析
+
+不同中心性指标可能高度相关或互补。此处计算6个中心性指标间的 Spearman 相关系数，识别冗余或独立维度。
+
+```{r}
+if (nrow(ppi_centrality) > 5) {
+  cent_cols <- c("degree", "strength", "betweenness", "closeness", "eigenvector", "pagerank")
+  cent_mat <- ppi_centrality %>%
+    dplyr::select(all_of(cent_cols)) %>%
+    as.matrix()
+  # 仅对有限值计算
+  cent_mat[!is.finite(cent_mat)] <- NA
+  cent_cor <- cor(cent_mat, use = "pairwise.complete.obs", method = "spearman")
+
+  cent_cor_long <- as.data.frame(as.table(cent_cor), stringsAsFactors = FALSE)
+  colnames(cent_cor_long) <- c("metric_x", "metric_y", "spearman_rho")
+  metric_labels <- c(degree = "Degree", strength = "Strength", betweenness = "Betweenness",
+                     closeness = "Closeness", eigenvector = "Eigenvector", pagerank = "PageRank")
+  cent_cor_long <- cent_cor_long %>%
+    mutate(
+      metric_x = factor(dplyr::recode(metric_x, !!!metric_labels), levels = rev(metric_labels)),
+      metric_y = factor(dplyr::recode(metric_y, !!!metric_labels), levels = metric_labels)
+    )
+
+  centrality_cor_heatmap <- ggplot(cent_cor_long, aes(x = metric_y, y = metric_x, fill = spearman_rho)) +
+    geom_tile(color = "white", linewidth = 0.4) +
+    geom_text(aes(label = sprintf("%.2f", spearman_rho)), size = 3, color = viz_pal$neutral["dark"]) +
+    scale_fill_heatmap_sequential(limits = c(-1, 1), na.value = viz_pal$neutral["light"], name = "Spearman ρ") +
+    coord_equal() +
+    labs(title = "Centrality metric correlation", x = NULL, y = NULL) +
+    theme_rnaseq_minimal() +
+    theme(axis.text.x = element_text(angle = 35, hjust = 1), panel.grid = element_blank())
+  save_plot_versions(centrality_cor_heatmap, "result/11_ppi/11_16_PPI_centrality_correlation.pdf", width = 7, height = 6.5)
+}
+```
+
+## 11.8 Hub 基因表达热图
+
+展示 consensus top hub 基因在各样本中的标准化表达模式，辅助判断 hub 基因的生物学意义。
+
+```{r}
+if (nrow(ppi_centrality) > 0 && exists("gene_exp", inherits = TRUE) && exists("sample_info", inherits = TRUE)) {
+  top_hub_genes <- ppi_centrality %>%
+    arrange(consensus_rank, dplyr::desc(degree), pvalue) %>%
+    slice_head(n = 30) %>%
+    left_join(sig_de_symbols %>% dplyr::select(gene_label, gene_id), by = "gene_label")
+
+  # 用 gene_id 匹配 gene_exp 行名；若无匹配则用 gene_label
+  hub_in_mat <- top_hub_genes$gene_id[top_hub_genes$gene_id %in% rownames(gene_exp)]
+  if (length(hub_in_mat) < 3) {
+    hub_in_mat <- top_hub_genes$gene_label[top_hub_genes$gene_label %in% rownames(gene_exp)]
+  }
+
+  if (length(hub_in_mat) >= 3) {
+    hub_expr <- gene_exp[hub_in_mat, , drop = FALSE]
+    # log2(x+1) 变换
+    hub_expr_log <- log2(hub_expr + 1)
+
+    # 行名替换为 gene_label（若 gene_id 和 gene_label 不同）
+    id2label <- stats::setNames(top_hub_genes$gene_label, top_hub_genes$gene_id)
+    id2label <- id2label[names(id2label) %in% rownames(hub_expr_log)]
+    rownames(hub_expr_log) <- ifelse(rownames(hub_expr_log) %in% names(id2label),
+                                      id2label[rownames(hub_expr_log)], rownames(hub_expr_log))
+
+    # 按行 z-score 标准化
+    hub_z <- t(scale(t(hub_expr_log)))
+    hub_z[!is.finite(hub_z)] <- 0
+
+    # 限制 hub_z 行数为 top 30
+    hub_z <- hub_z[rownames(hub_z) %in% top_hub_genes$gene_label[1:min(30, nrow(top_hub_genes))], , drop = FALSE]
+
+    # 样本注释
+    group_levels <- unique(sample_info$group)
+    group_cols <- resolve_named_colors(c(viz_pal$group, viz_pal$accent), group_levels)
+    ha_col <- ComplexHeatmap::HeatmapAnnotation(
+      Group = sample_info[colnames(hub_z), "group"],
+      col = list(Group = group_cols),
+      annotation_name_side = "left"
+    )
+    # 行方向注释：DE direction
+    hub_direction <- ppi_centrality %>%
+      filter(gene_label %in% rownames(hub_z)) %>%
+      arrange(match(gene_label, rownames(hub_z))) %>%
+      mutate(direction = dplyr::coalesce(direction, "ns"))
+    de_cols <- viz_pal$de
+    ha_row <- ComplexHeatmap::rowAnnotation(
+      Direction = hub_direction$direction,
+      col = list(Direction = de_cols)
+    )
+
+    z_limit <- max(abs(hub_z), na.rm = TRUE)
+    z_limit <- min(z_limit, 3)
+    hub_heatmap_plot <- ComplexHeatmap::Heatmap(
+      hub_z,
+      name = "Z-score",
+      top_annotation = ha_col,
+      right_annotation = ha_row,
+      cluster_rows = TRUE,
+      cluster_columns = TRUE,
+      show_row_names = TRUE,
+      show_column_names = FALSE,
+      row_names_gp = grid::gpar(fontsize = 7),
+      col = circlize::colorRamp2(c(-z_limit, 0, z_limit), unname(viz_pal$heatmap_diverging)),
+      heatmap_legend_param = list(direction = "horizontal"),
+      border = TRUE
+    )
+    save_base_pdf_versions("result/11_ppi/11_17_PPI_hub_expression_heatmap.pdf", width = 9, height = 8,
+      expr = ComplexHeatmap::draw(hub_heatmap_plot, heatmap_legend_side = "bottom", annotation_legend_side = "bottom")
+    )
+  }
+}
+```
+
+## 11.9 跨模块桥接基因识别
+
+桥接基因是连接不同 Louvain 子网络的关键节点。此处通过计算每个基因的跨模块边比例来识别 bridge 基因，并可视化。
+
+```{r}
+if (nrow(ppi_subnetwork_membership) > 0 && nrow(ppi_edges) > 0 && nrow(ppi_subnetworks) >= 2) {
+  # 计算每个基因的跨模块边 vs 模块内边
+  edge_with_sub <- ppi_edges %>%
+    transmute(from = from_symbol, to = to_symbol, combined_score = suppressWarnings(as.numeric(combined_score))) %>%
+    left_join(ppi_subnetwork_membership %>% transmute(from = gene_label, from_sub = subnetwork), by = "from") %>%
+    left_join(ppi_subnetwork_membership %>% transmute(to = gene_label, to_sub = subnetwork), by = "to") %>%
+    filter(!is.na(from_sub), !is.na(to_sub)) %>%
+    mutate(cross_module = from_sub != to_sub)
+
+  bridge_stats <- edge_with_sub %>%
+    group_by(gene = from) %>%
+    summarise(
+      total_edges = n(),
+      cross_edges = sum(cross_module),
+      cross_fraction = cross_edges / total_edges,
+      connected_subnets = length(unique(c(from_sub[from_sub != to_sub | cross_module], to_sub[cross_module | from_sub != to_sub]))),
+      .groups = "drop"
+    ) %>%
+    bind_rows(
+      edge_with_sub %>%
+        group_by(gene = to) %>%
+        summarise(
+          total_edges = n(),
+          cross_edges = sum(cross_module),
+          cross_fraction = cross_edges / total_edges,
+          connected_subnets = length(unique(c(from_sub[cross_module], to_sub[cross_module]))),
+          .groups = "drop"
+        )
+    ) %>%
+    group_by(gene) %>%
+    summarise(
+      total_edges = sum(total_edges),
+      cross_edges = sum(cross_edges),
+      cross_fraction = cross_edges / total_edges,
+      connected_subnets = max(connected_subnets),
+      .groups = "drop"
+    ) %>%
+    filter(total_edges >= 2, cross_fraction > 0) %>%
+    left_join(ppi_centrality, by = c("gene" = "gene_label")) %>%
+    arrange(dplyr::desc(cross_fraction), dplyr::desc(cross_edges))
+
+  write.csv(bridge_stats, "result/11_ppi/11_12_PPI_bridge_genes.csv", row.names = FALSE)
+
+  if (nrow(bridge_stats) >= 3) {
+    bridge_plot_tbl <- bridge_stats %>%
+      slice_head(n = 25) %>%
+      mutate(gene = factor(gene, levels = rev(gene)))
+
+    bridge_barplot <- ggplot(bridge_plot_tbl, aes(x = gene, y = cross_fraction, fill = direction)) +
+      geom_col(width = 0.7) +
+      geom_text(aes(label = paste0(cross_edges, "/", total_edges)), hjust = -0.1, size = 2.8, color = viz_pal$neutral["dark"]) +
+      coord_flip() +
+      scale_fill_manual(values = viz_pal$de, drop = FALSE) +
+      scale_y_continuous(limits = c(0, 1.05), expand = expansion(mult = 0.08)) +
+      labs(
+        title = "Cross-module bridge genes",
+        subtitle = "Fraction of edges connecting different Louvain subnetworks",
+        x = NULL, y = "Cross-module edge fraction", fill = "DE direction"
+      ) +
+      theme_rnaseq_minimal()
+    save_plot_versions(bridge_barplot, "result/11_ppi/11_18_PPI_bridge_genes_barplot.pdf", width = 8.5, height = 7)
+  }
+}
+```
+
+## 11.10 Hub 基因火山图标注
+
+在标准火山图上高亮标注 consensus top hub 基因，直观展示 hub 基因在差异表达中的位置。
+
+```{r}
+if (nrow(ppi_centrality) > 0 && nrow(de_result) > 0) {
+  hub_gene_set <- ppi_centrality %>%
+    arrange(consensus_rank, dplyr::desc(degree), pvalue) %>%
+    slice_head(n = 20) %>%
+    pull(gene_label)
+
+  volcano_tbl <- de_result %>%
+    filter(!is.na(gene_label), gene_label != "") %>%
+    group_by(gene_label) %>%
+    slice_max(order_by = abs(rank_score), n = 1, with_ties = FALSE) %>%
+    ungroup() %>%
+    transmute(
+      gene_label,
+      log2FoldChange,
+      pvalue_plot = pmax(dplyr::coalesce(suppressWarnings(as.numeric(pvalue)), 1), 1e-300),
+      direction = dplyr::coalesce(direction, "ns")
+    ) %>%
+    mutate(
+      neg_log10_p = -log10(pvalue_plot),
+      is_hub = gene_label %in% hub_gene_set
+    ) %>%
+    filter(is.finite(log2FoldChange), is.finite(neg_log10_p))
+
+  hub_labels <- volcano_tbl %>% filter(is_hub)
+
+  hub_volcano <- ggplot(volcano_tbl, aes(x = log2FoldChange, y = neg_log10_p)) +
+    geom_point(aes(color = direction), alpha = 0.35, size = 1.2) +
+    geom_point(data = hub_labels, aes(fill = direction), shape = 21, size = 3.2, stroke = 0.8, color = viz_pal$neutral["dark"]) +
+    ggrepel::geom_text_repel(data = hub_labels, aes(label = gene_label), size = 2.8, max.overlaps = 50, min.segment.length = 0) +
+    scale_color_manual(values = viz_pal$de, drop = FALSE, guide = "none") +
+    scale_fill_manual(values = viz_pal$de, drop = FALSE, name = "DE direction") +
+    labs(
+      title = "Volcano plot with PPI hub genes highlighted",
+      subtitle = "Circles: top 20 consensus hub genes from PPI network",
+      x = "log2 fold change", y = "-log10(p-value)"
+    ) +
+    theme_rnaseq_minimal()
+  save_plot_versions(hub_volcano, "result/11_ppi/11_19_PPI_hub_volcano.pdf", width = 9, height = 7)
+}
+```
+
+```{r}
+saveRDS(
+  list(
+    ppi_edges = ppi_edges,
+    ppi_hubs = ppi_hubs,
+    ppi_topology = ppi_topology,
+    ppi_subnetworks = ppi_subnetworks,
+    ppi_subnetwork_membership = ppi_subnetwork_membership,
+    ppi_centrality = ppi_centrality,
+    ppi_threshold_sensitivity = ppi_threshold_sensitivity,
+    ppi_string_enrichment = ppi_string_enrichment,
+    generated_at = as.character(Sys.time())
+  ),
+  file.path(cache_root_dir, "11_ppi_state.rds")
+)
+```

@@ -1,0 +1,80 @@
+# Step 4: PCA 与组合选样诊断
+
+## 4.1 选中样本 PCA
+
+```{r}
+ensure_module_result_layout("04_pca")
+
+log2_tmm_mat <- if (!is.null(gene_logcpm) && identical(colnames(gene_logcpm), colnames(gene_exp))) {
+  gene_logcpm
+} else {
+  log2(gene_exp + 1)
+}
+top_pca_genes <- select_top_variable_genes(log2_tmm_mat, top_n = 5000)
+gene_exp_pca <- log2_tmm_mat[top_pca_genes, , drop = FALSE]
+
+pca_res <- prcomp(t(gene_exp_pca), scale. = TRUE)
+pca_df <- as.data.frame(pca_res$x[, 1:2, drop = FALSE])
+pca_df$sample <- rownames(pca_df)
+pca_df$group <- sample_info[pca_df$sample, "group"]
+
+pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = group, label = sample)) +
+  geom_point(size = 3.5) +
+  geom_text_repel(size = 3.2, show.legend = FALSE) +
+  scale_color_manual(values = group_colors) +
+  labs(
+    title = "选中样本 PCA",
+    x = paste0("PC1 (", round(100 * summary(pca_res)$importance[2, 1], 1), "%)"),
+    y = paste0("PC2 (", round(100 * summary(pca_res)$importance[2, 2], 1), "%)")
+  ) +
+  theme_rnaseq_bw()
+
+save_plot_versions(
+  pca_plot,
+  primary = "result/04_pca/4_1_selected_sample_pca.pdf",
+  width = 8,
+  height = 6
+)
+
+best_combo_pca_plot <- pca_plot +
+  stat_ellipse(aes(group = group), linewidth = 0.6, linetype = "dashed", show.legend = FALSE) +
+  labs(title = "最终入选组合的增强版 PCA")
+save_plot_versions(
+  best_combo_pca_plot,
+  primary = "result/04_pca/4_4_best_combination_enhanced_pca.pdf",
+  width = 8.5,
+  height = 6.5
+)
+
+pca_scree <- data.frame(
+  PC = paste0("PC", seq_len(min(10, ncol(pca_res$x)))),
+  variance = 100 * summary(pca_res)$importance[2, 1:min(10, ncol(pca_res$x))]
+)
+
+scree_plot <- ggplot(pca_scree, aes(x = factor(PC, levels = PC), y = variance)) +
+  geom_col(fill = viz_pal$sig_gradient["low"], width = 0.7) +
+  geom_text(aes(label = sprintf("%.1f%%", variance)), vjust = -0.25, size = 3.2) +
+  labs(title = "PCA 解释方差", x = NULL, y = "Explained variance (%)") +
+  theme_rnaseq_minimal()
+
+save_plot_versions(
+  scree_plot,
+  primary = "result/04_pca/4_2_selected_sample_pca_scree.pdf",
+  width = 7,
+  height = 4.5
+)
+
+loading_tbl <- bind_rows(
+  tibble(
+    PC = "PC1",
+    gene_id = names(sort(abs(pca_res$rotation[, "PC1"]), decreasing = TRUE))[1:min(30, nrow(pca_res$rotation))],
+    loading = pca_res$rotation[names(sort(abs(pca_res$rotation[, "PC1"]), decreasing = TRUE))[1:min(30, nrow(pca_res$rotation))], "PC1"]
+  ),
+  tibble(
+    PC = "PC2",
+    gene_id = names(sort(abs(pca_res$rotation[, "PC2"]), decreasing = TRUE))[1:min(30, nrow(pca_res$rotation))],
+    loading = pca_res$rotation[names(sort(abs(pca_res$rotation[, "PC2"]), decreasing = TRUE))[1:min(30, nrow(pca_res$rotation))], "PC2"]
+  )
+)
+write.csv(loading_tbl, "result/04_pca/4_3_top_pca_loading_genes.csv", row.names = FALSE)
+```
