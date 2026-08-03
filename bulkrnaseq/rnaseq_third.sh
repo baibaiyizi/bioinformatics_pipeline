@@ -8,6 +8,11 @@
 
 set -euo pipefail
 
+# ==============================================================================
+# 用户配置区（可用同名环境变量临时覆盖）
+# ==============================================================================
+
+# ---------- A. 项目目录、输入与输出 ----------
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 FIRST_SCRIPT="${ROOT_DIR}/rnaseq_first.sh"
@@ -29,6 +34,7 @@ SALMON_QUANT_DIR="${SALMON_QUANT_DIR:-${ISOFORM_SWITCH_DIR}/salmon_quant}"
 ISOFORM_RESULTS_DIR="${ISOFORM_RESULTS_DIR:-${ISOFORM_SWITCH_DIR}/results}"
 AS_INTEGRATED_DIR="${AS_INTEGRATED_DIR:-${POST_TX_DIR}/integrated}"
 
+# ---------- B. 参考文件、工具与矩阵输入 ----------
 REFERENCE_DIR="${REFERENCE_DIR:-/home/h1028/workspace/reference/GRCm39}"
 GTF_FILE="${GTF_FILE:-}"
 GENOME_FASTA="${GENOME_FASTA:-}"
@@ -39,6 +45,12 @@ CONTRASTS_FILE="${DE_DIR}/contrasts.txt"
 MATRIX_FILE="${MERGE_DIR}/genes.counts.matrix"
 DE_RESULTS_FILE="${DE_DIR}/DE_results"
 
+# ---------- C. 文库方向开关（与 rnaseq_first.sh 共用） ----------
+# liver 默认沿用原流程的 first-strand 链特异性设置。
+# 可选值：unstranded、fr-firststrand、fr-secondstrand。
+RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS:-fr-firststrand}"
+
+# ---------- D. 运行、资源与模块开关 ----------
 THREADS="${THREADS:-8}"
 FORCE="${FORCE:-0}"
 DRY_RUN="${DRY_RUN:-0}"
@@ -49,9 +61,11 @@ RNASEQ_THIRD_EXTRA_METHODS="${RNASEQ_THIRD_EXTRA_METHODS:-${RNASEQ_SECOND_EXTRA_
 FIG_PNG_DPI="${FIG_PNG_DPI:-300}"
 THIRD_HEARTBEAT_INTERVAL="${THIRD_HEARTBEAT_INTERVAL:-120}"
 
+# ---------- E. rMATS 参数开关 ----------
 RMATS_THREADS="${RMATS_THREADS:-${THREADS}}"
 RMATS_READ_LENGTH="${RMATS_READ_LENGTH:-}"
-RMATS_LIBTYPE="${RMATS_LIBTYPE:-fr-firststrand}"
+# RMATS_LIBTYPE 由 RNASEQ_LIBRARY_STRANDEDNESS 派生；如同时设置，必须保持一致。
+RMATS_LIBTYPE="${RMATS_LIBTYPE:-}"
 RMATS_TASK="${RMATS_TASK:-both}"
 RMATS_CSTAT="${RMATS_CSTAT:-0.0001}"
 RMATS_VARIABLE_READ_LENGTH="${RMATS_VARIABLE_READ_LENGTH:-true}"
@@ -61,6 +75,8 @@ RMATS_INDIVIDUAL_COUNTS="${RMATS_INDIVIDUAL_COUNTS:-true}"
 RMATS_EXECUTOR="${RMATS_EXECUTOR:-auto}"
 RMATS_IMAGE="${RMATS_IMAGE:-quay.io/biocontainers/rmats:4.3.0--py310ha9d9618_5}"
 RMATS_BIND_ROOT="${RMATS_BIND_ROOT:-/home/h1028/workspace}"
+
+# ---------- F. 转录本、APA 与 DER 参数开关 ----------
 TRANSCRIPT_FASTA="${TRANSCRIPT_FASTA:-${ISOFORM_REF_DIR}/transcripts.fa}"
 TRANSCRIPT_TX2GENE="${TRANSCRIPT_TX2GENE:-${ISOFORM_REF_DIR}/tx2gene.tsv}"
 SALMON_INDEX="${SALMON_INDEX:-${ISOFORM_REF_DIR}/salmon_index}"
@@ -70,6 +86,7 @@ ISOFORM_SWITCH_DIF_CUTOFF="${ISOFORM_SWITCH_DIF_CUTOFF:-0.1}"
 SASHIMI_TOP_N="${SASHIMI_TOP_N:-8}"
 APA_PVALUE="${APA_PVALUE:-0.05}"
 APA_DELTA_PAU="${APA_DELTA_PAU:-0.1}"
+# APA_STRANDTYPE 由 RNASEQ_LIBRARY_STRANDEDNESS 派生；auto 表示不覆盖派生值。
 APA_STRANDTYPE="${APA_STRANDTYPE:-auto}"
 APA_SEQTYPE="${APA_SEQTYPE:-ThreeMostPairEnd}"
 APA_TEST_METHOD="${APA_TEST_METHOD:-unpaired t-test}"
@@ -77,6 +94,7 @@ DER_PVALUE="${DER_PVALUE:-0.05}"
 DER_CUTOFF="${DER_CUTOFF:-5}"
 DER_GENOME_STYLE="${DER_GENOME_STYLE:-auto}"
 
+# ---------- G. 图形颜色开关 ----------
 COLOR_WT="${COLOR_WT:-#A1C9F4}"
 COLOR_PFOS="${COLOR_PFOS:-#FF9F9B}"
 COLOR_UP="${COLOR_UP:-#FF9F9B}"
@@ -158,6 +176,56 @@ die() {
     exit 1
 }
 
+FEATURECOUNTS_STRAND_SPECIFIC=0
+RNASEQ_LIBRARY_STRANDEDNESS_LABEL=""
+RNASEQ_APA_STRANDTYPE=""
+
+configure_library_strandedness() {
+    local mode="${RNASEQ_LIBRARY_STRANDEDNESS,,}"
+    local requested_rmats="${RMATS_LIBTYPE:-}"
+    local requested_apa="${APA_STRANDTYPE:-auto}"
+    local derived_rmats=""
+    local derived_apa=""
+
+    case "${mode}" in
+        unstranded|none|non-stranded|non-strand-specific)
+            RNASEQ_LIBRARY_STRANDEDNESS="unstranded"
+            RNASEQ_LIBRARY_STRANDEDNESS_LABEL="unstranded（链非特异性）"
+            FEATURECOUNTS_STRAND_SPECIFIC=0
+            derived_rmats="fr-unstranded"
+            derived_apa="NONE"
+            ;;
+        fr-firststrand|fr-first|rf|firststrand|first-strand)
+            RNASEQ_LIBRARY_STRANDEDNESS="fr-firststrand"
+            RNASEQ_LIBRARY_STRANDEDNESS_LABEL="fr-firststrand（链特异性，RF）"
+            FEATURECOUNTS_STRAND_SPECIFIC=2
+            derived_rmats="fr-firststrand"
+            derived_apa="invert"
+            ;;
+        fr-secondstrand|fr-second|fr|secondstrand|second-strand)
+            RNASEQ_LIBRARY_STRANDEDNESS="fr-secondstrand"
+            RNASEQ_LIBRARY_STRANDEDNESS_LABEL="fr-secondstrand（链特异性，FR）"
+            FEATURECOUNTS_STRAND_SPECIFIC=1
+            derived_rmats="fr-secondstrand"
+            derived_apa="forward"
+            ;;
+        *)
+            die "RNASEQ_LIBRARY_STRANDEDNESS 只支持 unstranded、fr-firststrand 或 fr-secondstrand，收到: ${RNASEQ_LIBRARY_STRANDEDNESS}"
+            ;;
+    esac
+
+    if [[ -n "${requested_rmats}" && "${requested_rmats,,}" != "${derived_rmats}" ]]; then
+        die "RMATS_LIBTYPE=${requested_rmats} 与 RNASEQ_LIBRARY_STRANDEDNESS=${RNASEQ_LIBRARY_STRANDEDNESS} 冲突；请只保留同一套方向设置。"
+    fi
+    if [[ "${requested_apa,,}" != "auto" && "${requested_apa}" != "${derived_apa}" ]]; then
+        die "APA_STRANDTYPE=${requested_apa} 与 RNASEQ_LIBRARY_STRANDEDNESS=${RNASEQ_LIBRARY_STRANDEDNESS} 冲突；请只保留同一套方向设置。"
+    fi
+
+    RMATS_LIBTYPE="${derived_rmats}"
+    APA_STRANDTYPE="${derived_apa}"
+    RNASEQ_APA_STRANDTYPE="${derived_apa}"
+}
+
 print_default_order() {
     printf '%s\n' "${DEFAULT_STEPS[*]}"
 }
@@ -205,6 +273,10 @@ Options:
   --skip-post        Skip post-transcriptional method steps.
   --run-post         Enable post-transcriptional method steps.
   -h, --help         Show this help.
+
+Library strandness:
+  RNASEQ_LIBRARY_STRANDEDNESS=unstranded|fr-firststrand|fr-secondstrand
+  该开关统一派生 rMATS、exon-usage featureCounts 和 APA 的链方向参数。
 
 Note:
   Use comma/space-separated step ids; ranges like 6-11 are not supported.
@@ -674,6 +746,7 @@ merge_selected_samples() {
     fi
 
     RNASEQ_SAMPLES_FILE="${SAMPLES_FILE}" \
+    RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS}" \
     FORCE="${FORCE}" \
     DRY_RUN=0 \
     bash "${FIRST_SCRIPT}" --steps 6
@@ -1059,6 +1132,8 @@ rmats_metadata_matches() {
     grep -Fqx "sample_key=${expected_key}" "${RMATS_METADATA_FILE}" || return 1
     grep -Fqx "group1=${RMATS_GROUP1}" "${RMATS_METADATA_FILE}" || return 1
     grep -Fqx "group2=${RMATS_GROUP2}" "${RMATS_METADATA_FILE}" || return 1
+    grep -Fqx "library_strandedness=${RNASEQ_LIBRARY_STRANDEDNESS}" "${RMATS_METADATA_FILE}" || return 1
+    grep -Fqx "rmats_libtype=${RMATS_LIBTYPE}" "${RMATS_METADATA_FILE}" || return 1
 }
 
 write_rmats_metadata() {
@@ -1070,6 +1145,8 @@ write_rmats_metadata() {
         echo "group1_samples=$(join_by_comma "${RMATS_GROUP1_SAMPLES[@]}")"
         echo "group2_samples=$(join_by_comma "${RMATS_GROUP2_SAMPLES[@]}")"
         echo "sample_key=$(printf '%s\n' "${RMATS_GROUP1_SAMPLES[@]}" "${RMATS_GROUP2_SAMPLES[@]}" | sort | paste -sd ',' -)"
+        echo "library_strandedness=${RNASEQ_LIBRARY_STRANDEDNESS}"
+        echo "rmats_libtype=${RMATS_LIBTYPE}"
         echo "read_length=${RMATS_READ_LENGTH}"
         echo "executor=${RMATS_EXECUTOR}"
         echo "image=${RMATS_IMAGE}"
@@ -1106,6 +1183,8 @@ exon_usage_metadata_matches() {
     grep -Fqx "group1=${RMATS_GROUP1}" "${EXON_USAGE_METADATA_FILE}" || return 1
     grep -Fqx "group2=${RMATS_GROUP2}" "${EXON_USAGE_METADATA_FILE}" || return 1
     grep -Fqx "gtf=${GTF_FILE}" "${EXON_USAGE_METADATA_FILE}" || return 1
+    grep -Fqx "library_strandedness=${RNASEQ_LIBRARY_STRANDEDNESS}" "${EXON_USAGE_METADATA_FILE}" || return 1
+    grep -Fqx "featurecounts_strandSpecific=${FEATURECOUNTS_STRAND_SPECIFIC}" "${EXON_USAGE_METADATA_FILE}" || return 1
 }
 
 write_exon_usage_metadata() {
@@ -1118,6 +1197,8 @@ write_exon_usage_metadata() {
         echo "group2_samples=$(join_by_comma "${RMATS_GROUP2_SAMPLES[@]}")"
         echo "sample_key=$(printf '%s\n' "${RMATS_GROUP1_SAMPLES[@]}" "${RMATS_GROUP2_SAMPLES[@]}" | sort | paste -sd ',' -)"
         echo "gtf=${GTF_FILE}"
+        echo "library_strandedness=${RNASEQ_LIBRARY_STRANDEDNESS}"
+        echo "featurecounts_strandSpecific=${FEATURECOUNTS_STRAND_SPECIFIC}"
         echo "threads=${THREADS}"
         echo "method=edgeR::diffSpliceDGE"
         echo "method_note=exon_usage_test_not_gene_level_DESeq2"
@@ -1236,6 +1317,8 @@ apa_metadata_matches() {
     grep -Fqx "group2=${RMATS_GROUP2}" "${APA_METADATA_FILE}" || return 1
     grep -Fqx "gtf=${GTF_FILE}" "${APA_METADATA_FILE}" || return 1
     grep -Fqx "genome_fasta=${GENOME_FASTA}" "${APA_METADATA_FILE}" || return 1
+    grep -Fqx "library_strandedness=${RNASEQ_LIBRARY_STRANDEDNESS}" "${APA_METADATA_FILE}" || return 1
+    grep -Fqx "apa_strandtype=${RNASEQ_APA_STRANDTYPE}" "${APA_METADATA_FILE}" || return 1
 }
 
 write_apa_metadata() {
@@ -1249,6 +1332,7 @@ write_apa_metadata() {
         echo "sample_key=$(printf '%s\n' "${RMATS_GROUP1_SAMPLES[@]}" "${RMATS_GROUP2_SAMPLES[@]}" | sort | paste -sd ',' -)"
         echo "gtf=${GTF_FILE}"
         echo "genome_fasta=${GENOME_FASTA}"
+        echo "library_strandedness=${RNASEQ_LIBRARY_STRANDEDNESS}"
         echo "apa_strandtype=$(resolve_apa_strandtype)"
         echo "apa_seqtype=${APA_SEQTYPE}"
         echo "apa_pvalue=${APA_PVALUE}"
@@ -1445,6 +1529,8 @@ run_rmats() {
     log "PostTx-1: 运行 rMATS"
     log "  GTF          : ${GTF_FILE}"
     log "  read length  : ${RMATS_READ_LENGTH}"
+    log "  library      : ${RNASEQ_LIBRARY_STRANDEDNESS_LABEL}"
+    log "  libType      : ${RMATS_LIBTYPE}"
     log "  ${RMATS_GROUP1} samples: ${RMATS_GROUP1_SAMPLES[*]}"
     log "  ${RMATS_GROUP2} samples: ${RMATS_GROUP2_SAMPLES[*]}"
     log "  output dir   : ${RMATS_OUTPUT_DIR}"
@@ -1483,6 +1569,8 @@ run_exon_usage() {
     log "PostTx-2: 运行 exon-usage 差异剪接验证"
     log "  GTF        : ${GTF_FILE}"
     log "  output dir : ${EXON_USAGE_DIR}"
+    log "  library    : ${RNASEQ_LIBRARY_STRANDEDNESS_LABEL}"
+    log "  strandSpecific: ${FEATURECOUNTS_STRAND_SPECIFIC}"
     log "  methods    : ${RNASEQ_THIRD_METHODS}"
 
     if [[ "${DRY_RUN}" == "1" ]]; then
@@ -1491,7 +1579,7 @@ run_exon_usage() {
         return
     fi
 
-    Rscript --vanilla - "${ROOT_DIR}" "${SAMPLES_FILE}" "${GTF_FILE}" "${EXON_USAGE_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${THREADS}" "${FIG_PNG_DPI}" "${COLOR_SIG}" "${COLOR_NS}" <<'EOF'
+    Rscript --vanilla - "${ROOT_DIR}" "${SAMPLES_FILE}" "${GTF_FILE}" "${EXON_USAGE_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${THREADS}" "${FIG_PNG_DPI}" "${COLOR_SIG}" "${COLOR_NS}" "${FEATURECOUNTS_STRAND_SPECIFIC}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 root_dir <- args[[1]]
 samples_file <- args[[2]]
@@ -1503,6 +1591,7 @@ threads <- as.integer(args[[7]])
 fig_png_dpi <- suppressWarnings(as.numeric(args[[8]]))
 color_sig <- args[[9]]
 color_ns <- args[[10]]
+strand_specific <- as.integer(args[[11]])
 
 if (!is.finite(threads) || threads <= 0) {
   threads <- 8L
@@ -1601,7 +1690,7 @@ fc <- Rsubread::featureCounts(
   useMetaFeatures = FALSE,
   isPairedEnd = TRUE,
   requireBothEndsMapped = TRUE,
-  strandSpecific = 2,
+  strandSpecific = strand_specific,
   checkFragLength = FALSE,
   countMultiMappingReads = FALSE,
   allowMultiOverlap = FALSE,
@@ -2433,69 +2522,10 @@ empty_standardized_apa <- function() {
   )
 }
 
-apadiff_testable_rows <- function(mutiraw_df, pas_type) {
-  if (!apa_test_method %in% c("unpaired t-test", "paired t-test")) {
-    return(rep(TRUE, nrow(mutiraw_df)))
-  }
-
-  suffix <- if (identical(pas_type, "IPA")) "_IPA_RE" else "_3UTR_RE"
-  trt_samples <- sample_table_apa$samplename[sample_table_apa$condition == group2]
-  con_samples <- sample_table_apa$samplename[sample_table_apa$condition == group1]
-  trt_cols <- paste0(trt_samples, suffix)
-  con_cols <- paste0(con_samples, suffix)
-  if (length(trt_cols) <= 1 || length(con_cols) <= 1) {
-    return(rep(TRUE, nrow(mutiraw_df)))
-  }
-  paired <- identical(apa_test_method, "paired t-test")
-  if (paired && length(trt_cols) != length(con_cols)) {
-    stop("APAdiff paired t-test 需要 treatment/control 样本数量一致")
-  }
-
-  re_cols <- c(trt_cols, con_cols)
-  missing_cols <- setdiff(re_cols, colnames(mutiraw_df))
-  if (length(missing_cols) > 0) {
-    stop(sprintf(
-      "APAdiff %s 缺少样本 RE 列: %s",
-      pas_type,
-      paste(missing_cols, collapse = ", ")
-    ))
-  }
-
-  apply(mutiraw_df[, re_cols, drop = FALSE], 1, function(x) {
-    x <- suppressWarnings(as.numeric(x))
-    if (any(!is.finite(x))) {
-      return(FALSE)
-    }
-    tryCatch({
-      stats::t.test(
-        x[seq_along(trt_cols)],
-        x[length(trt_cols) + seq_along(con_cols)],
-        paired = paired
-      )$p.value
-      TRUE
-    }, error = function(e) FALSE)
-  })
-}
-
 safe_apadiff <- function(mutiraw, pas_type) {
   mutiraw_df <- as.data.frame(mutiraw, stringsAsFactors = FALSE, check.names = FALSE)
   if (nrow(mutiraw_df) == 0) {
     message(sprintf("APAdiff 输入为空，%s 将写出空结果表。", pas_type))
-    return(empty_apa_diff())
-  }
-  testable <- as.logical(apadiff_testable_rows(mutiraw_df, pas_type))
-  testable[is.na(testable)] <- FALSE
-  if (sum(!testable, na.rm = TRUE) > 0) {
-    message(sprintf(
-      "APAdiff 在 %s 上过滤 %d 个无法进行 %s 的常量/非有限事件。",
-      pas_type,
-      sum(!testable, na.rm = TRUE),
-      apa_test_method
-    ))
-  }
-  mutiraw_df <- mutiraw_df[testable, , drop = FALSE]
-  if (nrow(mutiraw_df) == 0) {
-    message(sprintf("APAdiff 在 %s 上无可检验事件，写出空结果表。", pas_type))
     return(empty_apa_diff())
   }
   tryCatch(
@@ -3641,6 +3671,7 @@ main() {
         mapfile -t REQUESTED_STEPS <<< "${parsed_steps}"
     fi
 
+    configure_library_strandedness
     resolve_run_order "${REQUESTED_STEPS[@]}"
     REQUESTED_STEPS_LABEL="$(format_steps "${REQUESTED_STEPS[@]}")"
     RUN_ORDER_LABEL="$(format_steps "${RUN_ORDER[@]}")"
@@ -3648,6 +3679,10 @@ main() {
     log "requested steps : ${REQUESTED_STEPS_LABEL}"
     log "run order       : ${RUN_ORDER_LABEL}"
     log "force           : ${FORCE}"
+    log "library strand  : ${RNASEQ_LIBRARY_STRANDEDNESS_LABEL}"
+    log "rMATS libType   : ${RMATS_LIBTYPE}"
+    log "featureCounts   : strandSpecific=${FEATURECOUNTS_STRAND_SPECIFIC}"
+    log "APA strand type : ${RNASEQ_APA_STRANDTYPE}"
     log "skip DESeq2     : ${RNASEQ_THIRD_SKIP_DE}"
     log "skip post-tx    : ${RNASEQ_THIRD_SKIP_POST}"
 

@@ -8,6 +8,11 @@
 
 set -euo pipefail
 
+# ==============================================================================
+# 用户配置区（可用同名环境变量临时覆盖）
+# ==============================================================================
+
+# ---------- A. 项目目录、输入与输出 ----------
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 READS_INFO="${ROOT_DIR}/rawdata/reads_info.txt"
@@ -23,6 +28,7 @@ AUDIT_TABLE_DIR="${AUDIT_DIR}/tables"
 UPSTREAM_QC_DIR="${AUDIT_DIR}/upstream_qc"
 MULTIQC_OUT_DIR="${AUDIT_DIR}/multiqc"
 
+# ---------- B. 参考文件与工具 ----------
 REFERENCE_DIR="${REFERENCE_DIR:-/home/h1028/workspace/reference/GRCm39}"
 HISAT2_INDEX="${HISAT2_INDEX:-}"
 GTF_FILE="${GTF_FILE:-}"
@@ -36,11 +42,18 @@ RSEQC_INFER_BIN="${RSEQC_INFER_BIN:-infer_experiment.py}"
 RSEQC_GENEBODY_BIN="${RSEQC_GENEBODY_BIN:-geneBody_coverage.py}"
 RSEQC_REF_BED="${RSEQC_REF_BED:-}"
 
-THREADS="${THREADS:-8}"
-FORCE="${FORCE:-0}"
-DRY_RUN="${DRY_RUN:-0}"
-RNASEQ_SAMPLES_FILE="${RNASEQ_SAMPLES_FILE:-${DE_DIR}/samples.txt}"
+# ---------- C. 文库方向开关（上游/下游共用） ----------
+# liver 默认沿用原流程的 first-strand 链特异性设置。
+# 可选值：unstranded、fr-firststrand、fr-secondstrand。
+RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS:-fr-firststrand}"
 
+# ---------- D. 运行、资源与缓存开关 ----------
+THREADS="${THREADS:-8}"                    # 并行线程数。
+FORCE="${FORCE:-0}"                         # 1：忽略已有输出并重跑；链设定变更后建议设为 1。
+DRY_RUN="${DRY_RUN:-0}"                     # 1：仅打印计划命令，不执行任何分析。
+RNASEQ_SAMPLES_FILE="${RNASEQ_SAMPLES_FILE:-${DE_DIR}/samples.txt}"  # 指定下游选中样本清单。
+
+# ---------- E. 步骤调度 ----------
 TOTAL_STEPS=7
 # 默认全流程按上游分析的科学顺序执行，并在自动选样后重建选中样本矩阵。
 DEFAULT_STEPS=(1 2 3 4 5 6 7)
@@ -87,6 +100,49 @@ die() {
     exit 1
 }
 
+declare -a HISAT2_STRANDNESS_ARGS=()
+HISAT2_RNA_STRANDNESS=""
+FEATURECOUNTS_STRAND_SPECIFIC=0
+RNASEQ_LIBRARY_STRANDEDNESS_LABEL=""
+RNASEQ_RMATS_LIBTYPE=""
+RNASEQ_APA_STRANDTYPE=""
+
+configure_library_strandedness() {
+    local mode="${RNASEQ_LIBRARY_STRANDEDNESS,,}"
+    case "${mode}" in
+        unstranded|none|non-stranded|non-strand-specific)
+            RNASEQ_LIBRARY_STRANDEDNESS="unstranded"
+            RNASEQ_LIBRARY_STRANDEDNESS_LABEL="unstranded（链非特异性）"
+            HISAT2_STRANDNESS_ARGS=()
+            HISAT2_RNA_STRANDNESS="none"
+            FEATURECOUNTS_STRAND_SPECIFIC=0
+            RNASEQ_RMATS_LIBTYPE="fr-unstranded"
+            RNASEQ_APA_STRANDTYPE="NONE"
+            ;;
+        fr-firststrand|fr-first|rf|firststrand|first-strand)
+            RNASEQ_LIBRARY_STRANDEDNESS="fr-firststrand"
+            RNASEQ_LIBRARY_STRANDEDNESS_LABEL="fr-firststrand（链特异性，RF）"
+            HISAT2_STRANDNESS_ARGS=(--rna-strandness RF)
+            HISAT2_RNA_STRANDNESS="RF"
+            FEATURECOUNTS_STRAND_SPECIFIC=2
+            RNASEQ_RMATS_LIBTYPE="fr-firststrand"
+            RNASEQ_APA_STRANDTYPE="invert"
+            ;;
+        fr-secondstrand|fr-second|fr|secondstrand|second-strand)
+            RNASEQ_LIBRARY_STRANDEDNESS="fr-secondstrand"
+            RNASEQ_LIBRARY_STRANDEDNESS_LABEL="fr-secondstrand（链特异性，FR）"
+            HISAT2_STRANDNESS_ARGS=(--rna-strandness FR)
+            HISAT2_RNA_STRANDNESS="FR"
+            FEATURECOUNTS_STRAND_SPECIFIC=1
+            RNASEQ_RMATS_LIBTYPE="fr-secondstrand"
+            RNASEQ_APA_STRANDTYPE="forward"
+            ;;
+        *)
+            die "RNASEQ_LIBRARY_STRANDEDNESS 只支持 unstranded、fr-firststrand 或 fr-secondstrand，收到: ${RNASEQ_LIBRARY_STRANDEDNESS}"
+            ;;
+    esac
+}
+
 print_default_order() {
     printf '%s\n' "${DEFAULT_STEPS[*]}"
 }
@@ -131,6 +187,10 @@ Options:
   --force            Re-run completed sample-level outputs.
   --threads N        Override THREADS for this run.
   -h, --help         Show this help.
+
+Library strandness:
+  RNASEQ_LIBRARY_STRANDEDNESS=unstranded|fr-firststrand|fr-secondstrand
+  该开关统一派生 HISAT2、featureCounts、rMATS 和 APA 的链方向参数。
 
 Note:
   Use comma/space-separated step ids; ranges like 2-7 are not supported.
@@ -593,7 +653,7 @@ run_mapping_stage() {
         log "mapping: ${sample}"
 
         if [[ "${DRY_RUN}" == "1" ]]; then
-            log "+ ${HISAT2_BIN} --new-summary --rna-strandness RF -p ${THREADS} -x ${HISAT2_INDEX} -1 ${clean_r1} -2 ${clean_r2} | ${SAMTOOLS_BIN} sort -@ ${THREADS} -o ${bam} -"
+            log "+ ${HISAT2_BIN} --new-summary ${HISAT2_STRANDNESS_ARGS[*]} -p ${THREADS} -x ${HISAT2_INDEX} -1 ${clean_r1} -2 ${clean_r2} | ${SAMTOOLS_BIN} sort -@ ${THREADS} -o ${bam} -"
             log "+ ${SAMTOOLS_BIN} index -@ ${THREADS} ${bam}"
             continue
         fi
@@ -602,7 +662,7 @@ run_mapping_stage() {
 
         "${HISAT2_BIN}" \
             --new-summary \
-            --rna-strandness RF \
+            "${HISAT2_STRANDNESS_ARGS[@]}" \
             -p "${THREADS}" \
             -x "${HISAT2_INDEX}" \
             -1 "${clean_r1}" \
@@ -631,18 +691,19 @@ run_quant_stage() {
         log "quantification: ${sample}"
 
         if [[ "${DRY_RUN}" == "1" ]]; then
-            log "+ inline Rsubread::featureCounts -> ${prefix}.count / ${prefix}.log"
+            log "+ inline Rsubread::featureCounts strandSpecific=${FEATURECOUNTS_STRAND_SPECIFIC} -> ${prefix}.count / ${prefix}.log"
             continue
         fi
 
         [[ -s "${bam}" ]] || die "缺少 BAM 文件，请先完成比对: ${bam}"
 
-        "${RSCRIPT_BIN}" --vanilla - "${bam}" "${GTF_FILE}" "${prefix}" "${THREADS}" <<'EOF'
+        "${RSCRIPT_BIN}" --vanilla - "${bam}" "${GTF_FILE}" "${prefix}" "${THREADS}" "${FEATURECOUNTS_STRAND_SPECIFIC}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 bam <- args[[1]]
 gtf <- args[[2]]
 prefix <- args[[3]]
 threads <- as.integer(args[[4]])
+strand_specific <- as.integer(args[[5]])
 
 options(scipen = 999)
 suppressPackageStartupMessages(library(Rsubread))
@@ -654,7 +715,7 @@ fc <- featureCounts(
   GTF.featureType = "exon",
   GTF.attrType = "gene_id",
   isPairedEnd = TRUE,
-  strandSpecific = 2,
+  strandSpecific = strand_specific,
   nthreads = threads
 )
 
@@ -1284,8 +1345,12 @@ write_run_provenance() {
         printf 'force\t%s\n' "${FORCE}"
         printf 'requested_steps\t%s\n' "${REQUESTED_STEPS_LABEL:-NA}"
         printf 'run_order\t%s\n' "${RUN_ORDER_LABEL:-NA}"
-        printf 'hisat2_strandness\t%s\n' "RF"
-        printf 'featurecounts_strandSpecific\t%s\n' "2"
+        printf 'library_strandedness\t%s\n' "${RNASEQ_LIBRARY_STRANDEDNESS}"
+        printf 'library_strandedness_label\t%s\n' "${RNASEQ_LIBRARY_STRANDEDNESS_LABEL}"
+        printf 'hisat2_strandness\t%s\n' "${HISAT2_RNA_STRANDNESS:-none}"
+        printf 'featurecounts_strandSpecific\t%s\n' "${FEATURECOUNTS_STRAND_SPECIFIC}"
+        printf 'rmats_libtype\t%s\n' "${RNASEQ_RMATS_LIBTYPE}"
+        printf 'apa_strandtype\t%s\n' "${RNASEQ_APA_STRANDTYPE}"
         printf 'rseqc_ref_bed\t%s\n' "${RSEQC_REF_BED:-NA}"
     } > "${AUDIT_TABLE_DIR}/run_params.tsv"
 
@@ -1299,11 +1364,12 @@ write_run_provenance() {
 
     {
         printf 'component\tsetting\tnote\n'
-        printf 'HISAT2\t--rna-strandness RF\tfirst-strand/RF assumption used during alignment\n'
-        printf 'featureCounts\tstrandSpecific=2\treverse-stranded counting assumption\n'
-        printf 'rMATS\tfr-firststrand\tkept consistent with HISAT2/featureCounts in rnaseq_third.sh\n'
-        printf 'APA\tinvert\tAPA strand mode derived from fr-firststrand\n'
-        printf 'validation\tRSeQC infer_experiment.py\tset RSEQC_REF_BED to generate empirical strandness evidence\n'
+        printf 'library\t%s\t%s\n' "${RNASEQ_LIBRARY_STRANDEDNESS}" "${RNASEQ_LIBRARY_STRANDEDNESS_LABEL}"
+        printf 'HISAT2\t%s\tderived from RNASEQ_LIBRARY_STRANDEDNESS\n' "${HISAT2_RNA_STRANDNESS:-no --rna-strandness}"
+        printf 'featureCounts\tstrandSpecific=%s\tderived from RNASEQ_LIBRARY_STRANDEDNESS\n' "${FEATURECOUNTS_STRAND_SPECIFIC}"
+        printf 'rMATS\t%s\tderived downstream setting\n' "${RNASEQ_RMATS_LIBTYPE}"
+        printf 'APA\t%s\tderived downstream setting\n' "${RNASEQ_APA_STRANDTYPE}"
+        printf 'validation\tRSeQC infer_experiment.py\tset RSEQC_REF_BED to record empirical strandness evidence\n'
     } > "${AUDIT_TABLE_DIR}/strandness_assumptions.tsv"
 
     "${RSCRIPT_BIN}" --vanilla -e "writeLines(capture.output(sessionInfo()), '${AUDIT_TABLE_DIR}/R_sessionInfo_from_first_stage.txt')" >/dev/null 2>&1 || true
@@ -1560,6 +1626,7 @@ main() {
         mapfile -t REQUESTED_STEPS <<< "${parsed_steps}"
     fi
 
+    configure_library_strandedness
     ensure_prerequisites
     load_samples
     resolve_run_order "${REQUESTED_STEPS[@]}"
@@ -1575,6 +1642,11 @@ main() {
     log "dry run         : ${DRY_RUN}"
     log "requested steps : ${REQUESTED_STEPS_LABEL}"
     log "run order       : ${RUN_ORDER_LABEL}"
+    log "library strand  : ${RNASEQ_LIBRARY_STRANDEDNESS_LABEL}"
+    log "HISAT2 strand   : ${HISAT2_RNA_STRANDNESS:-none}"
+    log "featureCounts   : strandSpecific=${FEATURECOUNTS_STRAND_SPECIFIC}"
+    log "rMATS libType   : ${RNASEQ_RMATS_LIBTYPE}"
+    log "APA strand type : ${RNASEQ_APA_STRANDTYPE}"
     log "reference dir   : ${REFERENCE_DIR}"
     log "hisat2 index    : ${HISAT2_INDEX}"
     log "gtf file        : ${GTF_FILE}"

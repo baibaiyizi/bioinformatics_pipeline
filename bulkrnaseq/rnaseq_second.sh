@@ -8,6 +8,11 @@
 
 set -euo pipefail
 
+# ==============================================================================
+# 用户配置区（可用同名环境变量临时覆盖）
+# ==============================================================================
+
+# ---------- A. 项目目录与输入矩阵 ----------
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 FIRST_SCRIPT="${ROOT_DIR}/rnaseq_first.sh"
@@ -19,12 +24,14 @@ CONTRASTS_FILE="${DE_DIR}/contrasts.txt"
 MATRIX_FILE="${MERGE_DIR}/genes.counts.matrix"
 DE_RESULTS_FILE="${DE_DIR}/DE_results"
 
+# ---------- B. 运行、资源与缓存开关 ----------
 THREADS="${THREADS:-8}"
 FORCE="${FORCE:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 FIG_PNG_DPI="${FIG_PNG_DPI:-300}"
 RNASEQ_SECOND_SKIP_DE="${RNASEQ_SECOND_SKIP_DE:-false}"
 
+# ---------- C. 步骤调度 ----------
 TOTAL_STEPS=5
 DEFAULT_STEPS=(1 2 3 4 5)
 
