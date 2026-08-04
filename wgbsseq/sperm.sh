@@ -156,7 +156,7 @@ REF_GENOME_DIR="${REF_BASE_DIR}"
 REF_GENOME_FA="${REF_BASE_DIR}/Mus_musculus.GRCm39.dna.primary_assembly.fa"
 
 # 可选参数集中配置。运行前可用同名环境变量覆盖，例如: WGBS_BISMARK_PARALLEL=4 bash sperm.sh --steps 3
-WGBS_ENV_BIN="${WGBS_ENV_BIN:-/home/h1028/miniconda3/envs/wgbs/bin}" # 若目录存在，优先使用该 conda 环境里的工具。
+WGBS_ENV_BIN="${WGBS_ENV_BIN:-/home/h1028/miniconda3/envs/bio_tools/bin}" # 若目录存在，优先使用统一 bio_tools 环境里的工具。
 WGBS_BISMARK_PARALLEL="${WGBS_BISMARK_PARALLEL:-10}" # Bismark 拆分并行数；设为 1 时改用 Bowtie2 -p，降低 temp BAM 合并风险。
 WGBS_BOWTIE2_THREADS="${WGBS_BOWTIE2_THREADS:-10}" # WGBS_BISMARK_PARALLEL=1 时传给 Bowtie2 的线程数。
 WGBS_BISMARK_USE_TEMP_DIR="${WGBS_BISMARK_USE_TEMP_DIR:-0}" # Bismark --parallel 模式是否显式指定 temp_${sample} 目录。

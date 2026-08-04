@@ -31,6 +31,24 @@ DRY_RUN="${DRY_RUN:-0}"
 FIG_PNG_DPI="${FIG_PNG_DPI:-300}"
 RNASEQ_SECOND_SKIP_DE="${RNASEQ_SECOND_SKIP_DE:-false}"
 
+resolve_rscript_bin() {
+    if [[ -n "${RSCRIPT_BIN:-}" ]]; then
+        printf '%s' "${RSCRIPT_BIN}"
+        return 0
+    fi
+    local env_prefix=""
+    if command -v conda >/dev/null 2>&1; then
+        env_prefix="$(conda env list 2>/dev/null | awk '$1 == "r_projects" {print $NF; exit}')"
+        if [[ -n "${env_prefix}" && -x "${env_prefix}/bin/Rscript" ]]; then
+            printf '%s' "${env_prefix}/bin/Rscript"
+            return 0
+        fi
+    fi
+    command -v Rscript 2>/dev/null || printf '%s' Rscript
+}
+
+RSCRIPT_BIN="$(resolve_rscript_bin)"
+
 # ---------- C. 步骤调度 ----------
 TOTAL_STEPS=5
 DEFAULT_STEPS=(1 2 3 4 5)
@@ -393,7 +411,8 @@ run_de_analysis() {
         return
     fi
 
-    require_cmd Rscript
+    require_cmd "${RSCRIPT_BIN}"
+    log "Rscript: ${RSCRIPT_BIN}"
     prepare_de_run_dir
 
     local groups=()
@@ -413,7 +432,7 @@ run_de_analysis() {
 
     mkdir -p "${DE_RUN_DIR}"
 
-    Rscript --vanilla - "${MATRIX_FILE}" "${SAMPLES_FILE}" "${DE_RUN_DIR}" "${groups[0]}" "${groups[1]}" "${FIG_PNG_DPI}" <<'EOF'
+    "${RSCRIPT_BIN}" --vanilla - "${MATRIX_FILE}" "${SAMPLES_FILE}" "${DE_RUN_DIR}" "${groups[0]}" "${groups[1]}" "${FIG_PNG_DPI}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 matrix_file <- args[[1]]
 samples_file <- args[[2]]
