@@ -36,13 +36,9 @@ resolve_rscript_bin() {
         printf '%s' "${RSCRIPT_BIN}"
         return 0
     fi
-    local env_prefix=""
-    if command -v conda >/dev/null 2>&1; then
-        env_prefix="$(conda env list 2>/dev/null | awk '$1 == "r_projects" {print $NF; exit}')"
-        if [[ -n "${env_prefix}" && -x "${env_prefix}/bin/Rscript" ]]; then
-            printf '%s' "${env_prefix}/bin/Rscript"
-            return 0
-        fi
+    if [[ -x "/home/h1028/miniconda3/bin/Rscript" ]]; then
+        printf '%s' "/home/h1028/miniconda3/bin/Rscript"
+        return 0
     fi
     command -v Rscript 2>/dev/null || printf '%s' Rscript
 }

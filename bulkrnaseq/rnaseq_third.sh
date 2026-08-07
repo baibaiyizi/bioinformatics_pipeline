@@ -40,47 +40,62 @@ GTF_FILE="${GTF_FILE:-}"
 GENOME_FASTA="${GENOME_FASTA:-}"
 SALMON_BIN="${SALMON_BIN:-/home/h1028/miniconda3/bin/salmon}"
 
+# 未显式指定时，使用 base 环境中的 R 4.5.1。
+resolve_rscript_bin() {
+    if [[ -n "${RSCRIPT_BIN:-}" ]]; then
+        printf '%s' "${RSCRIPT_BIN}"
+        return 0
+    fi
+    if [[ -x "/home/h1028/miniconda3/bin/Rscript" ]]; then
+        printf '%s' "/home/h1028/miniconda3/bin/Rscript"
+        return 0
+    fi
+    command -v Rscript 2>/dev/null || printf '%s' Rscript
+}
+
+RSCRIPT_BIN="$(resolve_rscript_bin)"
+
 SAMPLES_FILE="${DE_DIR}/samples.txt"
 CONTRASTS_FILE="${DE_DIR}/contrasts.txt"
 MATRIX_FILE="${MERGE_DIR}/genes.counts.matrix"
 DE_RESULTS_FILE="${DE_DIR}/DE_results"
 
 # ---------- C. 文库方向开关（与 rnaseq_first.sh 共用） ----------
-# liver 默认沿用原流程的 first-strand 链特异性设置。
-# 可选值：unstranded、fr-firststrand、fr-secondstrand。
-RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS:-fr-firststrand}"
+# liver 默认是链非特异性；该开关会统一派生 rMATS、exon-usage 和 APA 参数。
+RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS:-unstranded}"
 
 # ---------- D. 运行、资源与模块开关 ----------
-THREADS="${THREADS:-8}"
-FORCE="${FORCE:-0}"
-DRY_RUN="${DRY_RUN:-0}"
-RNASEQ_THIRD_SKIP_DE="${RNASEQ_THIRD_SKIP_DE:-${RNASEQ_SECOND_SKIP_DE:-true}}"
-RNASEQ_THIRD_SKIP_POST="${RNASEQ_THIRD_SKIP_POST:-${RNASEQ_SECOND_SKIP_AS:-false}}"
-RNASEQ_THIRD_METHODS="${RNASEQ_THIRD_METHODS:-${RNASEQ_SECOND_AS_METHODS:-rmats,exon_usage,isoform_switch}}"
-RNASEQ_THIRD_EXTRA_METHODS="${RNASEQ_THIRD_EXTRA_METHODS:-${RNASEQ_SECOND_EXTRA_METHODS:-apa,der}}"
-FIG_PNG_DPI="${FIG_PNG_DPI:-300}"
-THIRD_HEARTBEAT_INTERVAL="${THIRD_HEARTBEAT_INTERVAL:-120}"
+# 可在命令前以环境变量覆盖，例如 FORCE=1 RNASEQ_THIRD_METHODS=rmats bash rnaseq_third.sh。
+THREADS="${THREADS:-8}"                    # 并行线程数。
+FORCE="${FORCE:-0}"                        # 1：忽略已有输出并重跑；链设定修正后重跑必须设为 1。
+DRY_RUN="${DRY_RUN:-0}"                    # 1：仅打印计划命令，不执行任何分析。
+RNASEQ_THIRD_SKIP_DE="${RNASEQ_THIRD_SKIP_DE:-${RNASEQ_SECOND_SKIP_DE:-true}}"  # true：跳过 DE，复用已有 DE_results。
+RNASEQ_THIRD_SKIP_POST="${RNASEQ_THIRD_SKIP_POST:-${RNASEQ_SECOND_SKIP_AS:-false}}"  # true：跳过全部转录后调控模块。
+RNASEQ_THIRD_METHODS="${RNASEQ_THIRD_METHODS:-${RNASEQ_SECOND_AS_METHODS:-rmats,exon_usage,isoform_switch}}"  # 常规模块，逗号分隔。
+RNASEQ_THIRD_EXTRA_METHODS="${RNASEQ_THIRD_EXTRA_METHODS:-${RNASEQ_SECOND_EXTRA_METHODS:-apa,der}}"  # 可选扩展模块，逗号分隔。
+FIG_PNG_DPI="${FIG_PNG_DPI:-300}"          # 输出 PNG 分辨率。
+THIRD_HEARTBEAT_INTERVAL="${THIRD_HEARTBEAT_INTERVAL:-120}"  # 长任务日志心跳间隔（秒）。
 
 # ---------- E. rMATS 参数开关 ----------
-RMATS_THREADS="${RMATS_THREADS:-${THREADS}}"
-RMATS_READ_LENGTH="${RMATS_READ_LENGTH:-}"
+RMATS_THREADS="${RMATS_THREADS:-${THREADS}}"  # rMATS 使用的线程数。
+RMATS_READ_LENGTH="${RMATS_READ_LENGTH:-}"    # 留空时由脚本从 FASTQ 推断。
 # RMATS_LIBTYPE 由 RNASEQ_LIBRARY_STRANDEDNESS 派生；如同时设置，必须保持一致。
 RMATS_LIBTYPE="${RMATS_LIBTYPE:-}"
-RMATS_TASK="${RMATS_TASK:-both}"
-RMATS_CSTAT="${RMATS_CSTAT:-0.0001}"
-RMATS_VARIABLE_READ_LENGTH="${RMATS_VARIABLE_READ_LENGTH:-true}"
-RMATS_ALLOW_CLIPPING="${RMATS_ALLOW_CLIPPING:-false}"
-RMATS_NOVELSS="${RMATS_NOVELSS:-false}"
-RMATS_INDIVIDUAL_COUNTS="${RMATS_INDIVIDUAL_COUNTS:-true}"
-RMATS_EXECUTOR="${RMATS_EXECUTOR:-auto}"
-RMATS_IMAGE="${RMATS_IMAGE:-quay.io/biocontainers/rmats:4.3.0--py310ha9d9618_5}"
-RMATS_BIND_ROOT="${RMATS_BIND_ROOT:-/home/h1028/workspace}"
+RMATS_TASK="${RMATS_TASK:-both}"            # both：同时执行 prep 与统计；也可设为 prep 或 post。
+RMATS_CSTAT="${RMATS_CSTAT:-0.0001}"        # rMATS inclusion-level 差异的最小阈值。
+RMATS_VARIABLE_READ_LENGTH="${RMATS_VARIABLE_READ_LENGTH:-true}"  # true：允许 reads 长度不完全一致。
+RMATS_ALLOW_CLIPPING="${RMATS_ALLOW_CLIPPING:-false}"  # true：允许 soft-clipped reads 参与分析。
+RMATS_NOVELSS="${RMATS_NOVELSS:-false}"     # true：纳入新剪接位点。
+RMATS_INDIVIDUAL_COUNTS="${RMATS_INDIVIDUAL_COUNTS:-true}"  # true：输出每个重复的计数。
+RMATS_EXECUTOR="${RMATS_EXECUTOR:-auto}"    # auto：自动选择本地或容器执行方式。
+RMATS_IMAGE="${RMATS_IMAGE:-quay.io/biocontainers/rmats:4.3.0--py310ha9d9618_5}"  # 容器执行时使用的镜像。
+RMATS_BIND_ROOT="${RMATS_BIND_ROOT:-/home/h1028/workspace}"  # 容器运行时挂载的工作区根目录。
 
 # ---------- F. 转录本、APA 与 DER 参数开关 ----------
 TRANSCRIPT_FASTA="${TRANSCRIPT_FASTA:-${ISOFORM_REF_DIR}/transcripts.fa}"
 TRANSCRIPT_TX2GENE="${TRANSCRIPT_TX2GENE:-${ISOFORM_REF_DIR}/tx2gene.tsv}"
 SALMON_INDEX="${SALMON_INDEX:-${ISOFORM_REF_DIR}/salmon_index}"
-SALMON_LIBTYPE="${SALMON_LIBTYPE:-A}"
+SALMON_LIBTYPE="${SALMON_LIBTYPE:-A}"        # A：由 Salmon 自动识别文库方向。
 ISOFORM_SWITCH_ALPHA="${ISOFORM_SWITCH_ALPHA:-0.05}"
 ISOFORM_SWITCH_DIF_CUTOFF="${ISOFORM_SWITCH_DIF_CUTOFF:-0.1}"
 SASHIMI_TOP_N="${SASHIMI_TOP_N:-8}"
@@ -519,7 +534,7 @@ require_r_packages() {
     local pkgs=("$@")
     [[ ${#pkgs[@]} -gt 0 ]] || return 0
 
-    Rscript --vanilla - "${label}" "${pkgs[@]}" <<'EOF'
+    "${RSCRIPT_BIN}" --vanilla - "${label}" "${pkgs[@]}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 label <- args[[1]]
 pkgs <- args[-1]
@@ -769,7 +784,7 @@ run_de_analysis() {
         return
     fi
 
-    require_cmd Rscript
+    require_cmd "${RSCRIPT_BIN}"
     prepare_de_run_dir
 
     local groups=()
@@ -789,7 +804,7 @@ run_de_analysis() {
 
     mkdir -p "${DE_RUN_DIR}"
 
-    Rscript --vanilla - "${MATRIX_FILE}" "${SAMPLES_FILE}" "${DE_RUN_DIR}" "${groups[0]}" "${groups[1]}" "${FIG_PNG_DPI}" <<'EOF'
+    "${RSCRIPT_BIN}" --vanilla - "${MATRIX_FILE}" "${SAMPLES_FILE}" "${DE_RUN_DIR}" "${groups[0]}" "${groups[1]}" "${FIG_PNG_DPI}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 matrix_file <- args[[1]]
 samples_file <- args[[2]]
@@ -1579,7 +1594,7 @@ run_exon_usage() {
         return
     fi
 
-    Rscript --vanilla - "${ROOT_DIR}" "${SAMPLES_FILE}" "${GTF_FILE}" "${EXON_USAGE_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${THREADS}" "${FIG_PNG_DPI}" "${COLOR_SIG}" "${COLOR_NS}" "${FEATURECOUNTS_STRAND_SPECIFIC}" <<'EOF'
+    "${RSCRIPT_BIN}" --vanilla - "${ROOT_DIR}" "${SAMPLES_FILE}" "${GTF_FILE}" "${EXON_USAGE_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${THREADS}" "${FIG_PNG_DPI}" "${COLOR_SIG}" "${COLOR_NS}" "${FEATURECOUNTS_STRAND_SPECIFIC}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 root_dir <- args[[1]]
 samples_file <- args[[2]]
@@ -1878,7 +1893,7 @@ run_isoform_switch() {
         return
     fi
 
-    require_cmd Rscript
+    require_cmd "${RSCRIPT_BIN}"
     require_r_packages "isoform switch" tximport IsoformSwitchAnalyzeR DEXSeq GenomicFeatures Rsamtools Biostrings rtracklayer dplyr readr tibble tidyr
 
     local sample_name fq1 fq2 quant_dir
@@ -1892,7 +1907,7 @@ run_isoform_switch() {
 
     if [[ "${FORCE}" == "1" || ! -s "${TRANSCRIPT_FASTA}" || ! -s "${TRANSCRIPT_TX2GENE}" ]]; then
         log "  构建 transcript FASTA 与 tx2gene 映射"
-        Rscript --vanilla - "${GTF_FILE}" "${GENOME_FASTA}" "${TRANSCRIPT_FASTA}" "${TRANSCRIPT_TX2GENE}" <<'EOF'
+        "${RSCRIPT_BIN}" --vanilla - "${GTF_FILE}" "${GENOME_FASTA}" "${TRANSCRIPT_FASTA}" "${TRANSCRIPT_TX2GENE}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 gtf_file <- args[[1]]
 genome_fasta <- args[[2]]
@@ -1990,7 +2005,7 @@ EOF
             -o "${quant_dir}"
     done < <(read_selected_sample_names)
 
-    Rscript --vanilla - "${SAMPLES_FILE}" "${SALMON_QUANT_DIR}" "${TRANSCRIPT_TX2GENE}" "${GTF_FILE}" "${TRANSCRIPT_FASTA}" "${ISOFORM_RESULTS_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${ISOFORM_SWITCH_ALPHA}" "${ISOFORM_SWITCH_DIF_CUTOFF}" <<'EOF'
+    "${RSCRIPT_BIN}" --vanilla - "${SAMPLES_FILE}" "${SALMON_QUANT_DIR}" "${TRANSCRIPT_TX2GENE}" "${GTF_FILE}" "${TRANSCRIPT_FASTA}" "${ISOFORM_RESULTS_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${ISOFORM_SWITCH_ALPHA}" "${ISOFORM_SWITCH_DIF_CUTOFF}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 samples_file <- args[[1]]
 quant_dir <- args[[2]]
@@ -2346,7 +2361,7 @@ run_apa() {
 
     require_r_packages "APA" APAlyzer Rsamtools GenomicAlignments SummarizedExperiment AnnotationDbi org.Mm.eg.db dplyr readr tibble tidyr
 
-    Rscript --vanilla - "${ROOT_DIR}" "${SAMPLES_FILE}" "${GTF_FILE}" "${GENOME_FASTA}" "${APA_DIR}" "${APA_REF_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${apa_strandtype}" "${APA_SEQTYPE}" "${THREADS}" "${APA_PVALUE}" "${APA_DELTA_PAU}" "${APA_TEST_METHOD}" <<'EOF'
+    "${RSCRIPT_BIN}" --vanilla - "${ROOT_DIR}" "${SAMPLES_FILE}" "${GTF_FILE}" "${GENOME_FASTA}" "${APA_DIR}" "${APA_REF_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${apa_strandtype}" "${APA_SEQTYPE}" "${THREADS}" "${APA_PVALUE}" "${APA_DELTA_PAU}" "${APA_TEST_METHOD}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 root_dir <- args[[1]]
 samples_file <- args[[2]]
@@ -2450,7 +2465,41 @@ sample_table_apa <- data.frame(
   stringsAsFactors = FALSE
 )
 
-pasref <- quiet_known_warnings(APAlyzer::PAS2GEF(gtf_file, AnnoMethod = "V2"))
+pasref_path <- file.path(out_dir, "pas_reference.rds")
+pasref_meta_path <- file.path(out_dir, "pas_reference_metadata.tsv")
+pasref_cache_meta <- function() {
+  gtf_info <- file.info(gtf_file)
+  c(
+    gtf_file = normalizePath(gtf_file, mustWork = FALSE),
+    gtf_size = as.character(gtf_info$size),
+    gtf_mtime = format(gtf_info$mtime, "%Y-%m-%d %H:%M:%S %z"),
+    apalyzer_version = as.character(utils::packageVersion("APAlyzer")),
+    anno_method = "V2"
+  )
+}
+read_pasref_meta <- function(path) {
+  if (!file.exists(path)) {
+    return(NULL)
+  }
+  meta <- read.delim(path, stringsAsFactors = FALSE, check.names = FALSE)
+  if (!all(c("key", "value") %in% colnames(meta))) {
+    return(NULL)
+  }
+  stats::setNames(meta$value, meta$key)
+}
+pasref_meta <- pasref_cache_meta()
+cached_pasref_meta <- read_pasref_meta(pasref_meta_path)
+use_pasref_cache <- file.exists(pasref_path) &&
+  !is.null(cached_pasref_meta) &&
+  all(names(pasref_meta) %in% names(cached_pasref_meta)) &&
+  identical(unname(cached_pasref_meta[names(pasref_meta)]), unname(pasref_meta))
+
+if (use_pasref_cache) {
+  message(sprintf("复用 PAS reference cache: %s", pasref_path))
+  pasref <- readRDS(pasref_path)
+} else {
+  pasref <- quiet_known_warnings(APAlyzer::PAS2GEF(gtf_file, AnnoMethod = "V2"))
+}
 if ("dfIPA" %in% names(pasref)) {
   pasref$dfIPA <- coerce_coord_cols(pasref$dfIPA, c("Pos", "upstreamSS", "downstreamSS"))
 }
@@ -2460,7 +2509,16 @@ if ("dfLE" %in% names(pasref)) {
 if ("refUTRraw" %in% names(pasref)) {
   pasref$refUTRraw <- coerce_coord_cols(pasref$refUTRraw, c("First", "Last", "cdsend"))
 }
-saveRDS(pasref, file.path(out_dir, "pas_reference.rds"))
+if (!use_pasref_cache) {
+  saveRDS(pasref, pasref_path)
+  write.table(
+    data.frame(key = names(pasref_meta), value = unname(pasref_meta), stringsAsFactors = FALSE),
+    pasref_meta_path,
+    sep = "\t",
+    quote = FALSE,
+    row.names = FALSE
+  )
+}
 
 utrdb <- quiet_known_warnings(APAlyzer::REF3UTR(pasref$refUTRraw))
 utr_raw <- quiet_known_warnings(APAlyzer::PASEXP_3UTR(utrdb, bam_inputs, Strandtype = apa_strandtype))
@@ -2528,7 +2586,93 @@ safe_apadiff <- function(mutiraw, pas_type) {
     message(sprintf("APAdiff 输入为空，%s 将写出空结果表。", pas_type))
     return(empty_apa_diff())
   }
-  tryCatch(
+  trtsamples <- sample_table_apa$samplename[sample_table_apa$condition == group2]
+  consamples <- sample_table_apa$samplename[sample_table_apa$condition == group1]
+  if (pas_type == "3UTR") {
+    read_cols <- c(
+      paste0(trtsamples, "_areads"),
+      paste0(consamples, "_areads"),
+      paste0(trtsamples, "_creads"),
+      paste0(consamples, "_creads")
+    )
+    re_cols_trt <- paste0(trtsamples, "_3UTR_RE")
+    re_cols_con <- paste0(consamples, "_3UTR_RE")
+    required_cols <- c("gene_symbol", read_cols, re_cols_trt, re_cols_con)
+  } else if (pas_type == "IPA") {
+    read_cols <- c(
+      paste0(trtsamples, "_IPA_UPreads"),
+      paste0(consamples, "_IPA_UPreads"),
+      paste0(trtsamples, "_LEreads"),
+      paste0(consamples, "_LEreads")
+    )
+    re_cols_trt <- paste0(trtsamples, "_IPA_RE")
+    re_cols_con <- paste0(consamples, "_IPA_RE")
+    required_cols <- c("gene_symbol", "PASid", read_cols, re_cols_trt, re_cols_con)
+  } else {
+    stop(sprintf("未知 APAdiff PAS 类型: %s", pas_type))
+  }
+  missing_cols <- setdiff(required_cols, colnames(mutiraw_df))
+  if (length(missing_cols) > 0) {
+    stop(sprintf("APAdiff %s 输入缺少列: %s", pas_type, paste(missing_cols, collapse = ", ")))
+  }
+
+  raw_n <- nrow(mutiraw_df)
+  read_mat <- as.data.frame(lapply(mutiraw_df[, read_cols, drop = FALSE], as.numeric), check.names = FALSE)
+  read_ok <- apply(read_mat, 1, function(x) all(is.finite(x) & x > 0))
+  re_cols <- c(re_cols_trt, re_cols_con)
+  re_mat <- as.data.frame(lapply(mutiraw_df[, re_cols, drop = FALSE], as.numeric), check.names = FALSE)
+  re_ok <- apply(re_mat, 1, function(x) all(is.finite(x)))
+  mutiraw_df <- mutiraw_df[read_ok & re_ok, , drop = FALSE]
+
+  after_depth_n <- nrow(mutiraw_df)
+  if (after_depth_n == 0) {
+    message(sprintf(
+      "APAdiff %s 预过滤后无满足读数和 RE 有效性的事件，写出空结果表。",
+      pas_type
+    ))
+    return(empty_apa_diff())
+  }
+
+  if (apa_test_method != "ANOVA") {
+    paired <- apa_test_method == "paired t-test"
+    trtlen <- length(re_cols_trt)
+    conlen <- length(re_cols_con)
+    test_mat <- as.data.frame(lapply(mutiraw_df[, re_cols, drop = FALSE], as.numeric), check.names = FALSE)
+    testable <- apply(test_mat, 1, function(x) {
+      trt <- x[seq_len(trtlen)]
+      con <- x[(trtlen + 1):(trtlen + conlen)]
+      pvalue <- tryCatch({
+        suppressWarnings({
+          if (trtlen > 1 && conlen > 1) {
+            stats::t.test(trt, con, paired = paired)$p.value
+          } else if (trtlen > 1 && conlen == 1) {
+            stats::t.test(trt, mu = con, paired = paired)$p.value
+          } else if (trtlen == 1 && conlen > 1) {
+            stats::t.test(x = con, mu = trt, paired = paired)$p.value
+          } else {
+            NA_real_
+          }
+        })
+      }, error = function(e) NA_real_)
+      is.finite(pvalue)
+    })
+    mutiraw_df <- mutiraw_df[testable, , drop = FALSE]
+  }
+
+  message(sprintf(
+    "APAdiff %s 预过滤: 原始 %d 个事件，读数/RE 有效 %d 个，可检验 %d 个，过滤不可检验 %d 个。",
+    pas_type,
+    raw_n,
+    after_depth_n,
+    nrow(mutiraw_df),
+    after_depth_n - nrow(mutiraw_df)
+  ))
+  if (nrow(mutiraw_df) == 0) {
+    message(sprintf("APAdiff %s 没有 t-test/ANOVA 可检验事件，写出空结果表。", pas_type))
+    return(empty_apa_diff())
+  }
+
+  diff <- tryCatch(
     quiet_known_warnings(APAlyzer::APAdiff(
       sampleTable = sample_table_apa,
       mutiraw = mutiraw_df,
@@ -2548,6 +2692,20 @@ safe_apadiff <- function(mutiraw, pas_type) {
       stop(e)
     }
   )
+  if (nrow(diff) > 0 && "pvalue" %in% colnames(diff)) {
+    finite_p <- is.finite(suppressWarnings(as.numeric(diff$pvalue)))
+    if (any(!finite_p)) {
+      message(sprintf(
+        "APAdiff %s 输出中 %d 个 pvalue 不可估计，已从差异事件表剔除。",
+        pas_type,
+        sum(!finite_p)
+      ))
+      diff <- diff[finite_p, , drop = FALSE]
+      diff$pvalue <- as.numeric(diff$pvalue)
+      diff$p_adj <- p.adjust(diff$pvalue, method = "BH")
+    }
+  }
+  diff
 }
 
 utr_diff <- safe_apadiff(utr_raw, "3UTR")
@@ -2706,7 +2864,7 @@ run_der() {
 
     require_r_packages "DER" derfinder GenomicFeatures GenomicRanges GenomeInfoDb Rsamtools rtracklayer limma AnnotationDbi org.Mm.eg.db dplyr readr tibble
 
-    Rscript --vanilla - "${ROOT_DIR}" "${SAMPLES_FILE}" "${GTF_FILE}" "${DER_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${THREADS}" "${DER_PVALUE}" "${DER_CUTOFF}" "${RMATS_READ_LENGTH}" "${DER_GENOME_STYLE}" <<'EOF'
+    "${RSCRIPT_BIN}" --vanilla - "${ROOT_DIR}" "${SAMPLES_FILE}" "${GTF_FILE}" "${DER_DIR}" "${RMATS_GROUP1}" "${RMATS_GROUP2}" "${THREADS}" "${DER_PVALUE}" "${DER_CUTOFF}" "${RMATS_READ_LENGTH}" "${DER_GENOME_STYLE}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 root_dir <- args[[1]]
 samples_file <- args[[2]]
@@ -2809,7 +2967,7 @@ write.table(
   row.names = FALSE
 )
 
-txdb <- quiet_known_warnings(GenomicFeatures::makeTxDbFromGFF(gtf_file))
+txdb <- quiet_known_warnings(txdbmaker::makeTxDbFromGFF(gtf_file))
 gtf_gr <- quiet_known_warnings(rtracklayer::import(gtf_file))
 gtf_gr <- drop_na_seqnames(gtf_gr)
 gene_annot_tbl <- as.data.frame(S4Vectors::mcols(gtf_gr), stringsAsFactors = FALSE)
@@ -2982,7 +3140,7 @@ run_post_tx_summary() {
         return
     fi
 
-    require_cmd Rscript
+    require_cmd "${RSCRIPT_BIN}"
     discover_gtf
 
     local groups=()
@@ -3005,7 +3163,7 @@ run_post_tx_summary() {
 
     mkdir -p "${AS_INTEGRATED_DIR}"
 
-    Rscript --vanilla - "${RMATS_OUTPUT_DIR}" "${EXON_USAGE_DIR}" "${ISOFORM_RESULTS_DIR}" "${APA_DIR}" "${DER_DIR}" "${AS_INTEGRATED_DIR}" "${DE_RESULTS_FILE}" "${groups[0]}" "${groups[1]}" <<'EOF'
+    "${RSCRIPT_BIN}" --vanilla - "${RMATS_OUTPUT_DIR}" "${EXON_USAGE_DIR}" "${ISOFORM_RESULTS_DIR}" "${APA_DIR}" "${DER_DIR}" "${AS_INTEGRATED_DIR}" "${DE_RESULTS_FILE}" "${groups[0]}" "${groups[1]}" <<'EOF'
 args <- commandArgs(trailingOnly = TRUE)
 rmats_dir <- args[[1]]
 exon_usage_dir <- args[[2]]
@@ -3679,6 +3837,7 @@ main() {
     log "requested steps : ${REQUESTED_STEPS_LABEL}"
     log "run order       : ${RUN_ORDER_LABEL}"
     log "force           : ${FORCE}"
+    log "Rscript         : ${RSCRIPT_BIN}"
     log "library strand  : ${RNASEQ_LIBRARY_STRANDEDNESS_LABEL}"
     log "rMATS libType   : ${RMATS_LIBTYPE}"
     log "featureCounts   : strandSpecific=${FEATURECOUNTS_STRAND_SPECIFIC}"

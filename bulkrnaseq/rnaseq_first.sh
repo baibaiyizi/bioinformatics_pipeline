@@ -45,7 +45,7 @@ RSEQC_REF_BED="${RSEQC_REF_BED:-}"
 # ---------- C. 文库方向开关（上游/下游共用） ----------
 # liver 默认沿用原流程的 first-strand 链特异性设置。
 # 可选值：unstranded、fr-firststrand、fr-secondstrand。
-RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS:-fr-firststrand}"
+RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS:-unstranded}"
 
 # ---------- D. 运行、资源与缓存开关 ----------
 THREADS="${THREADS:-8}"                    # 并行线程数。
