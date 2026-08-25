@@ -1,0 +1,18 @@
+input_csv: ../data/features.csv
+external_csv: null
+target_column: outcome
+id_column: sample_id
+group_column: subject_id
+task: classification
+positive_label: case
+feature_columns:
+  - feature_1
+  - feature_2
+  - feature_3
+model: logistic
+outer_splits: 5
+inner_splits: 3
+feature_k: all
+seed: 20260824
+output_dir: ../result/example
+run_shap: false

@@ -1,0 +1,13 @@
+rna_h5ad: ../data/rna_counts.h5ad
+atac_h5ad: ../data/atac_counts.h5ad
+paired: true
+sample_column: sample_id
+group_column: group
+output_dir: ../result/example
+seed: 20260824
+rna_min_counts: 1
+rna_min_features: 1
+atac_min_counts: 1
+atac_min_features: 1
+lsi_components: 30
+write_h5mu: true

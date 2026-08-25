@@ -1,0 +1,21 @@
+receptor_pdb: ../data/receptor.pdb
+ligand_table: ../data/ligands.csv
+output_dir: ../result/example
+docking:
+  engine: vina
+  box_center: [0.0, 0.0, 0.0]
+  box_size: [20.0, 20.0, 20.0]
+  seeds: [101, 202, 303]
+  redocking: true
+  require_posebusters: true
+md:
+  enabled: true
+  replicas: 3
+  seeds: [1001, 1002, 1003]
+  forcefield: amber14
+  water_model: tip3pfb
+  ligand_parameterization: openff-2.2.1
+  temperature_k: 300
+  pressure_bar: 1.0
+  ionic_strength_molar: 0.15
+  production_ns: 100

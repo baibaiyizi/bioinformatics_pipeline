@@ -1,0 +1,11 @@
+mode: long_table
+input: ../data/pixel_spectra.csv
+annotation_table: null
+output_dir: ../result/example
+mz_decimals: 3
+min_detected_features: 3
+min_tic_quantile: 0.01
+spatial_k: 4
+spatial_top_features: 50
+permutations: 99
+seed: 20260824

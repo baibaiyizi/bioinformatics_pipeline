@@ -1,0 +1,9 @@
+nodes: ../data/nodes.csv
+edges: ../data/evidence_edges.csv
+output_dir: ../result/example
+directed: false
+candidate_types: [compound, drug]
+disease_types: [disease, phenotype]
+robustness_repeats: 50
+edge_dropout: 0.10
+seed: 20260824
