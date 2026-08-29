@@ -1,0 +1,5 @@
+030fb4b977a225163f8652f7ee1300d1ef0a8ac4e8b00c5875313fe1abe4ad1d  /home/h1028/software/conda-packages/ambertools-25.3-cuda_None_nompi_py311h232f31e_100.conda
+a2699b4db5f93ae7211249f5b8df4981c22765c392cc6d34c18d76994fe3b327  /home/h1028/software/conda-packages/mkl-2026.1.0-hd2095e1_245.conda
+242e1ed210a85fc0dc2a4e86bf0b75120f1768ab66497502c5e6d69e801bf9dc  /home/h1028/software/conda-packages/libcufft-11.2.1.3-he02047a_2.conda
+635cd3d70ca6f4c3ad3f4b5837b5badb058f2416392592bd5914aa805f0bc28e  /home/h1028/software/conda-packages/gcc_impl_linux-64-12.4.0-h26ba24d_2.conda
+cf9c9d2267bb13abc8fb2aa66f9e8a1f4ac2ac8ec32ac7c3f600364b97bb5713  /home/h1028/software/conda-packages/cuda-nvcc-tools-12.4.131-hd3aeb46_1.conda

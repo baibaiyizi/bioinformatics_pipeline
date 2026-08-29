@@ -1,6 +1,6 @@
 # SCI 分析能力矩阵与流程审计
 
-更新日期：2026-08-24
+更新日期：2026-08-28
 
 ## 1. 审计口径
 
@@ -35,9 +35,9 @@
 | CUT&Tag / CUT&RUN | `absent` | 无 | 可复用 bulk ATAC 的部分区间和 track 统计思想 | 缺 assay 特异的比对、片段/QC、背景/对照、peak 与 replicate 处理 | `major` | `sci_epigenomics` |
 | bulk 多组学 | `partial` | `atac/liver/rmd/09_rna_multiomics.Rmd`、`11_wgbs_integration.Rmd`；WGBS `8_multiomics.Rmd` | 已有项目内 RNA—ATAC—WGBS 关联 | 缺统一样本映射、缺失模态处理、样本级验证、MOFA2/DIABLO 选择契约和可复现测试 | `major` | 单模态 owner → `sci_multiomics` → `sci_analyst` |
 | 表格型预测模型 | `partial` | `model/ml/scripts/run_ml.py`；旧项目入口如 `atac/liver/rmd/14_machine_learning.Rmd` | 冻结特征契约、分组嵌套 CV、重采样内插补/标准化/筛选、分类/回归基线、校准、决策曲线、外部评估、模型导出和测试 | 当前最小入口仅支持数值特征二分类/回归；生存、深度学习、区间估计和 SHAP 依赖/专用实现仍待补 | `minor`（最小入口）；旧代码用于主张前仍是 `critical` | `sci_ml` + `sci_analyst` |
-| 网络药理学 | `partial` | `model/network_pharmacology/scripts/run_network.py` | 版本化本地实体/边表、物种/ID/重复证据检查、证据加权、中心性、删边稳健性、候选证据卡和测试 | 尚未建立 Open Targets/STRING/PrimeKG 的版本化下载适配器与通路背景分析；真实证据需要逐来源核验 | `major` | `sci_evidence` + `sci_network_pharmacology` |
-| 分子对接 | `resource-limited` | `model/molecular_modeling/scripts/preflight.py` | PDB/配体/盒参数、redocking、阳性/诱饵、多 seed 与 PoseBusters 依赖的强制 preflight 和负向测试 | 本机缺 Vina、Open Babel 与 PoseBusters，故真实 docking 阶段保持 `blocked` | `major` | `sci_molecular_modeling` |
-| 分子动力学 | `resource-limited` | `model/molecular_modeling/scripts/preflight.py` | 力场、水模型、配体参数化、至少三次独立重复、seed 与主张边界的 preflight | 本机缺 OpenMM/MDAnalysis 和已审计 GPU；尚未运行最小化、平衡、生产或轨迹收敛测试 | `major` | `sci_molecular_modeling` |
+| 网络药理学 | `ready`（种子驱动核心 API） | `model/network_pharmacology/scripts/run_network.py` | Open Targets、ChEMBL、PubChem、STRING、Reactome、Ensembl、UniProt、RCSB/AlphaFold 适配器；逐请求参数/分页/版本/校验和；人鼠分层、source-aware MultiDiGraph、至少两条 lane、留一层与 STRING 敏感性；14 项测试和 1IEP 真实闭环 | 1IEP 未提供合法 Reactome 背景，故 ORA 按硬门跳过；小鼠 ortholog 路径仅有 fixture，尚缺真实 API 闭环 | `minor` | `sci_evidence` + `sci_network_pharmacology` |
+| 分子对接 | `ready`（已验证 holo 体系） | `model/molecular_modeling/scripts/run_modeling.py dock` | Vina 1.2.7、Meeko 0.7.1、PoseBusters 0.6.5、三 seed、阳性/decoy、逐 pose QC 和对称校正 RMSD；1IEP 三 seed 均约 0.27–0.28 Å | 当前真实验证只有 1IEP；金属、共价、非标准残基和无 holo/native 的体系仍禁止自动放行 | `minor` | `sci_molecular_modeling` |
+| 分子动力学 | `resource-limited`（生产 GPU；CPU smoke 已通过） | `model/molecular_modeling/scripts/run_modeling.py md-prepare/md-smoke/analyze` | GROMACS 2026.3 CUDA sm_89 源构建、106/106 官方测试；AmberTools ff14SB+GAFF2/AM1-BCC+TIP3P；39,969 原子体系三 replica、checkpoint、无 NaN/爆炸及 MDAnalysis 轨迹解析 | NVIDIA 设备节点缺失，真实 CUDA mdrun 和生产 MD 被硬门阻断；1 ps smoke 不提供收敛、稳定性或机制证据 | `major` | `sci_molecular_modeling` |
 
 ## 3. 可复现性与跟踪审计
 
@@ -49,7 +49,7 @@
 | scRNA Python、配置和测试被 Git 跟踪 | `pass` | `sc/PFOS` 的局部 `.gitignore` 已窄化放行 `src/`、配置与测试 |
 | 其他新 Python 管线可被跟踪 | `pass with action` | 新代码放入独立 `model` 仓库；不扩大顶层 catch-all 白名单 |
 | bulk RNA / ATAC / WGBS 锁定环境 | `fail` | 当前主要依赖服务器环境与脚本约定，缺项目级 lock/容器摘要；列为 `major` |
-| 自动小数据测试 | `mixed` | scRNA 有 pytest；新增 ML、multiome、空间代谢组、网络药理和分子建模 preflight 均有 smoke/negative test；空间转录、普通代谢组、ATAC、WGBS 与 bulk RNA 仍缺 |
+| 自动小数据测试 | `mixed` | scRNA 有 pytest；网络药理现有 14 项 fixture/API 失败测试，分子建模现有 11 项硬门测试并完成 1IEP 真实闭环；新增 ML、multiome、空间代谢组也有测试；空间转录、普通代谢组、ATAC、WGBS 与 bulk RNA 仍缺 |
 | 随机种子与运行清单 | `mixed` | 各项目实现不一致；所有新闭环必须输出 seed、软件版本、参数和输入校验和 |
 
 ## 4. 方法参照与审计结论
@@ -58,16 +58,16 @@
 - 单细胞流程以 Scanpy/AnnData 为基础；需要概率整合时使用 scvi-tools。scATAC/multiome 只有在各模态先独立完成 QC 后，才允许建立 MuData 并进入 MultiVI 等联合模型。
 - 空间对象采用“图像/labels/points/shapes 与注释表分离、由坐标系显式关联”的 SpatialData 思路；空间代谢组的光谱预处理和空间推断必须留下分层中间产物。
 - 临床预测模型的报告对照 TRIPOD+AI，偏倚与适用性审查对照 PROBAST+AI；二者不替代嵌套验证、校准和外部评估本身。
-- 网络药理优先保留 Open Targets 的 evidence/association 层级、STRING 的映射物种和版本化端点、PrimeKG 的来源版本；任何中心性排名只是候选优先级。
-- 对接需至少保留输入结构、盒参数、seed、redocking/对照与 PoseBusters 类几何合理性检查；MD 需报告独立重复和收敛，不能用单次短轨迹证明稳定性或机制。
+- 网络药理优先保留 Open Targets 的 evidence/association 层级、ChEMBL 的同物种单蛋白实验活性、STRING 的 physical/functional 边界和版本化端点；PrimeKG 只作被取代的历史背景，任何网络排名只是候选优先级。
+- 对接需至少保留输入结构、盒参数、seed、redocking/对照与 PoseBusters 类几何合理性检查；MD 固定由 AmberTools/ParmEd 参数化并以 GROMACS 执行，需报告独立重复和收敛，不能用单次或短轨迹证明稳定性或机制。
 
 ## 5. 固定修复优先级
 
 1. `completed`：通用、无泄漏的 `model/ml/` 最小闭环。
 2. `completed (partial scope)`：`model/spatial_metabolomics/` 的输入审计、像素 QC、feature/coordinate 中间层、ROI 和样本内空间统计；真实 imzML 验证待依赖补齐。
 3. `completed (partial scope)`：`model/singlecell_multiome/` 的 count matrix 契约、模态分离 QC、TF-IDF/LSI 和可选 MuData；fragments 上游与 MultiVI 待补。
-4. `completed (local evidence graph)`：`model/network_pharmacology/` 的版本化本地证据图、稳健性和候选证据卡；数据库下载适配器待补。
-5. `completed (preflight only)`：`model/molecular_modeling/` 的结构/对照/多 seed/多 replica 审计；真实 docking/MD 因依赖和资源保持 `resource-limited`。
+4. `completed (seed-driven public API loop)`：`model/network_pharmacology/` 的核心 API、逐来源版本化证据图、物种分层、稳健性和 1IEP 真实闭环；合法背景 ORA 与小鼠真实闭环待项目输入。
+5. `completed (docking + CPU MD smoke)`：`model/molecular_modeling/` 的结构审计、三 seed 1IEP redocking、PoseBusters、AmberTools/ParmEd 参数化、三 replica GROMACS checkpoint 和轨迹分析；生产 GPU 因设备节点缺失保持 `resource-limited`。
 6. 下一优先级：按严重度为 bulk RNA、空间转录、普通代谢组、ATAC 和 WGBS 增加环境锁、fixture 与 smoke test，并补 scATAC fragments 入口。
 
 ## 6. 公开实现参考
@@ -82,10 +82,11 @@
 - [TRIPOD+AI](https://www.bmj.com/content/385/bmj-2023-078378)
 - [PROBAST+AI](https://www.bmj.com/content/388/bmj-2024-082505)
 - [Open Targets Platform](https://platform-docs.opentargets.org/)
+- [ChEMBL web services](https://chembl.gitbook.io/chembl-interface-documentation/web-services)
 - [STRING API](https://string-db.org/help/api/)
-- [PrimeKG](https://github.com/mims-harvard/PrimeKG)
 - [AutoDock Vina](https://autodock-vina.readthedocs.io/en/stable/)
-- [DiffDock](https://github.com/gcorso/DiffDock)
+- [Meeko](https://meeko.readthedocs.io/)
 - [PoseBusters](https://github.com/maabuu/posebusters)
-- [OpenMM](https://docs.openmm.org/latest/userguide/)
+- [GROMACS](https://manual.gromacs.org/current/)
+- [AmberTools](https://ambermd.org/AmberTools.php)
 - [MDAnalysis](https://docs.mdanalysis.org/)

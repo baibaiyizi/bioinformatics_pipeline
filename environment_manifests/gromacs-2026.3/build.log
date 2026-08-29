@@ -1,0 +1,29 @@
+[  0%] Generating release version information
+[  0%] Built target lmfit_objlib
+[  0%] Built target internal_rpc_xdr
+[  0%] Built target scanner
+[  1%] Built target tng_io_zlib
+[  1%] Built target h5md
+[  1%] Built target release-version-info
+[  1%] Built target gmx_objlib
+[  1%] Built target gtest
+[  3%] Built target tng_io_obj
+[  3%] Built target mdrun_objlib
+[  3%] Built target linearalgebra
+[  3%] Built target fmm
+[  3%] Built target muparser
+[  5%] Built target options
+[  6%] Built target thread_mpi
+[  6%] Built target energyanalysis
+[  6%] Built target gmock
+[  6%] Built target pulling
+[  6%] Built target taskassignment
+[ 10%] Built target colvars_objlib
+[ 13%] Built target modularsimulator
+[ 93%] Built target libgromacs
+[ 93%] Built target gmx
+[ 95%] Built target nblib
+[ 95%] Built target gmxapi
+[ 96%] Built target argon-forces-integration
+[ 96%] Built target methane-water-integration
+[100%] Built target testutils

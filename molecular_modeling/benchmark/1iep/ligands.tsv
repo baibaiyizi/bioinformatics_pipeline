@@ -1,0 +1,4 @@
+ligand_id	input_structure	role	protonation_state	formal_charge	charge_method
+native_imatinib	native_imatinib.sdf	native	crystal_pose_piperazine_protonated	1	AM1-BCC
+positive_dasatinib	positive_dasatinib.sdf	positive_control	PubChem_3D_record_formal_charge_0	0	AM1-BCC
+decoy_caffeine	decoy_caffeine.sdf	decoy	PubChem_3D_record_formal_charge_0	0	AM1-BCC

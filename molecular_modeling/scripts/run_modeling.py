@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the seed-driven, provenance-preserving network pharmacology pipeline."""
+"""Run one stage of the Vina to GROMACS workflow."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from sci_network.cli import main
+from sci_modeling.cli import main
 
 
 if __name__ == "__main__":

@@ -1,0 +1,5 @@
+-- Checking for module 'mpi-cxx'
+--   Package 'mpi-cxx', required by 'virtual:world', not found
+-- Configuring done (4.8s)
+-- Generating done (2.9s)
+-- Build files have been written to: /home/h1028/software/src/gromacs-2026.3/build-cuda12.4-sm89

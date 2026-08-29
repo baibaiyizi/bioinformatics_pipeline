@@ -1,0 +1,2 @@
+1094b7bbc6a3960223827114626657110b40096cdf9598a727935fc84ebf8aa0  /home/h1028/software/src/gromacs-2026.3.tar.gz
+ec28a220729e8ad5e2a668919d201b3f283d37ecd3d6e7aa0f7c8a2fa278fa6a  /home/h1028/software/src/regressiontests-2026.3.tar.gz

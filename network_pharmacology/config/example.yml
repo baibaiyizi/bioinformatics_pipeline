@@ -1,9 +1,21 @@
-nodes: ../data/nodes.csv
-edges: ../data/evidence_edges.csv
-output_dir: ../result/example
-directed: false
-candidate_types: [compound, drug]
-disease_types: [disease, phenotype]
-robustness_repeats: 50
-edge_dropout: 0.10
-seed: 20260824
+project_id: vina_1iep_imatinib_abl1
+species_taxid: 9606
+disease_ids: [MONDO_0011996]
+compounds:
+  - id_type: chembl
+    id: CHEMBL941
+target_seeds:
+  - ensembl_gene_id: ENSG00000097007
+    evidence_source: RCSB_PDB
+    evidence_id: 1IEP
+output_dir: ../result/1iep_network
+retrieval:
+  page_size: 100
+  max_targets: 30
+  max_structure_checks: 10
+  timeout_seconds: 30
+  string_required_score: 400
+analysis:
+  string_thresholds: [400, 700, 900]
+  # 真实 ORA 必须给出显式且包含所有候选的 UniProt 背景；空列表会跳过富集。
+  reactome_background_uniprot: []

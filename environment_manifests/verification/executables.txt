@@ -1,0 +1,9 @@
+/home/h1028/miniconda3/envs/sci_molecular_modeling/bin/vina
+/home/h1028/miniconda3/envs/sci_molecular_modeling/bin/mk_prepare_receptor.py
+/home/h1028/miniconda3/envs/sci_molecular_modeling/bin/mk_prepare_ligand.py
+/home/h1028/miniconda3/envs/sci_molecular_modeling/bin/mk_export.py
+/home/h1028/miniconda3/envs/sci_molecular_modeling/bin/obabel
+/home/h1028/miniconda3/envs/sci_molecular_modeling/bin/antechamber
+/home/h1028/miniconda3/envs/sci_molecular_modeling/bin/parmchk2
+/home/h1028/miniconda3/envs/sci_molecular_modeling/bin/tleap
+/home/h1028/miniconda3/envs/sci_molecular_modeling/bin/reduce

@@ -8,6 +8,7 @@ import unittest
 
 AGENT_DIR = pathlib.Path(os.environ.get("SCI_AGENT_DIR", "/home/h1028/.codex/agents"))
 WORKSPACE = pathlib.Path(__file__).parents[2]
+LEARNING_ROOT = WORKSPACE / "sci_learning"
 
 ANALYSIS_ROLES = {
     "sci_analyst",
@@ -96,6 +97,148 @@ class SciAgentConfigurationTests(unittest.TestCase):
         docs = (WORKSPACE / "skills" / "skill.md").read_text(encoding="utf-8")
         for role in ANALYSIS_ROLES:
             self.assertIn(role, docs)
+
+    def test_learning_loop_is_wired_into_router_and_evidence_agent(self):
+        router = self.agents["sci"][1]["developer_instructions"]
+        evidence = self.agents["sci_evidence"][1]["developer_instructions"]
+        shared = (AGENT_DIR / "sci_analysis_contract.md").read_text(encoding="utf-8")
+
+        for token in [
+            "/home/h1028/workspace/sci_learning/",
+            "knowledge_refs",
+            "adopt",
+            "adapt",
+            "background_only",
+            "reject",
+            "knowledge_feedback",
+        ]:
+            self.assertIn(token, router)
+            self.assertIn(token, shared)
+
+        for token in [
+            "new_to_library",
+            "known",
+            "uncertain",
+            "abstract_only",
+            "搜索片段",
+            "学习卡不能作为正式引文",
+        ]:
+            self.assertIn(token, evidence)
+
+    def test_learning_workspace_contract(self):
+        required_files = [
+            LEARNING_ROOT / "README.md",
+            LEARNING_ROOT / "index.md",
+            LEARNING_ROOT / "methods_index.md",
+            LEARNING_ROOT / "cards" / "_template.md",
+            LEARNING_ROOT / "repositories" / "_template.md",
+            LEARNING_ROOT / "syntheses" / "_template.md",
+        ]
+        for path in required_files:
+            self.assertTrue(path.is_file(), path)
+
+        card = (LEARNING_ROOT / "cards" / "_template.md").read_text(encoding="utf-8")
+        for token in [
+            "learning_id",
+            "full_text | abstract_only | web_page",
+            "## 论证链",
+            "## 值得学习的方法",
+            "## 可迁移思路",
+            "## 局限、替代解释和边界",
+            "## 应用历史与实践反馈",
+        ]:
+            self.assertIn(token, card)
+
+        methods = (LEARNING_ROOT / "methods_index.md").read_text(encoding="utf-8")
+        for token in [
+            "new_to_library",
+            "known",
+            "uncertain",
+            "supported",
+            "unsupported",
+            "inconclusive",
+            "not_run",
+        ]:
+            self.assertIn(token, methods)
+
+        repository = (LEARNING_ROOT / "repositories" / "_template.md").read_text(
+            encoding="utf-8"
+        )
+        for token in [
+            "code_repository",
+            "forge: \"github | gitlab\"",
+            "canonical_url",
+            "repository_id",
+            "checked_commit",
+            "metadata_only | readme_docs | source_audit | executed",
+            "## 架构、入口与数据流",
+            "## 依赖、测试与复现",
+            "## 许可证、维护与风险",
+            "## 关联论文和学习记录",
+            "## 应用历史与实践反馈",
+        ]:
+            self.assertIn(token, repository)
+
+    def test_code_repository_learning_boundaries(self):
+        router = self.agents["sci"][1]["developer_instructions"]
+        evidence = self.agents["sci_evidence"][1]["developer_instructions"]
+        shared = (AGENT_DIR / "sci_analysis_contract.md").read_text(encoding="utf-8")
+        combined = "\n".join([router, evidence, shared])
+        for token in [
+            "github-owner-repository",
+            "gitlab-namespace-repository",
+            "checked_commit",
+            "metadata_only",
+            "readme_docs",
+            "source_audit",
+            "executed",
+            "许可证",
+            "代码仓库本身不自动构成科学有效性证据",
+        ]:
+            self.assertIn(token, combined)
+
+    def test_network_pharmacology_closed_loop_contract(self):
+        instructions = self.agents["sci_network_pharmacology"][1][
+            "developer_instructions"
+        ]
+        for token in [
+            "Open Targets",
+            "ChEMBL",
+            "PubChem",
+            "Reactome",
+            "Ensembl",
+            "MultiDiGraph",
+            "human_ortholog",
+            "direct_species",
+            "STRING physical",
+            "显式背景宇宙",
+            "至少需要两条独立 lane",
+            "留一证据层",
+        ]:
+            self.assertIn(token, instructions)
+        self.assertNotIn("`primekg`", instructions)
+
+    def test_vina_gromacs_closed_loop_contract(self):
+        instructions = self.agents["sci_molecular_modeling"][1][
+            "developer_instructions"
+        ]
+        for token in [
+            "AutoDock Vina",
+            "Meeko",
+            "PoseBusters",
+            "GROMACS 2026.3",
+            "ff14SB",
+            "GAFF2/AM1-BCC",
+            "TIP3P",
+            "ParmEd",
+            "至少三个随机 seed",
+            "至少两个 seed",
+            "≤2 Å",
+            "三个独立 seed",
+            "resource-limited",
+        ]:
+            self.assertIn(token, instructions)
+        self.assertIn("不安装或调用 DiffDock、OpenMM", instructions)
 
 
 if __name__ == "__main__":

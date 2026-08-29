@@ -1,21 +1,46 @@
-receptor_pdb: ../data/receptor.pdb
-ligand_table: ../data/ligands.csv
-output_dir: ../result/example
+project_id: vina_1iep_imatinib_abl1
+receptor:
+  input_pdb: ../benchmark/1iep/1iep_holo.pdb
+  source:
+    database: RCSB_PDB
+    id: 1IEP
+  protein_chains: [A]
+  covalent_ligand: false
+  protonation_method: reduce_hbond_network
+  structure_review_decision: terminal missing residues 223-224 and 499-515 are outside the co-crystal pocket; accepted for capability benchmark only
+pocket:
+  basis: co_crystal_ligand
+  native_ligand_resname: STI
+  native_reference_sdf: ../benchmark/1iep/native_imatinib.sdf
+  center: [15.190, 53.903, 16.917]
+  size: [20.0, 20.0, 20.0]
+ligand_table: ../benchmark/1iep/ligands.tsv
+output_dir: ../result/1iep_modeling
 docking:
   engine: vina
-  box_center: [0.0, 0.0, 0.0]
-  box_size: [20.0, 20.0, 20.0]
   seeds: [101, 202, 303]
-  redocking: true
+  exhaustiveness: 32
+  num_modes: 20
   require_posebusters: true
+  redocking:
+    enabled: true
+    rmsd_threshold_angstrom: 2.0
+    minimum_passing_seeds: 2
 md:
-  enabled: true
+  engine: gromacs
+  ligand_id: native_imatinib
   replicas: 3
   seeds: [1001, 1002, 1003]
-  forcefield: amber14
-  water_model: tip3pfb
-  ligand_parameterization: openff-2.2.1
-  temperature_k: 300
-  pressure_bar: 1.0
-  ionic_strength_molar: 0.15
-  production_ns: 100
+  parameterization:
+    protein_forcefield: ff14SB
+    ligand_forcefield: GAFF2
+    charge_method: AM1-BCC
+    water_model: TIP3P
+  smoke:
+    steps: 500
+  production:
+    enabled: false
+analysis:
+  ligand_selection: resname LIG
+  contact_cutoff_angstrom: 4.5
+  key_distances: []

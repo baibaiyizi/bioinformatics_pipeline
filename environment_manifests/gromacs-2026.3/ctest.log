@@ -1,0 +1,226 @@
+Test project /home/h1028/software/src/gromacs-2026.3/build-cuda12.4-sm89
+        Start  91: MdrunMpi1RankPmeTests
+        Start  78: MdrunModulesTests
+        Start  80: MdrunTestsOneRank
+        Start  83: Minimize1RankTests
+        Start  94: MdrunCoordinationBasicTests1Rank
+        Start  96: MdrunCoordinationCouplingTests1Rank
+        Start  98: MdrunCoordinationConstraintsTests1Rank
+        Start   1: GmxapiExternalInterfaceTests
+        Start   2: GmxapiInternalInterfaceTests
+        Start   3: NbLibListedForcesTests
+  1/106 Test   #3: NbLibListedForcesTests ....................   Passed    0.33 sec
+        Start   4: NbLibSamplesTestArgon
+  2/106 Test   #4: NbLibSamplesTestArgon .....................   Passed    0.07 sec
+        Start   5: NbLibSamplesTestMethaneWater
+  3/106 Test   #5: NbLibSamplesTestMethaneWater ..............   Passed    0.14 sec
+        Start   6: NbLibUtilTests
+  4/106 Test   #6: NbLibUtilTests ............................   Passed    0.09 sec
+        Start   7: NbLibSetupTests
+  5/106 Test   #7: NbLibSetupTests ...........................   Passed    0.18 sec
+        Start   8: NbLibTprTests
+  6/106 Test   #2: GmxapiInternalInterfaceTests ..............   Passed    1.38 sec
+        Start   9: NbLibIntegrationTests
+        Start  10: NbLibIntegratorTests
+  7/106 Test   #9: NbLibIntegrationTests .....................   Passed    0.36 sec
+        Start  16: TestUtilsUnitTests
+  8/106 Test  #10: NbLibIntegratorTests ......................   Passed    0.36 sec
+        Start  18: UtilityUnitTests
+  9/106 Test  #16: TestUtilsUnitTests ........................   Passed    0.31 sec
+        Start  21: MdlibUnitTest
+ 10/106 Test  #18: UtilityUnitTests ..........................   Passed    0.31 sec
+        Start  22: AwhTest
+ 11/106 Test   #8: NbLibTprTests .............................   Passed    0.93 sec
+        Start  23: DensityFittingAppliedForcesUnitTest
+ 12/106 Test  #23: DensityFittingAppliedForcesUnitTest .......   Passed    0.19 sec
+        Start  24: QMMMAppliedForcesUnitTest
+ 13/106 Test  #22: AwhTest ...................................   Passed    0.34 sec
+        Start  25: ColvarsAppliedForcesUnitTest
+ 14/106 Test  #24: QMMMAppliedForcesUnitTest .................   Passed    0.83 sec
+        Start  26: PlumedAppliedForcesUnitTests
+ 15/106 Test  #83: Minimize1RankTests ........................   Passed    3.41 sec
+        Start  17: TestUtilsMpiUnitTests
+ 16/106 Test  #17: TestUtilsMpiUnitTests .....................   Passed    0.07 sec
+        Start  20: UtilityMpiUnitTests
+ 17/106 Test  #20: UtilityMpiUnitTests .......................   Passed    0.33 sec
+        Start  27: PlumedMDTests
+        Start  28: NNPotAppliedForcesUnitTest
+ 18/106 Test  #25: ColvarsAppliedForcesUnitTest ..............   Passed    1.67 sec
+        Start  29: AppliedForcesUnitTest
+ 19/106 Test  #27: PlumedMDTests .............................   Passed    0.50 sec
+        Start  30: ListedForcesTest
+ 20/106 Test  #29: AppliedForcesUnitTest .....................   Passed    0.24 sec
+        Start  32: NbnxmGpuTests
+ 21/106 Test  #30: ListedForcesTest ..........................   Passed    0.26 sec
+        Start  33: GmxlibTests
+ 22/106 Test  #32: NbnxmGpuTests .............................   Passed    0.34 sec
+        Start  34: GmxlibGpuTests
+ 23/106 Test  #26: PlumedAppliedForcesUnitTests ..............   Passed    1.84 sec
+        Start  35: CommandLineUnitTests
+ 24/106 Test  #91: MdrunMpi1RankPmeTests .....................   Passed    5.00 sec
+ 25/106 Test  #33: GmxlibTests ...............................   Passed    0.43 sec
+        Start  11: threadMPI-mpithreads
+ 26/106 Test  #78: MdrunModulesTests .........................   Passed    5.33 sec
+        Start  31: NbnxmTests
+ 27/106 Test  #34: GmxlibGpuTests ............................   Passed    0.43 sec
+        Start  36: DomDecTests
+ 28/106 Test  #28: NNPotAppliedForcesUnitTest ................   Passed    1.53 sec
+        Start  38: EwaldUnitTests
+ 29/106 Test  #35: CommandLineUnitTests ......................   Passed    0.36 sec
+        Start  39: FFTUnitTests
+ 30/106 Test  #36: DomDecTests ...............................   Passed    0.19 sec
+        Start  40: FmmInterfaceUnitTests
+ 31/106 Test  #40: FmmInterfaceUnitTests .....................   Passed    0.15 sec
+        Start  41: GpuUtilsUnitTests
+ 32/106 Test  #39: FFTUnitTests ..............................   Passed    0.57 sec
+        Start  43: HardwareUnitTests
+ 33/106 Test  #41: GpuUtilsUnitTests .........................   Passed    0.23 sec
+        Start  44: MathUnitTests
+ 34/106 Test  #38: EwaldUnitTests ............................   Passed    0.75 sec
+        Start  45: MdrunUtilityUnitTests
+ 35/106 Test  #44: MathUnitTests .............................   Passed    0.23 sec
+        Start  47: MDSpanTests
+ 36/106 Test  #47: MDSpanTests ...............................   Passed    0.11 sec
+        Start  48: MdtypesUnitTest
+ 37/106 Test  #45: MdrunUtilityUnitTests .....................   Passed    0.17 sec
+        Start  49: OnlineHelpUnitTests
+ 38/106 Test  #31: NbnxmTests ................................   Passed    0.94 sec
+        Start  42: GpuUtilsMpiTests
+ 39/106 Test  #49: OnlineHelpUnitTests .......................   Passed    0.18 sec
+        Start  50: OptionsUnitTests
+ 40/106 Test  #43: HardwareUnitTests .........................   Passed    0.58 sec
+        Start  51: PbcutilUnitTest
+ 41/106 Test  #50: OptionsUnitTests ..........................   Passed    0.07 sec
+        Start  52: RandomUnitTests
+ 42/106 Test  #51: PbcutilUnitTest ...........................   Passed    0.13 sec
+        Start  53: RestraintTests
+ 43/106 Test  #52: RandomUnitTests ...........................   Passed    0.14 sec
+        Start  54: SerializationUnitTests
+ 44/106 Test  #53: RestraintTests ............................   Passed    0.09 sec
+        Start  55: TableUnitTests
+ 45/106 Test  #54: SerializationUnitTests ....................   Passed    0.13 sec
+        Start  56: TaskAssignmentUnitTests
+ 46/106 Test  #42: GpuUtilsMpiTests ..........................   Passed    0.50 sec
+        Start  57: GmxTimingTests
+        Start  58: TopologyTest
+ 47/106 Test  #56: TaskAssignmentUnitTests ...................   Passed    0.16 sec
+        Start  59: PullTest
+ 48/106 Test  #57: GmxTimingTests ............................   Passed    0.20 sec
+        Start  60: SimdUnitTests
+ 49/106 Test  #55: TableUnitTests ............................   Passed    0.28 sec
+        Start  61: CompatibilityHelpersTests
+ 50/106 Test  #59: PullTest ..................................   Passed    0.09 sec
+        Start  62: GmxAnaTest
+ 51/106 Test  #58: TopologyTest ..............................   Passed    0.33 sec
+        Start  63: GmxPreprocessTests
+ 52/106 Test  #61: CompatibilityHelpersTests .................   Passed    0.17 sec
+        Start  64: Pdb2gmx1Test
+ 53/106 Test  #60: SimdUnitTests .............................   Passed    0.18 sec
+        Start  65: Pdb2gmx2Test
+ 54/106 Test  #94: MdrunCoordinationBasicTests1Rank ..........   Passed    7.37 sec
+        Start  66: Pdb2gmx3Test
+ 55/106 Test   #1: GmxapiExternalInterfaceTests ..............   Passed   10.79 sec
+        Start  67: CorrelationsTest
+        Start  68: AnalysisDataUnitTests
+ 56/106 Test  #48: MdtypesUnitTest ...........................   Passed    4.70 sec
+        Start  69: CoordinateIOTests
+ 57/106 Test  #68: AnalysisDataUnitTests .....................   Passed    0.22 sec
+        Start  70: TrajectoryAnalysisUnitTests
+ 58/106 Test  #69: CoordinateIOTests .........................   Passed    0.27 sec
+        Start  71: EnergyAnalysisUnitTests
+ 59/106 Test  #71: EnergyAnalysisUnitTests ...................   Passed    1.35 sec
+        Start  72: ToolUnitTests
+ 60/106 Test  #62: GmxAnaTest ................................   Passed    7.18 sec
+        Start  73: ToolWithLeaksUnitTests
+ 61/106 Test  #67: CorrelationsTest ..........................   Passed    3.86 sec
+        Start  74: H5mdTests
+ 62/106 Test  #74: H5mdTests .................................   Passed    0.06 sec
+        Start  75: FileIOTests
+ 63/106 Test  #75: FileIOTests ...............................   Passed    0.12 sec
+        Start  76: SelectionUnitTests
+ 64/106 Test  #76: SelectionUnitTests ........................   Passed    0.40 sec
+        Start  86: MdrunTpiTests
+ 65/106 Test  #21: MdlibUnitTest .............................   Passed   13.55 sec
+ 66/106 Test  #73: ToolWithLeaksUnitTests ....................   Passed    1.72 sec
+        Start  77: MdrunOutputTests
+ 67/106 Test  #63: GmxPreprocessTests ........................   Passed    9.10 sec
+ 68/106 Test  #64: Pdb2gmx1Test ..............................   Passed    9.71 sec
+        Start  79: MdrunIOTests
+ 69/106 Test  #65: Pdb2gmx2Test ..............................   Passed    9.71 sec
+ 70/106 Test  #72: ToolUnitTests .............................   Passed    5.14 sec
+        Start  82: MdrunSingleRankAlgorithmsTests
+ 71/106 Test  #86: MdrunTpiTests .............................   Passed    2.24 sec
+ 72/106 Test  #11: threadMPI-mpithreads ......................   Passed   14.19 sec
+        Start  92: MdrunMpi2RankPmeTests
+ 73/106 Test  #77: MdrunOutputTests ..........................   Passed    4.10 sec
+        Start  85: MdrunNonIntegratorTests
+ 74/106 Test  #82: MdrunSingleRankAlgorithmsTests ............   Passed    4.02 sec
+        Start  95: MdrunCoordinationBasicTests2Ranks
+ 75/106 Test  #66: Pdb2gmx3Test ..............................   Passed   16.25 sec
+ 76/106 Test  #92: MdrunMpi2RankPmeTests .....................   Passed    4.58 sec
+        Start  12: threadMPI-sync_cyclecount
+        Start 100: MdrunFEPTests
+ 77/106 Test  #12: threadMPI-sync_cyclecount .................   Passed    0.00 sec
+        Start  13: threadMPI-mpi_speedtest
+ 78/106 Test  #95: MdrunCoordinationBasicTests2Ranks .........   Passed    5.44 sec
+        Start 101: MdrunPullTests
+ 79/106 Test  #80: MdrunTestsOneRank .........................   Passed   28.05 sec
+        Start 102: MdrunRotationTests
+ 80/106 Test #101: MdrunPullTests ............................   Passed    9.29 sec
+        Start 103: MdrunSimulatorComparison
+ 81/106 Test #103: MdrunSimulatorComparison ..................   Passed    0.20 sec
+        Start 104: MdrunVirtualSiteTests
+ 82/106 Test  #13: threadMPI-mpi_speedtest ...................   Passed   15.53 sec
+        Start  14: threadMPI-notmpi
+ 83/106 Test  #14: threadMPI-notmpi ..........................   Passed    0.01 sec
+        Start  15: threadMPI-alloc_check
+ 84/106 Test  #15: threadMPI-alloc_check .....................   Passed    0.00 sec
+ 85/106 Test #100: MdrunFEPTests .............................   Passed   18.29 sec
+        Start  19: MpiCommTests
+ 86/106 Test  #19: MpiCommTests ..............................   Passed    0.17 sec
+        Start  37: DomDecMpiTests
+ 87/106 Test  #37: DomDecMpiTests ............................   Passed    0.29 sec
+        Start  46: MdrunUtilityMpiUnitTests
+ 88/106 Test  #46: MdrunUtilityMpiUnitTests ..................   Passed    0.29 sec
+        Start  81: MdrunTestsTwoRanks
+ 89/106 Test #102: MdrunRotationTests ........................   Passed   17.97 sec
+ 90/106 Test #104: MdrunVirtualSiteTests .....................   Passed   18.25 sec
+        Start  84: Minimize2RankTests
+ 91/106 Test  #84: Minimize2RankTests ........................   Passed    2.00 sec
+        Start  87: MdrunMpiTests
+ 92/106 Test  #70: TrajectoryAnalysisUnitTests ...............   Passed   48.01 sec
+ 93/106 Test  #87: MdrunMpiTests .............................   Passed    5.92 sec
+        Start  88: MdrunMultiSimTests
+ 94/106 Test  #88: MdrunMultiSimTests ........................   Passed    0.23 sec
+        Start  89: MdrunMultiSimReplexTests
+ 95/106 Test  #89: MdrunMultiSimReplexTests ..................   Passed    0.24 sec
+        Start  90: MdrunMultiSimReplexEquivalenceTests
+ 96/106 Test  #90: MdrunMultiSimReplexEquivalenceTests .......   Passed    0.13 sec
+        Start  93: MdrunMpi4RankPmeTests
+ 97/106 Test  #81: MdrunTestsTwoRanks ........................   Passed   21.69 sec
+ 98/106 Test  #93: MdrunMpi4RankPmeTests .....................   Passed    3.18 sec
+ 99/106 Test  #85: MdrunNonIntegratorTests ...................   Passed   58.01 sec
+100/106 Test  #96: MdrunCoordinationCouplingTests1Rank .......   Passed  103.19 sec
+        Start  97: MdrunCoordinationCouplingTests2Ranks
+101/106 Test  #98: MdrunCoordinationConstraintsTests1Rank ....   Passed  106.59 sec
+        Start  99: MdrunCoordinationConstraintsTests2Ranks
+102/106 Test  #79: MdrunIOTests ..............................   Passed  100.61 sec
+103/106 Test  #99: MdrunCoordinationConstraintsTests2Ranks ...   Passed   80.28 sec
+104/106 Test  #97: MdrunCoordinationCouplingTests2Ranks ......   Passed   89.13 sec
+        Start 105: regressiontests/complex
+105/106 Test #105: regressiontests/complex ...................   Passed  324.22 sec
+        Start 106: regressiontests/essentialdynamics
+106/106 Test #106: regressiontests/essentialdynamics .........   Passed   24.08 sec
+
+100% tests passed, 0 tests failed out of 106
+
+Label Time Summary:
+GTest              = 1445.30 sec*proc (97 tests)
+IntegrationTest    = 732.41 sec*proc (30 tests)
+MpiTest            = 832.89 sec*proc (24 tests)
+QuickGpuTest       = 215.12 sec*proc (25 tests)
+SlowGpuTest        = 1443.57 sec*proc (17 tests)
+SlowTest           = 667.05 sec*proc (14 tests)
+UnitTest           =  45.84 sec*proc (53 tests)
+
+Total Test time (real) = 540.64 sec
