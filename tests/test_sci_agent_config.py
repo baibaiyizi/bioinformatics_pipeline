@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import tomllib
 import unittest
 
@@ -125,11 +126,159 @@ class SciAgentConfigurationTests(unittest.TestCase):
         ]:
             self.assertIn(token, evidence)
 
+    def test_review_writing_and_visualization_learning_contracts(self):
+        router = self.agents["sci"][1]["developer_instructions"]
+        evidence = self.agents["sci_evidence"][1]["developer_instructions"]
+        writer = self.agents["sci_writer"][1]["developer_instructions"]
+        reviewer = self.agents["sci_reviewer"][1]["developer_instructions"]
+
+        writing_contract = AGENT_DIR / "sci_review_writing_contract.md"
+        figure_contract = AGENT_DIR / "sci_review_figure_contract.md"
+        self.assertTrue(writing_contract.is_file())
+        self.assertTrue(figure_contract.is_file())
+
+        for token in ["writing", "visualization", "阶段 1–5"]:
+            self.assertIn(token, router)
+        for instructions in (writer, reviewer):
+            self.assertIn("knowledge_refs", instructions)
+            self.assertIn("knowledge_feedback", instructions)
+            self.assertIn("sci_review_writing_contract.md", instructions)
+            self.assertIn("sci_review_figure_contract.md", instructions)
+
+        for token in [
+            "nearest-review",
+            "frozen baseline + dated delta + semantic propagation",
+            "逐篇罗列",
+            "proposal",
+        ]:
+            self.assertIn(token, writing_contract.read_text(encoding="utf-8"))
+
+        for token in [
+            "一图一主张",
+            "MediaBox/CropBox",
+            "FontFile",
+            "deuteranopia",
+            "程序化矢量",
+            "target-review deconstruction",
+            "orienting_overview",
+            "review-specific boundary",
+            "arrow paraphrase",
+            "非定量综述示意图",
+            "`basis` 只允许 `official | observed | inference`",
+            "narrative_salience_encoding",
+            "conceptual_schematic",
+            "quantitative_figure",
+            "实时目标期刊 > 实时出版社/平台",
+            "semantic_asset_class",
+            "qa_class",
+            "evidence_origin",
+            "claim_status",
+            "relation_type",
+            "figure_rule_ledger.tsv",
+        ]:
+            self.assertIn(token, figure_contract.read_text(encoding="utf-8"))
+
+        self.assertIn("不得直接修改全局卡片或索引", evidence)
+        self.assertIn("不得更新全局 `index.md` 或 `methods_index.md`", evidence)
+
+    def test_learning_templates_accept_writing_and_visualization(self):
+        readme = (LEARNING_ROOT / "README.md").read_text(encoding="utf-8")
+        synthesis = (LEARNING_ROOT / "syntheses" / "_template.md").read_text(
+            encoding="utf-8"
+        )
+        for token in ["writing", "visualization"]:
+            self.assertIn(token, readme)
+            self.assertIn(token, synthesis)
+
+    def test_review_method_learning_ids_are_unique_and_syntheses_resolve(self):
+        index = (LEARNING_ROOT / "index.md").read_text(encoding="utf-8")
+        index_ids = re.findall(r"^\| ([^| ]+) \|", index, flags=re.M)
+        self.assertEqual(len(index_ids), len(set(index_ids)))
+
+        card_ids = []
+        for path in sorted((LEARNING_ROOT / "cards").glob("*.md")):
+            if path.name == "_template.md":
+                continue
+            match = re.search(
+                r'^learning_id:\s*["\']?([^"\'\n]+)',
+                path.read_text(encoding="utf-8"),
+                flags=re.M,
+            )
+            self.assertIsNotNone(match, path)
+            card_ids.append(match.group(1).strip())
+        self.assertEqual(len(card_ids), len(set(card_ids)))
+        self.assertTrue(set(card_ids).issubset(set(index_ids)))
+
+        for name in [
+            "2026-08-30-review-positioning-evidence-writing.md",
+            "2026-08-30-review-figure-semantics-production-qa.md",
+        ]:
+            path = LEARNING_ROOT / "syntheses" / name
+            self.assertTrue(path.is_file(), path)
+            text = path.read_text(encoding="utf-8")
+            source_section = text.split("## 实际精读来源", 1)[1].split(
+                "## 应用反馈", 1
+            )[0]
+            referenced_ids = re.findall(r"`([^`]+)`", source_section)
+            self.assertTrue(referenced_ids, path)
+            for learning_id in referenced_ids:
+                self.assertTrue(
+                    (LEARNING_ROOT / "cards" / f"{learning_id}.md").is_file(),
+                    f"{path}: unresolved learning ID {learning_id}",
+                )
+
+        rule_ledger = LEARNING_ROOT / "figure_rule_ledger.tsv"
+        self.assertTrue(rule_ledger.is_file())
+        ledger_lines = rule_ledger.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(
+            ledger_lines[0].split("\t"),
+            [
+                "decision_id",
+                "figure_id",
+                "decision",
+                "basis",
+                "source_id",
+                "locator",
+                "scope",
+                "review_date",
+            ],
+        )
+        for line in ledger_lines[1:]:
+            fields = line.split("\t")
+            self.assertEqual(len(fields), 8, line)
+            self.assertIn(fields[3], {"official", "observed", "inference"})
+
+        review_figure_cards = {
+            "url-www-nature-com-documents-natrev-artworkguide-pdf": "official",
+            "url-academic-oup-com-humupd-pages-general": "official",
+            "url-researcher-resources-acs-org-publish-author-guidelines": "official",
+            "url-crosstalk-cell-com-hubfs-files-ga-guide-pdf": "official",
+            "url-www-elsevier-com-about-policies-and-standards-generative-ai-policies-for-journals": "official",
+            "url-www-elsevier-com-researcher-author-tools-and-resources-graphical-abstract": "official",
+            "pmid-38300895": "observed",
+            "pmid-42277276": "observed",
+            "pmid-40580487": "observed",
+            "pmid-38548833": "observed",
+        }
+        for learning_id, evidence_class in review_figure_cards.items():
+            card_text = (LEARNING_ROOT / "cards" / f"{learning_id}.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertRegex(card_text, rf"(?m)^evidence_class: {evidence_class}$")
+
+    def test_parallel_review_agents_are_not_global_learning_writers(self):
+        evidence = self.agents["sci_evidence"][1]["developer_instructions"]
+        router = self.agents["sci"][1]["developer_instructions"]
+        self.assertIn("不得直接修改全局卡片或索引", evidence)
+        self.assertIn("不得更新全局 `index.md` 或 `methods_index.md`", evidence)
+        self.assertIn("全局学习库采用单写者", router)
+
     def test_learning_workspace_contract(self):
         required_files = [
             LEARNING_ROOT / "README.md",
             LEARNING_ROOT / "index.md",
             LEARNING_ROOT / "methods_index.md",
+            LEARNING_ROOT / "figure_rule_ledger.tsv",
             LEARNING_ROOT / "cards" / "_template.md",
             LEARNING_ROOT / "repositories" / "_template.md",
             LEARNING_ROOT / "syntheses" / "_template.md",
