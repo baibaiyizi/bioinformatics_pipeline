@@ -1,0 +1,5 @@
+schema_version: 1
+statuses: [pending, done, blocked]
+commit_authority: harness
+done_requires: [authoritative_item_completed, all_acceptance_checks_pass]
+blocked_requires: explicit_reason

@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-research-harness"
+version = "0.1.0"
+description = "Evidence-gated E/W/rho/C memory harness for Codex AI and computer-science research"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "openai-codex==0.147.0",
+  "pydantic>=2.11,<3",
+  "pyyaml>=6,<7",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10"]
+
+[project.scripts]
+ai-research-harness = "ai_research_harness.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ai_research_harness*"]
+
+[tool.setuptools.package-data]
+ai_research_harness = [
+  "assets/**/*.yaml",
+  "assets/**/*.md",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

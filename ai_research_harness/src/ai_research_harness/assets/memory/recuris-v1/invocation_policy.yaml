@@ -1,0 +1,7 @@
+schema_version: 1
+events: [turn_start, phase_boundary, checker_failure]
+max_cards: 4
+max_tokens: 3500
+project_precedence: true
+conflict_policy: block
+selection_basis: pending_goals_and_constraints

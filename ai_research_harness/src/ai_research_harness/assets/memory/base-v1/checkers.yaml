@@ -1,0 +1,3 @@
+schema_version: 1
+goal_checks: [agent_response_present, no_blocked_marker]
+unknown_checker_policy: block

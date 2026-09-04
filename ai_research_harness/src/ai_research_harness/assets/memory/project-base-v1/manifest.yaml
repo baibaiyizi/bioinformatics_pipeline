@@ -1,0 +1,10 @@
+schema_version: 1
+version_id: project-base-v1
+scope: project
+parent_version: null
+cards: []
+working_memory_spec: working_memory.yaml
+invocation_policy: invocation_policy.yaml
+checker_config: checkers.yaml
+source_failure_ids: []
+created_at: "2026-09-03T00:00:00+00:00"
