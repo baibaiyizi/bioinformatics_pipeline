@@ -1,0 +1,10 @@
+{"status": "PASS_INPUT_CONTRACT", "contrast": "treated - control", "biological_n": {"control": 2, "treated": 2}, "sample_count": 4, "significance": "exploratory_raw_pvalue", "analysis_execution": "not_run"}
+COUNTS_INPUT_PASS: 500 / 500 peaks; treated - control ; integer fragments
+{"status": "PASS_INPUT_CONTRACT", "contrast": "treated - control", "biological_n": {"control": 2, "treated": 2}, "sample_count": 4, "significance": "exploratory_raw_pvalue", "analysis_execution": "not_run"}
+COUNTS_INPUT_PASS: 500 / 500 peaks; treated - control ; integer fragments
+null device 
+          1 
+null device 
+          1 
+COUNTS_DESEQ2_COMPLETED: 500 tested peaks; 72 selected; all eligible samples retained
+Result report written: /tmp/final-bulkatacseq numeric's zhyui1c3/project/result/index.html

@@ -1,6 +1,6 @@
-# Step 2: 输入与自动选样背景
+# Step 2: 输入与预先合格样本
 
-## 2.1 当前选样结果与全样本背景
+## 2.1 全部合格样本与输入背景
 
 ```{r}
 ensure_module_result_layout("02_selection")
@@ -16,18 +16,18 @@ selected_sample_overview$raw_sample_pool <- ncol(gene_exp_full)
 
 sample_qc_overview <- selected_sample_overview
 write_csv_safe(sample_qc_overview, "result/02_selection/sample_qc_overview.csv", row.names = FALSE)
-write_csv_compat(selected_sample_overview, "result/02_selection/2_1_selected_sample_table.csv", row.names = FALSE)
+
 
 group_count_tbl <- selected_sample_overview %>%
   count(group, name = "sample_count") %>%
   arrange(group)
-write_csv_compat(group_count_tbl, "result/02_selection/2_2_selected_group_counts.csv", row.names = FALSE)
+
 
 group_count_plot <- ggplot(group_count_tbl, aes(x = group, y = sample_count, fill = group)) +
   geom_col(width = 0.7) +
   scale_fill_manual(values = group_colors) +
   labs(title = "当前进入主分析的样本分组", x = NULL, y = "Sample count") +
-  theme_rnaseq_minimal() +
+  theme_rnaseq_publication() +
   theme(legend.position = "none")
 
 save_plot_versions(
@@ -37,39 +37,6 @@ save_plot_versions(
   height = 4
 )
 
-if (!is.null(auto_selection_summary) && nrow(auto_selection_summary) > 0) {
-  top_selection_tbl <- auto_selection_summary %>%
-    arrange(desc(score), max_outlier_distance, desc(between_group_distance), sample_key) %>%
-    slice_head(n = 15)
-
-  write.csv(top_selection_tbl, "result/02_selection/2_4_top_auto_selection_combinations.csv", row.names = FALSE)
-
-  selection_score_plot <- top_selection_tbl %>%
-    mutate(
-      combination_label = paste0(combination_type, ": ", group1_samples, " vs ", group2_samples),
-      combination_label = factor(combination_label, levels = rev(combination_label))
-    ) %>%
-    ggplot(aes(x = combination_label, y = score, fill = selected)) +
-    geom_col(width = 0.75) +
-    coord_flip() +
-    scale_fill_manual(values = viz_rekey_colors(viz_pal$sig_gradient, c("yes" = "high", "no" = "low"))) +
-    labs(title = "自动选样评分前列组合", x = NULL, y = "Selection score") +
-    theme_rnaseq_minimal()
-
-    save_plot_versions(
-      selection_score_plot,
-      primary = "result/02_selection/2_5_auto_selection_scores.pdf",
-      width = 11,
-      height = max(5, 0.45 * nrow(top_selection_tbl))
-    )
-
-    top_by_type <- auto_selection_summary %>%
-      group_by(combination_type) %>%
-      arrange(desc(score), max_outlier_distance, desc(between_group_distance), sample_key) %>%
-      slice_head(n = 5) %>%
-      ungroup()
-    write_csv_compat(top_by_type, "result/04_pca/4_4_top_combinations_by_type.csv", row.names = FALSE)
-}
 
 if (!is.null(gene_exp_full) && ncol(gene_exp_full) >= ncol(gene_exp)) {
   # Prefer counts-derived logCPM when present; otherwise use DESeq2 normalized counts.
@@ -88,11 +55,11 @@ if (!is.null(gene_exp_full) && ncol(gene_exp_full) >= ncol(gene_exp)) {
     scale_color_manual(values = group_colors) +
     scale_shape_manual(values = c("selected" = 17, "not_selected" = 16)) +
     labs(
-      title = "全样本 PCA 与最终入选样本位置",
+      title = "全部预先合格样本 PCA（仅诊断，不据此选样）",
       x = paste0("PC1 (", round(100 * summary(full_pca)$importance[2, 1], 1), "%)"),
       y = paste0("PC2 (", round(100 * summary(full_pca)$importance[2, 2], 1), "%)")
     ) +
-    theme_rnaseq_bw()
+    theme_rnaseq_publication()
 
   save_plot_versions(
     full_pca_plot,
@@ -130,15 +97,15 @@ if (!is.null(gene_count_mat)) {
       by = "sample"
     )
   write_csv_safe(sample_qc_overview, "result/02_selection/sample_qc_overview.csv", row.names = FALSE)
-  write_csv_compat(count_qc_tbl, "result/02_selection/2_1_sample_overview.csv", row.names = FALSE)
-  write_csv_compat(count_qc_tbl, "result/02_selection/2_4_count_based_qc_metrics.csv", row.names = FALSE)
+
+
 
   complexity_plot <- ggplot(count_qc_tbl, aes(x = raw_counts / 1e6, y = detected_genes_cpm1, color = group, label = sample)) +
     geom_point(size = 3) +
     geom_text_repel(size = 3, show.legend = FALSE) +
     scale_color_manual(values = group_colors) +
     labs(title = "文库复杂度与基因检测能力", x = "Raw counts (million)", y = "Detected genes (CPM >= 1)") +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(legend.position = "top")
   save_plot_versions(
     complexity_plot,
@@ -151,7 +118,7 @@ if (!is.null(gene_count_mat)) {
     geom_col(width = 0.7) +
     scale_fill_manual(values = group_colors) +
     labs(title = "Top100 基因占比", x = NULL, y = "Fraction of library") +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
   save_plot_versions(
     top100_fraction_plot,

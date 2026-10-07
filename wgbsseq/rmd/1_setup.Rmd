@@ -8,11 +8,13 @@
 # ==============================================================================
 options(stringsAsFactors = FALSE)
 options(timeout = 600)
+knitr::opts_chunk$set(error = FALSE)
 
 # --- 加载依赖包 ---
 suppressPackageStartupMessages({
   # 1. 基因组基础
   library(GenomicRanges)
+  library(GenomeInfoDb)
   library(GenomicFeatures)
   library(Biostrings)
   library(rtracklayer)
@@ -82,34 +84,39 @@ resolve_project_root <- function() {
 }
 
 root_dir <- resolve_project_root()
-repo_root_dir <- normalizePath(file.path(root_dir, "..", ".."), winslash = "/", mustWork = FALSE)
-rna_seq_root_dir <- file.path(repo_root_dir, "rna_seq", "testis")
-atac_root_dir <- file.path(repo_root_dir, "atac", "liver")
-reads_info_path <- file.path(root_dir, "01rawdata", "reads_info.txt")
+figure_contract_file <- file.path(root_dir, "rmd", "figure_contract.R")
+source(figure_contract_file, local = globalenv())
+project_stage <- Sys.getenv("WGBS_TISSUE")
+reads_info_path <- Sys.getenv("WGBS_SAMPLES")
+if(!nzchar(reads_info_path)) stop("请通过 run_wgbs.sh 加载 config/project.env")
+set.seed(as.integer(Sys.getenv("WGBS_SEED", "20260929")))
 
 config <- list(
   # 路径设置
   work_dir     = root_dir,
-  ref_base_dir = file.path(repo_root_dir, "reference", "GRCm39"),
+  ref_base_dir = Sys.getenv("WGBS_REF_DIR"),
   input_rdata  = "04methykit/CpG.RData",
-  gtf_file     = file.path(repo_root_dir, "reference", "GRCm39", "Mus_musculus.GRCm39.115.gtf"),
-  cpg_island_file = file.path(repo_root_dir, "reference", "GRCm39", "mm39_cpgIslandExt.txt.gz"),
-  repeatmasker_file = file.path(repo_root_dir, "reference", "GRCm39", "mm39_rmsk.txt.gz"),
+  gtf_file     = Sys.getenv("WGBS_GTF"),
+  cpg_island_file = file.path(Sys.getenv("WGBS_REF_DIR"), "mm39_cpgIslandExt.txt.gz"),
+  repeatmasker_file = file.path(Sys.getenv("WGBS_REF_DIR"), "mm39_rmsk.txt.gz"),
 
   # 外部数据路径
-  rna_seq_file  = file.path(rna_seq_root_dir, "4.DE_analysis", "DE_results"),
-  rna_kegg_file = file.path(rna_seq_root_dir, "result", "06_enrichment", "01_all", "tables", "6_1_KEGG_ORA_results.csv"),
-  wgbs_kegg_file = "result/5_enrichment/tables/1/kegg_enrichment_results.csv",
+  stage = project_stage,
+  rna_seq_file = Sys.getenv("WGBS_RNA_SEQ_FILE"),
+  rna_kegg_file = Sys.getenv("WGBS_RNA_KEGG_FILE"),
+  wgbs_kegg_file = "result/5_enrichment/tables/1/enrichment_ora_long.csv",
 
   # ATAC-seq 数据路径 (可选，如不存在则跳过)
-  atac_peak_dir = file.path(atac_root_dir, "result"),
-  atac_diff_dir = file.path(atac_root_dir, "4.Differential_binding"),
+  atac_peak_dir = Sys.getenv("WGBS_ATAC_PEAK_DIR"),
+  atac_diff_dir = Sys.getenv("WGBS_ATAC_DIFF_DIR"),
 
   # 样本分组定义
   group1_name  = NULL,
   group2_name  = NULL,
   group1_idx   = integer(),
   group2_idx   = integer(),
+  reference_group = Sys.getenv("WGBS_REFERENCE_GROUP", unset = ""),
+  comparison_group = Sys.getenv("WGBS_COMPARISON_GROUP", unset = ""),
 
   # DMR calling 阈值
   # 当前口径：
@@ -117,15 +124,15 @@ config <- list(
   # 2. 区域长度 >= 50 bp
   # 3. 区域内至少 5 个 CpG
   # 4. group2 - group1 甲基化差异绝对值 >= 0.10
-  dmr_p_threshold = 0.05,
-  dmr_pct_sig = 0.5,
-  dmr_minlen = 50,
-  dmr_minCG = 5,
-  dmr_delta = 0.10,
-  dss_smoothing = TRUE,
-  dss_smoothing_span = 500L,
+  dmr_p_threshold = as.numeric(Sys.getenv("WGBS_DMR_P_THRESHOLD", "0.05")),
+  dmr_pct_sig = as.numeric(Sys.getenv("WGBS_DMR_PCT_SIG", "0.5")),
+  dmr_minlen = as.numeric(Sys.getenv("WGBS_DMR_MINLEN", "50")),
+  dmr_minCG = as.numeric(Sys.getenv("WGBS_DMR_MINCG", "5")),
+  dmr_delta = as.numeric(Sys.getenv("WGBS_DMR_DELTA", "0.10")),
+  dss_smoothing = identical(Sys.getenv("WGBS_DSS_SMOOTHING", "1"), "1"),
+  dss_smoothing_span = as.numeric(Sys.getenv("WGBS_DSS_SMOOTHING_SPAN", "500")),
   dss_ncores = as.integer(Sys.getenv("WGBS_DSS_NCORES", unset = "4")),
-  dmr_dis_merge = 50L,
+  dmr_dis_merge = as.numeric(Sys.getenv("WGBS_DMR_DIS_MERGE", "50")),
 
   # 稳健性与交叉验证
   dmr_sensitivity_delta = c(0.05, 0.10, 0.15),
@@ -135,15 +142,15 @@ config <- list(
   dmrseq_max_permutations = as.integer(Sys.getenv("WGBS_DMRSEQ_MAX_PERMUTATIONS", unset = "20")),
 
   # 下游展示/筛选阈值
-  # 当前继续保留既有 pvalue < 0.05 结果口径，避免改变已产出的分析结论。
-  # 严格解读或投稿时建议同步检查 RNA padj < 0.05，富集结果优先报告 p.adjust/qvalue < 0.05。
-  rna_p_threshold = 0.05,
-  rna_p_adjust_threshold = 0.05,
-  rna_log2fc_threshold = 0.58,
+  # 默认保持既有 pvalue 口径；WGBS_SIGNIFICANCE_MODE=padj 可切换为 FDR/padj。
+  significance_mode = tolower(Sys.getenv("WGBS_SIGNIFICANCE_MODE", unset = "pvalue")),
+  rna_p_threshold = as.numeric(Sys.getenv("WGBS_RNA_P_THRESHOLD", "0.05")),
+  rna_p_adjust_threshold = as.numeric(Sys.getenv("WGBS_RNA_FDR_THRESHOLD", "0.05")),
+  rna_log2fc_threshold = as.numeric(Sys.getenv("WGBS_RNA_LOG2FC_THRESHOLD", "0.58")),
   multiomics_methyl_delta = 0.10,
   cgi_diff_methyl_pct = 15L,
-  enrichment_p_threshold = 0.05,
-  enrichment_adjust_threshold = 0.05,
+  enrichment_p_threshold = as.numeric(Sys.getenv("WGBS_ENRICHMENT_P_THRESHOLD", "0.05")),
+  enrichment_adjust_threshold = as.numeric(Sys.getenv("WGBS_ENRICHMENT_FDR_THRESHOLD", "0.05")),
   enrichment_top_n_kegg = 20L,
   enrichment_top_n_go = 15L,
   enrichment_goplot_top_n = 10L,
@@ -153,18 +160,18 @@ config <- list(
   enrichment_theme_quadrants = c("Hypo-Up", "Hyper-Down"),
 
   # 区域定义与可视化窗口
-  promoter_upstream = 2000L,
-  promoter_downstream = 2000L,
+  promoter_upstream = as.numeric(Sys.getenv("WGBS_PROMOTER_UPSTREAM", "2000")),
+  promoter_downstream = as.numeric(Sys.getenv("WGBS_PROMOTER_DOWNSTREAM", "2000")),
   sperm_promoter_upstream = 2000L,
   sperm_promoter_downstream = 500L,
-  sperm_icr_file = file.path(root_dir, "rmd", "resources", "mouse_icr_regions.tsv"),
-  spermatogenesis_gene_file = file.path(root_dir, "rmd", "resources", "spermatogenesis_genes.tsv"),
+  sperm_icr_file = Sys.getenv("WGBS_SPERM_ICR_FILE"),
+  spermatogenesis_gene_file = Sys.getenv("WGBS_SPERMATOGENESIS_GENE_FILE"),
   cgi_shore_width = 2000L,
   cgi_shelf_width = 2000L,
   genome_context_upstream_width = 2000L,
   genome_context_sample_downsample_n = 5000L,
-  qc_corr_max_sites = as.integer(Sys.getenv("WGBS_QC_CORR_MAX_SITES", unset = "500000")),
-  qc_corr_seed = 20260520L,
+  qc_corr_max_sites = as.numeric(Sys.getenv("WGBS_QC_CORR_MAX_SITES", unset = "100000")),
+  qc_corr_seed = as.integer(Sys.getenv("WGBS_SEED", "20260929")),
   browser_gene_flank = 20000L,
   browser_dmr_flank = 5000L,
 
@@ -174,7 +181,7 @@ config <- list(
   bsmooth_fallback_ns = 50L,
   bsmooth_fallback_h = 2000L,
   motif_top_n = 500L,
-  motif_background_seed = 20260520L,
+  motif_background_seed = as.integer(Sys.getenv("WGBS_SEED", "20260929")),
   repeatmasker_candidates = c(
     "mm39_rmsk.txt.gz",
     "mm39_rmsk.txt",
@@ -184,6 +191,10 @@ config <- list(
     "repeatmasker.txt.gz"
   )
 )
+
+if(!config$significance_mode %in% c("pvalue", "padj")) {
+  stop("WGBS_SIGNIFICANCE_MODE 只能是 pvalue 或 padj，当前为: ", config$significance_mode)
+}
 
 # 设置工作目录
 if(dir.exists(config$work_dir)) {
@@ -253,6 +264,7 @@ read_reads_info <- function(path, root_dir) {
     path,
     header = TRUE,
     sep = "\t",
+    colClasses = "character",
     stringsAsFactors = FALSE,
     check.names = FALSE
   )
@@ -260,12 +272,6 @@ read_reads_info <- function(path, root_dir) {
   if(!("sample" %in% colnames(info))) stop("reads_info.txt 缺少 sample 列")
   if(!("group" %in% colnames(info))) stop("reads_info.txt 缺少 group 列")
 
-  if(!("raw_fq1" %in% colnames(info)) && "fq1" %in% colnames(info)) {
-    info$raw_fq1 <- info$fq1
-  }
-  if(!("raw_fq2" %in% colnames(info)) && "fq2" %in% colnames(info)) {
-    info$raw_fq2 <- info$fq2
-  }
   if(!all(c("raw_fq1", "raw_fq2") %in% colnames(info))) {
     stop("reads_info.txt 缺少 raw_fq1/raw_fq2 列")
   }
@@ -275,13 +281,7 @@ read_reads_info <- function(path, root_dir) {
     info[[col_name]] <- trimws(as.character(info[[col_name]]))
   }
 
-  if(!("stage" %in% colnames(info))) {
-    if("group_stage" %in% colnames(info) && all(grepl("sperm$", info$group_stage, ignore.case = TRUE))) {
-      info$stage <- "sperm"
-    } else {
-      info$stage <- "sperm"
-    }
-  }
+  if(!"stage" %in% colnames(info) || anyNA(info$stage) || any(!nzchar(info$stage))) stop("必须显式提供 stage")
   if(!("group_stage" %in% colnames(info))) {
     info$group_stage <- paste0(info$group, info$stage)
   }
@@ -320,6 +320,39 @@ ensure_step_dirs <- function(...) {
   invisible(lapply(dirs, dir.create, recursive = TRUE, showWarnings = FALSE))
 }
 
+significance_spec <- function(domain = c("rna", "enrichment"), config_arg = config) {
+  domain <- match.arg(domain)
+  if(domain == "rna") {
+    if(config_arg$significance_mode == "padj") {
+      return(list(column = "padj", threshold = config_arg$rna_p_adjust_threshold, mode = "padj"))
+    }
+    return(list(column = "pvalue", threshold = config_arg$rna_p_threshold, mode = "pvalue"))
+  }
+  if(config_arg$significance_mode == "padj") {
+    return(list(column = "p.adjust", threshold = config_arg$enrichment_adjust_threshold, mode = "padj"))
+  }
+  list(column = "pvalue", threshold = config_arg$enrichment_p_threshold, mode = "pvalue")
+}
+
+selected_significance_mask <- function(df, domain = c("rna", "enrichment"), inclusive = FALSE,
+                                       config_arg = config, context = "data") {
+  domain <- match.arg(domain)
+  spec <- significance_spec(domain, config_arg)
+  if(!spec$column %in% colnames(df)) {
+    stop(
+      context, " 缺少 ", spec$column,
+      " 列，无法使用 WGBS_SIGNIFICANCE_MODE=", config_arg$significance_mode
+    )
+  }
+  values <- suppressWarnings(as.numeric(df[[spec$column]]))
+  !is.na(values) & if(inclusive) values <= spec$threshold else values < spec$threshold
+}
+
+filter_selected_significance <- function(df, domain = c("rna", "enrichment"), inclusive = FALSE,
+                                         config_arg = config, context = "data") {
+  df[selected_significance_mask(df, domain, inclusive, config_arg, context), , drop = FALSE]
+}
+
 standardize_chr_style <- function(chr_vec, target_has_chr = TRUE) {
   chr_vec <- as.character(chr_vec)
   if(target_has_chr) {
@@ -352,7 +385,8 @@ strip_chr_prefix <- function(chr_vec) {
 }
 
 get_txdb_sqlite_paths <- function(gtf_file) {
-  full_sqlite <- paste0(gtf_file, ".sqlite")
+  dir.create(file.path(config$work_dir, ".cache", "annotation"), recursive = TRUE, showWarnings = FALSE)
+  full_sqlite <- file.path(config$work_dir, ".cache", "annotation", paste0(unname(tools::md5sum(gtf_file)), ".sqlite"))
   list(
     full = full_sqlite,
     main = sub("\\.sqlite$", ".mainchr.sqlite", full_sqlite)
@@ -505,7 +539,8 @@ load_main_chr_txdb <- function(gtf_file) {
     txdb_raw <- loadDb(txdb_paths$full)
   } else {
     message("   正在从 GTF 构建 TxDb (首次运行较慢)...")
-    txdb_raw <- makeTxDbFromGFF(gtf_file)
+    if(!requireNamespace("txdbmaker", quietly = TRUE)) stop("MISSING: txdbmaker，当前 Bioconductor 的 GTF→TxDb 实现")
+    txdb_raw <- txdbmaker::makeTxDbFromGFF(gtf_file)
     saveDb(txdb_raw, txdb_paths$full)
   }
   txdb_main <- filter_txdb_to_main_chr(txdb_raw)
@@ -531,90 +566,9 @@ simplify_repeat_class <- function(rep_class, rep_family = NA_character_) {
   )
 }
 
-plot_preview_dpi <- 220
-
-pdf_preview_png_paths <- function(pdf_file) {
-  png_base <- sub("(?i)\\.pdf$", "", pdf_file, perl = TRUE)
-  c(paste0(png_base, ".png"), Sys.glob(paste0(png_base, "_page_*.png")))
-}
-
-save_pdf_preview_pngs <- function(pdf_file, dpi = plot_preview_dpi) {
-  if(is.null(pdf_file) || !file.exists(pdf_file) || !grepl("\\.pdf$", pdf_file, ignore.case = TRUE)) {
-    return(invisible(NULL))
-  }
-  gs_bin <- Sys.which("gs")
-  if(identical(gs_bin, "")) {
-    message("Ghostscript 未找到，跳过 PNG 预览导出: ", pdf_file)
-    return(invisible(NULL))
-  }
-
-  png_base <- sub("(?i)\\.pdf$", "", pdf_file, perl = TRUE)
-  png_single <- paste0(png_base, ".png")
-  png_pattern <- paste0(png_base, "_page_%02d.png")
-  unlink(pdf_preview_png_paths(pdf_file), force = TRUE)
-
-  suppressWarnings(
-    system2(
-      gs_bin,
-      args = c(
-        "-dSAFER", "-dBATCH", "-dNOPAUSE",
-        "-dTextAlphaBits=4", "-dGraphicsAlphaBits=4",
-        "-sDEVICE=png16m",
-        paste0("-r", dpi),
-        paste0("-sOutputFile=", png_pattern),
-        pdf_file
-      ),
-      stdout = TRUE, stderr = TRUE
-    )
-  )
-
-  png_pages <- sort(Sys.glob(paste0(png_base, "_page_*.png")))
-  if(length(png_pages) == 1) {
-    file.rename(png_pages, png_single)
-    return(invisible(png_single))
-  }
-  invisible(png_pages)
-}
-
-.tracked_pdf_devices <- new.env(parent = emptyenv())
-.tracked_pdf_devices$files <- list()
-
-cairo_pdf <- function(filename, width = 7, height = 7, ...) {
-  dir.create(dirname(filename), recursive = TRUE, showWarnings = FALSE)
-  grDevices::cairo_pdf(filename, width = width, height = height, ...)
-  .tracked_pdf_devices$files[[as.character(grDevices::dev.cur())]] <- filename
-  invisible(grDevices::dev.cur())
-}
-
-dev.off <- function(which = grDevices::dev.cur()) {
-  which_num <- as.integer(which)
-  dev_key <- as.character(which_num)
-  pdf_file <- .tracked_pdf_devices$files[[dev_key]]
-  result <- grDevices::dev.off(which = which)
-  if(!is.null(pdf_file)) {
-    .tracked_pdf_devices$files[[dev_key]] <- NULL
-    tryCatch(
-      save_pdf_preview_pngs(pdf_file),
-      error = function(e) message("PNG 预览导出失败: ", basename(pdf_file), " - ", e$message)
-    )
-  }
-  invisible(result)
-}
-
-ggsave <- function(filename, plot = ggplot2::last_plot(), device = grDevices::cairo_pdf, ...) {
-  dir.create(dirname(filename), recursive = TRUE, showWarnings = FALSE)
-  if(identical(device, cairo_pdf)) {
-    device <- grDevices::cairo_pdf
-  }
-  result <- ggplot2::ggsave(filename = filename, plot = plot, device = device, ...)
-  if(grepl("\\.pdf$", filename, ignore.case = TRUE)) {
-    tryCatch(
-      save_pdf_preview_pngs(filename),
-      error = function(e) message("PNG 预览导出失败: ", basename(filename), " - ", e$message)
-    )
-  }
-  invisible(result)
-}
+cairo_pdf <- wgbs_cairo_pdf
+dev.off <- wgbs_dev_off
+ggsave <- wgbs_ggsave
 
 safe_granges_to_df <- function(gr) {
   if(is.null(gr) || length(gr) == 0) return(tibble())
@@ -729,28 +683,32 @@ draw_pheatmap_pdf <- function(mat, out_pdf, width = 10, height = 8,
     cluster_cols_arg <- FALSE
   }
 
-  if(is.null(fontsize_row)) {
-    fontsize_row <- if(nrow(mat) > 80) 5 else if(nrow(mat) > 40) 6 else 8
-  }
+  if(is.null(fontsize_row)) fontsize_row <- if(nrow(mat) > 40) 6 else wgbs_figure_tick_size
+  fontsize_row <- max(6, min(wgbs_figure_tick_size, fontsize_row))
+  fontsize_col <- max(6, min(wgbs_figure_tick_size, fontsize_col))
   dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
-  # 显式使用 pheatmap 包，避免被 ComplexHeatmap::pheatmap 掩盖后忽略 filename/width/height。
-  pheatmap::pheatmap(
+  # 显式返回 gtable，并在统一设备上分别绘制 PDF/PNG。
+  heatmap_plot <- pheatmap::pheatmap(
     mat_display,
     cluster_rows = cluster_rows_arg,
     cluster_cols = cluster_cols_arg,
     scale = "none",
     color = color,
     na_col = viz_pal$neutral_light,
-    main = title,
-    filename = out_pdf,
+    main = "",
+    silent = TRUE,
+    fontsize_row = fontsize_row,
+    fontsize_col = fontsize_col,
+    fontfamily = wgbs_figure_font_family
+  )
+  wgbs_draw_grid_dual(
+    file = out_pdf,
     width = width,
     height = height,
-    fontsize_row = fontsize_row,
-    fontsize_col = fontsize_col
-  )
-  tryCatch(
-    save_pdf_preview_pngs(out_pdf),
-    error = function(e) message("PNG 预览导出失败: ", basename(out_pdf), " - ", e$message)
+    draw = {
+      grid::grid.newpage()
+      grid::grid.draw(heatmap_plot$gtable)
+    }
   )
   invisible(TRUE)
 }
@@ -826,7 +784,8 @@ save_enrichment_compare_heatmap <- function(df, context_col, out_pdf, out_csv = 
   invisible(mat)
 }
 
-build_gsea_plots <- function(rank_vec, prefix, title_prefix, organism = "mmu", plot_prefix = NULL) {
+build_gsea_plots <- function(rank_vec, prefix, title_prefix, organism = "mmu", plot_prefix = NULL,
+                             context_type = "analysis", context = title_prefix) {
   rank_vec <- rank_vec[is.finite(rank_vec)]
   rank_vec <- sort(rank_vec, decreasing = TRUE)
   if(length(rank_vec) < 10) return(invisible(NULL))
@@ -851,25 +810,30 @@ build_gsea_plots <- function(rank_vec, prefix, title_prefix, organism = "mmu", p
     error = function(e) NULL
   )
 
+  gsea_tables <- list()
   if(!is.null(gsea_kegg) && nrow(as.data.frame(gsea_kegg)) > 0) {
-    write_csv(as.data.frame(gsea_kegg), paste0(prefix, "_KEGG_GSEA.csv"))
-    gsea_kegg@result <- gsea_kegg@result[gsea_kegg@result$pvalue < config$enrichment_p_threshold, ]
-    if(nrow(as.data.frame(gsea_kegg)) > 0) {
-      save_gsea_dotplot(gsea_kegg, paste0(plot_prefix, "_KEGG_GSEA_Dotplot.pdf"),
+    gsea_tables$kegg <- standardize_enrichment_table(
+      as.data.frame(gsea_kegg), "GSEA", "KEGG", NA_character_, context_type, context
+    )
+    gsea_kegg_sig <- filter_enrichment_object(gsea_kegg)
+    if(!is.null(gsea_kegg_sig) && nrow(as.data.frame(gsea_kegg_sig)) > 0) {
+      save_gsea_dotplot(gsea_kegg_sig, paste0(plot_prefix, "_KEGG_GSEA_Dotplot.pdf"),
                         paste0(title_prefix, " KEGG GSEA"), showCategory = 15)
     }
   }
 
   if(!is.null(gsea_go) && nrow(as.data.frame(gsea_go)) > 0) {
-    write_csv(as.data.frame(gsea_go), paste0(prefix, "_GO_BP_GSEA.csv"))
-    gsea_go@result <- gsea_go@result[gsea_go@result$pvalue < config$enrichment_p_threshold, ]
-    if(nrow(as.data.frame(gsea_go)) > 0) {
-      save_gsea_dotplot(gsea_go, paste0(plot_prefix, "_GO_BP_GSEA_Dotplot.pdf"),
+    gsea_tables$go_bp <- standardize_enrichment_table(
+      as.data.frame(gsea_go), "GSEA", "GO", "BP", context_type, context
+    )
+    gsea_go_sig <- filter_enrichment_object(gsea_go)
+    if(!is.null(gsea_go_sig) && nrow(as.data.frame(gsea_go_sig)) > 0) {
+      save_gsea_dotplot(gsea_go_sig, paste0(plot_prefix, "_GO_BP_GSEA_Dotplot.pdf"),
                         paste0(title_prefix, " GO BP GSEA"), showCategory = 15)
     }
   }
 
-  invisible(list(go = gsea_go, kegg = gsea_kegg))
+  invisible(list(go = gsea_go, kegg = gsea_kegg, tables = bind_rows(gsea_tables)))
 }
 
 safe_granges_to_df <- function(gr) {
@@ -917,38 +881,6 @@ safe_granges_to_df <- function(gr) {
   }
 
   bind_cols(base_df, as_tibble(meta_list))
-}
-
-draw_pheatmap_pdf <- function(mat, out_pdf, width = 10, height = 8,
-                              color = viz_pal$heat_compare, title = "",
-                              cluster_rows = nrow(mat) > 1, cluster_cols = ncol(mat) > 1,
-                              fontsize_row = NULL, fontsize_col = 10) {
-  if(is.null(mat) || length(mat) == 0 || nrow(mat) == 0 || ncol(mat) == 0) {
-    return(invisible(FALSE))
-  }
-  if(is.null(fontsize_row)) {
-    fontsize_row <- if(nrow(mat) > 80) 5 else if(nrow(mat) > 40) 6 else 8
-  }
-  dir.create(dirname(out_pdf), recursive = TRUE, showWarnings = FALSE)
-  # 显式使用 pheatmap 包，避免被 ComplexHeatmap::pheatmap 掩盖后忽略 filename/width/height。
-  pheatmap::pheatmap(
-    mat,
-    cluster_rows = cluster_rows,
-    cluster_cols = cluster_cols,
-    scale = "none",
-    color = color,
-    main = title,
-    filename = out_pdf,
-    width = width,
-    height = height,
-    fontsize_row = fontsize_row,
-    fontsize_col = fontsize_col
-  )
-  tryCatch(
-    save_pdf_preview_pngs(out_pdf),
-    error = function(e) message("PNG 预览导出失败: ", basename(out_pdf), " - ", e$message)
-  )
-  invisible(TRUE)
 }
 
 draw_complex_heatmap_pdf <- function(ht, out_pdf, width = 10, height = 8) {
@@ -1032,7 +964,9 @@ build_ora_plot_df <- function(ora_df, top_n = 15, facet_col = NULL) {
   if (is.null(ora_df) || nrow(ora_df) == 0) return(data.frame())
   plot_df <- as.data.frame(ora_df, stringsAsFactors = FALSE)
   plot_df$Description <- as.character(plot_df$Description)
-  plot_df$pvalue <- suppressWarnings(as.numeric(plot_df$pvalue))
+  sig_col <- significance_spec("enrichment")$column
+  if(!sig_col %in% colnames(plot_df)) stop("ORA 结果缺少显著性列: ", sig_col)
+  plot_df$selected_significance <- suppressWarnings(as.numeric(plot_df[[sig_col]]))
   plot_df$Count <- suppressWarnings(as.numeric(plot_df$Count))
   plot_df$ratio_value <- if ("GeneRatio" %in% colnames(plot_df)) {
     vapply(plot_df$GeneRatio, parse_ratio_value, numeric(1))
@@ -1041,17 +975,17 @@ build_ora_plot_df <- function(ora_df, top_n = 15, facet_col = NULL) {
   }
   plot_df$ratio_value[!is.finite(plot_df$ratio_value)] <- plot_df$Count[!is.finite(plot_df$ratio_value)]
   plot_df$size_value <- dplyr::coalesce(plot_df$Count, plot_df$ratio_value, 1)
-  plot_df$neg_log10_p <- -log10(dplyr::coalesce(plot_df$pvalue, 1) + 1e-300)
+  plot_df$neg_log10_significance <- -log10(dplyr::coalesce(plot_df$selected_significance, 1) + 1e-300)
 
   if (!is.null(facet_col) && facet_col %in% colnames(plot_df)) {
     plot_df <- plot_df %>%
       group_by(.data[[facet_col]]) %>%
-      arrange(pvalue, desc(ratio_value), .by_group = TRUE) %>%
+      arrange(selected_significance, desc(ratio_value), .by_group = TRUE) %>%
       slice_head(n = top_n) %>%
       ungroup()
   } else {
     plot_df <- plot_df %>%
-      arrange(pvalue, desc(ratio_value)) %>%
+      arrange(selected_significance, desc(ratio_value)) %>%
       slice_head(n = min(top_n, nrow(plot_df)))
   }
 
@@ -1067,7 +1001,7 @@ save_ora_barplot <- function(ora_df, primary, title_prefix, top_n = 15, facet_co
   plot_df <- build_ora_plot_df(ora_df, top_n = top_n, facet_col = facet_col)
   if (nrow(plot_df) == 0) return(invisible(NULL))
 
-  p <- ggplot(plot_df, aes(x = Description, y = ratio_value, fill = neg_log10_p)) +
+  p <- ggplot(plot_df, aes(x = Description, y = ratio_value, fill = neg_log10_significance)) +
     geom_col(width = 0.75, alpha = 0.92) +
     scale_fill_wgbs_ryb()
 
@@ -1077,7 +1011,7 @@ save_ora_barplot <- function(ora_df, primary, title_prefix, top_n = 15, facet_co
 
   p <- p +
     coord_flip() +
-    labs(title = title_prefix, x = NULL, y = ora_axis_label(ora_df), fill = "-log10(PValue)") +
+    labs(title = title_prefix, x = NULL, y = ora_axis_label(ora_df), fill = paste0("-log10(", config$significance_mode, ")")) +
     theme_wgbs_bw(base_size = 10) +
     theme(panel.grid.major.y = element_blank())
 
@@ -1089,10 +1023,10 @@ save_ora_dotplot <- function(ora_df, primary, title_prefix, top_n = 15, facet_co
   plot_df <- build_ora_plot_df(ora_df, top_n = top_n, facet_col = facet_col)
   if (nrow(plot_df) == 0) return(invisible(NULL))
 
-  p <- ggplot(plot_df, aes(x = ratio_value, y = Description, size = size_value, color = neg_log10_p)) +
+  p <- ggplot(plot_df, aes(x = ratio_value, y = Description, size = size_value, color = neg_log10_significance)) +
     geom_point(alpha = 0.88) +
     scale_color_wgbs_ryb() +
-    labs(title = title_prefix, x = ora_axis_label(ora_df), y = NULL, size = "Gene count", color = "-log10(PValue)") +
+    labs(title = title_prefix, x = ora_axis_label(ora_df), y = NULL, size = "Gene count", color = paste0("-log10(", config$significance_mode, ")")) +
     theme_wgbs_bw(base_size = 10)
 
   if (!is.null(facet_col) && facet_col %in% colnames(plot_df)) {
@@ -1102,36 +1036,70 @@ save_ora_dotplot <- function(ora_df, primary, title_prefix, top_n = 15, facet_co
   ggsave(primary, plot = p, width = 10, height = 8, device = cairo_pdf)
 }
 
-# 统一 enrichment treeplot：统一 pvalue 渐变配色 + theme_wgbs_bw
+format_enrichment_display_label <- function(x, width = 38) {
+  x <- gsub("_", " ", as.character(x), fixed = TRUE)
+  x <- trimws(gsub("\\s+", " ", x))
+  stringr::str_trunc(x, width = width, side = "right", ellipsis = "...")
+}
+
+prepare_enrichment_plot_object <- function(enrich_obj, width = 38) {
+  if(is.null(enrich_obj) || !methods::is(enrich_obj, "enrichResult")) return(enrich_obj)
+  plot_obj <- enrich_obj
+  plot_obj@result$Description <- format_enrichment_display_label(plot_obj@result$Description, width = width)
+  plot_obj
+}
+
+# 统一 enrichment treeplot：标签只在绘图副本中缩写，结果表保持完整术语。
 save_enrichment_treeplot <- function(enrich_obj, primary, title_prefix, showCategory = 15) {
   if (is.null(enrich_obj) || nrow(as.data.frame(enrich_obj)) == 0) return(invisible(NULL))
+  enrich_obj <- prepare_enrichment_plot_object(enrich_obj)
+  showCategory <- min(8L, showCategory, nrow(as.data.frame(enrich_obj)))
   enrich_obj <- tryCatch(pairwise_termsim(enrich_obj), error = function(e) {
     message("treeplot pairwise_termsim skipped: ", e$message)
     NULL
   })
   if(is.null(enrich_obj)) return(invisible(NULL))
   p <- tryCatch({
-    tp <- enrichplot::treeplot(enrich_obj, showCategory = showCategory)
+    tp <- enrichplot::treeplot(
+      enrich_obj,
+      showCategory = showCategory,
+      nCluster = min(3L, showCategory),
+      label_format = 30,
+      fontsize_tiplab = 2.4,
+      fontsize_cladelab = 2.4,
+      hilight = FALSE,
+      align = "none",
+      hexpand = 0.45,
+      tiplab_offset = 0.1
+    )
     # treeplot 内部用 pvalue 映射颜色，用统一渐变替换默认色
     tp + scale_color_wgbs_ryb(guide = guide_colorbar(title = "-log10(pvalue)")) +
-      labs(title = title_prefix) +
-      theme_wgbs_bw(base_size = 10)
+      labs(title = NULL, x = NULL, y = NULL) +
+      theme_wgbs_void(base_size = 8)
   }, error = function(e) {
     message("treeplot skipped: ", e$message)
     NULL
   })
   if(is.null(p)) return(invisible(NULL))
-  ggsave(primary, plot = p, width = 12, height = 10, device = cairo_pdf)
+  ggsave(primary, plot = p, width = 12, height = 10, device = cairo_pdf, coordinate_system = "none")
 }
 
 # 统一 enrichment cnetplot
 save_enrichment_cnetplot <- function(enrich_obj, geneList, primary, title_prefix, showCategory = 5) {
-  if (is.null(enrich_obj) || nrow(as.data.frame(enrich_obj)) < showCategory) return(invisible(NULL))
+  if (is.null(enrich_obj) || nrow(as.data.frame(enrich_obj)) == 0) return(invisible(NULL))
+  enrich_obj <- prepare_enrichment_plot_object(enrich_obj)
+  showCategory <- min(showCategory, nrow(as.data.frame(enrich_obj)))
   tryCatch({
     p <- cnetplot(enrich_obj, foldChange = geneList, showCategory = showCategory, node_label = "category") +
-      labs(title = title_prefix) +
-      theme_wgbs_bw(base_size = 10)
-    ggsave(primary, plot = p, width = 10, height = 8, device = cairo_pdf)
+      labs(title = NULL, x = NULL, y = NULL) +
+      theme_wgbs_void(base_size = 8)
+    for(i in seq_along(p$layers)) {
+      geom_class <- class(p$layers[[i]]$geom)
+      if(any(geom_class %in% c("GeomText", "GeomTextRepel", "GeomLabel", "GeomLabelRepel"))) {
+        p$layers[[i]]$aes_params$size <- 2.4
+      }
+    }
+    ggsave(primary, plot = p, width = 10, height = 8, device = cairo_pdf, coordinate_system = "none")
   }, error = function(e) message("cnetplot error: ", e$message))
 }
 
@@ -1154,6 +1122,7 @@ build_goplot_inputs <- function(enrich_df, geneList, category_label = "BP", top_
   if (nrow(enrich_top) == 0) return(NULL)
 
   goenrichment <- enrich_top
+  goenrichment$Description <- make.unique(format_enrichment_display_label(goenrichment$Description), sep = " ")
   colnames(goenrichment)[colnames(goenrichment) == "pvalue"] <- "adj_pval"
   goenrichment <- goenrichment[, c("category", "ID", "Description", "adj_pval", "geneID")]
   colnames(goenrichment) <- c("category", "ID", "term", "adj_pval", "genes")
@@ -1167,6 +1136,31 @@ build_goplot_inputs <- function(enrich_df, geneList, category_label = "BP", top_
   if (is.null(circ) || nrow(circ) == 0) return(NULL)
 
   list(goenrichment = goenrichment, genedata = genedata, circ = circ)
+}
+
+make_goplot_legend_grob <- function(term_labels, term_cols, lfc_colors) {
+  term_df <- data.frame(
+    term = factor(term_labels, levels = term_labels),
+    x = 1,
+    y = 1
+  )
+  gradient_df <- data.frame(value = c(-1, 0, 1), x = 1:3, y = 2)
+  dummy <- ggplot() +
+    geom_point(data = term_df, aes(x = x, y = y, color = term), shape = 15, size = 3) +
+    scale_color_manual(name = "GO terms", values = stats::setNames(term_cols, term_labels), breaks = term_labels) +
+    geom_tile(data = gradient_df, aes(x = x, y = y, fill = value)) +
+    scale_fill_gradient2(name = "logFC", low = lfc_colors[3], mid = lfc_colors[2], high = lfc_colors[1]) +
+    guides(
+      fill = guide_colorbar(order = 1, title.position = "top"),
+      color = guide_legend(order = 2, ncol = 1, override.aes = list(shape = 15, size = 4))
+    ) +
+    theme_void(base_family = wgbs_figure_font_family, base_size = wgbs_figure_base_size) +
+    theme(
+      legend.position = "right", legend.direction = "vertical", legend.box = "vertical",
+      legend.title = element_text(size = wgbs_figure_base_size, face = "bold"),
+      legend.text = element_text(size = wgbs_figure_tick_size)
+    )
+  cowplot::get_legend(dummy)
 }
 
 # GOChord + GOCluster 统一出图 bundle（参考 rna.Rmd 逻辑）
@@ -1208,14 +1202,26 @@ save_go_goplot_bundle <- function(goplot_inputs, out_chord, out_cluster, title_s
       unname(viz_pal$de["up"])
     }
 
-    cairo_pdf(out_chord, width = 14, height = 12)
-    print(GOChord(
-      data = chord, title = paste0("GO Chord ", title_suffix),
-      space = 0.02, gene.order = "logFC", gene.space = 0.25, gene.size = 3.5,
+    chord_plot <- GOChord(
+      data = chord, title = "",
+      space = 0.02, gene.order = "logFC", gene.space = 0.25, gene.size = 2.4,
       lfc.col = lfc_colors, ribbon.col = ribbon_col,
-      border.size = 0.25, process.label = 10, limit = c(0, 0)
-    ))
-    dev.off()
+      border.size = 0.25, process.label = 7, limit = c(0, 0)
+    ) +
+      coord_fixed(clip = "off") +
+      guides(size = "none", shape = "none", fill = "none") +
+      labs(title = NULL, x = NULL, y = NULL) +
+      theme_wgbs_void(base_size = 8) +
+      theme(
+        legend.position = "none",
+        plot.margin = margin(6, 4, 6, 12, unit = "mm")
+      )
+    chord_legend <- make_goplot_legend_grob(process_cols, ribbon_col, lfc_colors)
+    chord_combined <- cowplot::plot_grid(
+      chord_plot, chord_legend, nrow = 1, rel_widths = c(3, 2)
+    )
+    ggsave(out_chord, plot = chord_combined, width = 14, height = 12,
+           device = cairo_pdf, coordinate_system = "none")
   }, error = function(e) message("GOChord error: ", e$message))
 
   # --- Cluster Plot ---
@@ -1230,25 +1236,57 @@ save_go_goplot_bundle <- function(goplot_inputs, out_chord, out_cluster, title_s
       parent = environment(GOCluster)
     )
 
-    cairo_pdf(out_cluster, width = 16, height = 10)
-    print(gocluster_fun(chord, terms_to_cluster) + labs(title = paste0("GO Cluster ", title_suffix)))
-    dev.off()
+    cluster_cols <- if(length(terms_to_cluster) <= length(ribbon_palette_seed)) {
+      ribbon_palette_seed[seq_along(terms_to_cluster)]
+    } else {
+      colorRampPalette(ribbon_palette_seed)(length(terms_to_cluster))
+    }
+    cluster_plot <- gocluster_fun(
+      chord, terms_to_cluster, lfc.col = lfc_colors, term.col = cluster_cols
+    ) +
+      guides(size = "none", shape = "none", fill = "none") +
+      labs(title = NULL, x = NULL, y = NULL) +
+      theme_wgbs_void(base_size = 8) +
+      theme(legend.position = "none")
+    cluster_legend <- make_goplot_legend_grob(terms_to_cluster, cluster_cols, lfc_colors)
+    cluster_combined <- cowplot::plot_grid(
+      cluster_plot, cluster_legend, nrow = 1, rel_widths = c(3, 2)
+    )
+    ggsave(out_cluster, plot = cluster_combined, width = 14, height = 12,
+           device = cairo_pdf, coordinate_system = "none")
   }, error = function(e) message("GOCluster error: ", e$message))
 }
 
-append_context_column <- function(df, context_col = NULL, context_name = NULL) {
+standardize_enrichment_table <- function(df, analysis_method, gene_set_source,
+                                         ontology = NA_character_, context_type = "analysis",
+                                         context = NA_character_) {
+  if(is.null(df) || nrow(df) == 0) return(tibble())
   df <- as_tibble(df)
-  if(!is.null(context_col) && !is.null(context_name) && nzchar(context_col)) {
-    df[[context_col]] <- context_name
+  p_mask <- if("pvalue" %in% colnames(df)) {
+    !is.na(df$pvalue) & df$pvalue < config$enrichment_p_threshold
+  } else {
+    rep(NA, nrow(df))
   }
-  df
-}
-
-write_enrichment_table <- function(df, path, context_col = NULL, context_name = NULL) {
-  df <- append_context_column(df, context_col = context_col, context_name = context_name)
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  write_csv(df, path)
-  invisible(df)
+  adjust_mask <- if("p.adjust" %in% colnames(df)) {
+    !is.na(df$p.adjust) & df$p.adjust < config$enrichment_adjust_threshold
+  } else {
+    rep(NA, nrow(df))
+  }
+  selected_mask <- if(config$significance_mode == "padj") adjust_mask else p_mask
+  df %>%
+    mutate(
+      analysis_method = analysis_method,
+      gene_set_source = gene_set_source,
+      ontology = ontology,
+      context_type = context_type,
+      context = context,
+      significance_mode = config$significance_mode,
+      p_threshold = config$enrichment_p_threshold,
+      adjust_threshold = config$enrichment_adjust_threshold,
+      is_p_lt_threshold = p_mask,
+      is_adjust_lt_threshold = adjust_mask,
+      is_selected_significant = selected_mask
+    )
 }
 
 enrichment_context_slug <- function(context_name) {
@@ -1290,19 +1328,18 @@ prepare_enrichment_gene_input <- function(df, gene_col = "gene_id_clean", score_
   list(gene_df = gene_df_final, geneList = geneList, sig_genes = sig_genes)
 }
 
-filter_enrichment_object <- function(enrich_obj, p_threshold = config$enrichment_p_threshold) {
+filter_enrichment_object <- function(enrich_obj) {
   if(is.null(enrich_obj) || nrow(as.data.frame(enrich_obj)) == 0) return(NULL)
-  sig_df <- as.data.frame(enrich_obj) %>% filter(!is.na(pvalue), pvalue < p_threshold)
-  sig_df <- as.data.frame(sig_df)
+  sig_df <- filter_selected_significance(
+    as.data.frame(enrich_obj), domain = "enrichment", context = "enrichment result"
+  )
   enrich_obj@result <- sig_df
   enrich_obj
 }
 
-run_kegg_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir, table_dir,
-                                file_prefix = "", context_col = NULL,
-                                p_threshold = config$enrichment_p_threshold) {
+run_kegg_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir,
+                                file_prefix = "", context_type = "analysis") {
   safe_context <- enrichment_context_slug(context_name)
-  out_prefix <- file.path(table_dir, paste0(file_prefix, "kegg_", safe_context))
   ekegg <- tryCatch(
     enrichKEGG(gene = sig_genes, organism = "mmu", pvalueCutoff = 1, qvalueCutoff = 1),
     error = function(e) {
@@ -1313,13 +1350,16 @@ run_kegg_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir, tab
   if(is.null(ekegg) || nrow(as.data.frame(ekegg)) == 0) return(NULL)
 
   ekegg <- tryCatch(setReadable(ekegg, OrgDb = org.Mm.eg.db, keyType = "ENTREZID"), error = function(e) ekegg)
-  write_enrichment_table(as.data.frame(ekegg), paste0(out_prefix, ".csv"),
-                         context_col = context_col, context_name = context_name)
-
-  ekegg_sig <- filter_enrichment_object(ekegg, p_threshold = p_threshold)
-  if(is.null(ekegg_sig) || nrow(as.data.frame(ekegg_sig)) == 0) return(NULL)
-  write_enrichment_table(as.data.frame(ekegg_sig), paste0(out_prefix, "_p_lt_0_05.csv"),
-                         context_col = context_col, context_name = context_name)
+  all_df <- standardize_enrichment_table(
+    as.data.frame(ekegg), "ORA", "KEGG", NA_character_, context_type, context_name
+  )
+  ekegg_sig <- filter_enrichment_object(ekegg)
+  if(is.null(ekegg_sig) || nrow(as.data.frame(ekegg_sig)) == 0) {
+    return(list(all = all_df, sig = tibble(), sig_obj = NULL))
+  }
+  sig_df <- standardize_enrichment_table(
+    as.data.frame(ekegg_sig), "ORA", "KEGG", NA_character_, context_type, context_name
+  )
 
   save_ora_barplot(as.data.frame(ekegg_sig), file.path(plot_dir, paste0(file_prefix, "kegg_", safe_context, "_barplot.pdf")),
                    paste("KEGG", context_name), top_n = config$enrichment_top_n_kegg)
@@ -1328,17 +1368,15 @@ run_kegg_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir, tab
   save_enrichment_cnetplot(ekegg_sig, geneList,
                            file.path(plot_dir, paste0(file_prefix, "kegg_", safe_context, "_cnetplot.pdf")),
                            paste("KEGG", context_name), showCategory = config$enrichment_cnet_show_category)
-  ekegg_sig
+  list(all = all_df, sig = sig_df, sig_obj = ekegg_sig)
 }
 
-run_go_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir, table_dir,
-                              ont = c("BP", "MF", "CC", "ALL"), file_prefix = "",
-                              context_col = NULL, p_threshold = config$enrichment_p_threshold,
-                              theme_regex = NULL, theme_label = "theme") {
+run_go_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir,
+                              ont = c("BP", "MF", "CC"), file_prefix = "",
+                              context_type = "analysis") {
   ont <- match.arg(ont)
   safe_context <- enrichment_context_slug(context_name)
   ont_lower <- tolower(ont)
-  out_prefix <- file.path(table_dir, paste0(file_prefix, "go_", ont_lower, "_", safe_context))
   go_obj <- tryCatch(
     enrichGO(gene = sig_genes, OrgDb = org.Mm.eg.db, keyType = "ENTREZID",
              ont = ont, pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE),
@@ -1349,19 +1387,16 @@ run_go_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir, table
   )
   if(is.null(go_obj) || nrow(as.data.frame(go_obj)) == 0) return(NULL)
 
-  write_enrichment_table(as.data.frame(go_obj), paste0(out_prefix, ".csv"),
-                         context_col = context_col, context_name = context_name)
-
-  go_sig <- filter_enrichment_object(go_obj, p_threshold = p_threshold)
-  if(is.null(go_sig) || nrow(as.data.frame(go_sig)) == 0) return(NULL)
-  go_sig_df <- write_enrichment_table(as.data.frame(go_sig), paste0(out_prefix, "_p_lt_0_05.csv"),
-                                      context_col = context_col, context_name = context_name)
-
-  if(!is.null(theme_regex) && nzchar(theme_regex) && "Description" %in% colnames(go_sig_df)) {
-    theme_df <- go_sig_df %>%
-      filter(grepl(theme_regex, Description, ignore.case = TRUE))
-    write_csv(theme_df, paste0(out_prefix, "_", theme_label, "_p_lt_0_05.csv"))
+  all_df <- standardize_enrichment_table(
+    as.data.frame(go_obj), "ORA", "GO", ont, context_type, context_name
+  )
+  go_sig <- filter_enrichment_object(go_obj)
+  if(is.null(go_sig) || nrow(as.data.frame(go_sig)) == 0) {
+    return(list(all = all_df, sig = tibble(), sig_obj = NULL))
   }
+  go_sig_df <- standardize_enrichment_table(
+    as.data.frame(go_sig), "ORA", "GO", ont, context_type, context_name
+  )
 
   if(ont %in% c("BP", "MF", "CC")) {
     tryCatch(
@@ -1388,7 +1423,7 @@ run_go_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir, table
       error = function(e) message("GO BP cnetplot skipped in ", context_name, ": ", e$message)
     )
   }
-  if(ont %in% c("BP", "ALL")) {
+  if(ont == "BP") {
     tryCatch(
       {
         gp_inputs <- build_goplot_inputs(as.data.frame(go_sig), geneList, category_label = ont, top_n = config$enrichment_goplot_top_n)
@@ -1403,13 +1438,11 @@ run_go_ora_bundle <- function(sig_genes, geneList, context_name, plot_dir, table
     )
   }
 
-  go_sig
+  list(all = all_df, sig = go_sig_df, sig_obj = go_sig)
 }
 
 run_ora_enrichment_bundle <- function(input_df, context_name, plot_dir, table_dir,
-                                      file_prefix = "", context_col = NULL,
-                                      p_threshold = config$enrichment_p_threshold,
-                                      theme_regex = NULL, theme_label = "theme",
+                                      file_prefix = "", context_type = "analysis",
                                       filter_expr = NULL) {
   ensure_step_dirs(plot_dir, table_dir)
   if(!is.null(filter_expr)) {
@@ -1423,20 +1456,14 @@ run_ora_enrichment_bundle <- function(input_df, context_name, plot_dir, table_di
 
   list(
     gene_df = gene_input$gene_df,
-    kegg = run_kegg_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
-                               file_prefix = file_prefix, context_col = context_col, p_threshold = p_threshold),
-    go_bp = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
-                              ont = "BP", file_prefix = file_prefix, context_col = context_col,
-                              p_threshold = p_threshold, theme_regex = theme_regex, theme_label = theme_label),
-    go_mf = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
-                              ont = "MF", file_prefix = file_prefix, context_col = context_col,
-                              p_threshold = p_threshold, theme_regex = theme_regex, theme_label = theme_label),
-    go_cc = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
-                              ont = "CC", file_prefix = file_prefix, context_col = context_col,
-                              p_threshold = p_threshold, theme_regex = theme_regex, theme_label = theme_label),
-    go_all = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir, table_dir,
-                               ont = "ALL", file_prefix = file_prefix, context_col = context_col,
-                               p_threshold = p_threshold, theme_regex = theme_regex, theme_label = theme_label)
+    kegg = run_kegg_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir,
+                               file_prefix = file_prefix, context_type = context_type),
+    go_bp = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir,
+                              ont = "BP", file_prefix = file_prefix, context_type = context_type),
+    go_mf = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir,
+                              ont = "MF", file_prefix = file_prefix, context_type = context_type),
+    go_cc = run_go_ora_bundle(gene_input$sig_genes, gene_input$geneList, context_name, plot_dir,
+                              ont = "CC", file_prefix = file_prefix, context_type = context_type)
   )
 }
 
@@ -1444,18 +1471,19 @@ run_ora_enrichment_bundle <- function(input_df, context_name, plot_dir, table_di
 save_gsea_dotplot <- function(gsea_obj, primary, title_prefix, showCategory = 15) {
   if (is.null(gsea_obj) || nrow(as.data.frame(gsea_obj)) == 0) return(invisible(NULL))
   gsea_df <- as.data.frame(gsea_obj)
-  if (!"pvalue" %in% colnames(gsea_df)) return(invisible(NULL))
+  sig_col <- significance_spec("enrichment")$column
+  if (!sig_col %in% colnames(gsea_df)) return(invisible(NULL))
 
-  gsea_df <- gsea_df %>% arrange(pvalue, desc(abs(NES))) %>% slice_head(n = min(showCategory, nrow(gsea_df)))
+  gsea_df <- gsea_df %>% arrange(.data[[sig_col]], desc(abs(NES))) %>% slice_head(n = min(showCategory, nrow(gsea_df)))
   if (nrow(gsea_df) == 0) return(invisible(NULL))
 
   gsea_df$Description <- factor(gsea_df$Description, levels = rev(unique(gsea_df$Description)))
-  gsea_df$neg_log10_p <- -log10(gsea_df$pvalue + 1e-300)
+  gsea_df$neg_log10_significance <- -log10(gsea_df[[sig_col]] + 1e-300)
 
-  p <- ggplot(gsea_df, aes(x = NES, y = Description, size = abs(NES), color = neg_log10_p)) +
+  p <- ggplot(gsea_df, aes(x = NES, y = Description, size = abs(NES), color = neg_log10_significance)) +
     geom_point(alpha = 0.88) +
     scale_color_wgbs_ryb() +
-    labs(title = title_prefix, x = "NES", y = NULL, size = "|NES|", color = "-log10(PValue)") +
+    labs(title = title_prefix, x = "NES", y = NULL, size = "|NES|", color = paste0("-log10(", config$significance_mode, ")")) +
     theme_wgbs_bw(base_size = 10)
 
   ggsave(primary, plot = p, width = 10, height = 8, device = cairo_pdf)
@@ -1468,10 +1496,31 @@ assign_sample_ids_to_obj <- function(obj_list, sample_ids) {
       length(obj_list), " vs ", length(sample_ids)
     )
   }
-  for(i in seq_along(obj_list)) {
-    obj_list[[i]]@sample.id <- sample_ids[i]
+  existing_ids <- vapply(
+    obj_list,
+    function(x) first_nonempty(as.character(x@sample.id), ""),
+    character(1)
+  )
+  if(any(!nzchar(existing_ids)) || anyDuplicated(existing_ids)) {
+    stop("CpG.RData 内 sample.id 为空或重复，禁止按位置覆盖；请重新生成带正确 sample.id 的对象")
   }
-  obj_list
+  if(!setequal(existing_ids, sample_ids)) {
+    stop(
+      "CpG.RData sample.id 与 reads_info 不一致。RData: ",
+      paste(existing_ids, collapse = ", "),
+      "；reads_info: ", paste(sample_ids, collapse = ", ")
+    )
+  }
+  sample_order <- match(sample_ids, existing_ids)
+  # methylRawList 继承自 list，但直接使用 `[` 会降级成普通 list，
+  # 导致后续 methylKit::unite() 无法分派。分别重排 S4 对象的数据和 treatment 槽以保留类型。
+  reordered_obj <- obj_list
+  reordered_obj@.Data <- obj_list@.Data[sample_order]
+  reordered_obj@treatment <- obj_list@treatment[sample_order]
+  expected_treatment <- as.integer(sample_table$group[match(sample_ids, sample_table$sample)] == config$comparison_group)
+  if(!identical(as.integer(reordered_obj@treatment), expected_treatment)) stop("STALE CpG.RData treatment 与当前显式方向不一致；重建上游 step 12")
+  methods::validObject(reordered_obj)
+  reordered_obj
 }
 
 standardize_dmr_result_columns <- function(dmr_df) {
@@ -1491,15 +1540,11 @@ standardize_dmr_result_columns <- function(dmr_df) {
     dmr_df$meanMethy_group2 <- if(!is.na(source_col)) dmr_df[[source_col]] else NA_real_
   }
 
-  if(!("group1_label" %in% colnames(dmr_df))) {
-    dmr_df$group1_label <- config$group1_name
-  } else {
-    dmr_df$group1_label[is.na(dmr_df$group1_label) | dmr_df$group1_label == ""] <- config$group1_name
-  }
-  if(!("group2_label" %in% colnames(dmr_df))) {
-    dmr_df$group2_label <- config$group2_name
-  } else {
-    dmr_df$group2_label[is.na(dmr_df$group2_label) | dmr_df$group2_label == ""] <- config$group2_name
+  if(!all(c("group1_label", "group2_label") %in% names(dmr_df))) stop("UNVERIFIED DMR 方向标签缺失")
+  if(nrow(dmr_df) > 0 && (anyNA(dmr_df$group1_label) || anyNA(dmr_df$group2_label) ||
+      !identical(unique(as.character(dmr_df$group1_label)), config$group1_name) ||
+      !identical(unique(as.character(dmr_df$group2_label)), config$group2_name))) {
+    stop("STALE DMR 方向标签不匹配当前 comparison-reference")
   }
 
   if("diff.Methy" %in% colnames(dmr_df)) {
@@ -1523,6 +1568,7 @@ read_expr_results <- function(file) {
   if(length(missing_cols) > 0) {
     stop("RNA-seq 结果缺少必要列: ", paste(missing_cols, collapse = ", "), call. = FALSE)
   }
+  if(anyNA(expr_df$sampleA) || anyNA(expr_df$sampleB)) stop("RNA DE 方向标签不能包含 NA")
   if(all(c("sampleA", "sampleB") %in% colnames(expr_df)) &&
      !is.null(config$group1_name) && !is.null(config$group2_name)) {
     rna_sample_a <- unique(na.omit(as.character(expr_df$sampleA)))
@@ -1543,10 +1589,10 @@ read_expr_results <- function(file) {
       }
       expr_df$rna_contrast <- paste(rna_sample_a, rna_sample_b, sep = "_vs_")
     } else {
-      warning("RNA-seq 文件 sampleA/sampleB 不唯一，无法自动验证 log2FoldChange 对比方向。", call. = FALSE)
+      stop("RNA-seq 文件 sampleA/sampleB 不唯一，无法自动验证 log2FoldChange 对比方向。", call. = FALSE)
     }
   } else {
-    warning("RNA-seq 文件缺少 sampleA/sampleB，无法自动验证 log2FoldChange 对比方向。", call. = FALSE)
+    stop("RNA-seq 文件缺少 sampleA/sampleB，无法自动验证 log2FoldChange 对比方向。", call. = FALSE)
   }
   if(!("gene_id_clean" %in% colnames(expr_df))) {
     if("gene_id" %in% colnames(expr_df)) {
@@ -1894,7 +1940,9 @@ ensure_dmr_outputs_loaded <- function() {
       stop("❌ DMR 注释文件未找到: ", dmr_anno_file)
     }
     message("⏳ 按需恢复 dmr_anno_df: ", dmr_anno_file)
-    assign('dmr_anno_df', standardize_dmr_result_columns(read_csv(dmr_anno_file, show_col_types = FALSE)), envir = .GlobalEnv)
+    cached_dmr <- read_csv(dmr_anno_file, show_col_types = FALSE)
+    if(!all(c("group1_label", "group2_label") %in% names(cached_dmr))) stop("UNVERIFIED DMR 缺少原始方向标签；请重新运行 step 3")
+    assign('dmr_anno_df', standardize_dmr_result_columns(cached_dmr), envir = .GlobalEnv)
   }
 
   if(!exists('dmrs', envir = .GlobalEnv, inherits = FALSE)) {
@@ -1912,6 +1960,18 @@ ensure_dmr_outputs_loaded <- function() {
     }
     if(!('annotation_simple' %in% colnames(dmr_df)) && 'annotation' %in% colnames(dmr_df)) {
       dmr_df$annotation_simple <- normalize_feature_label(dmr_df$annotation)
+    }
+    if(all(c('group1_label', 'group2_label') %in% colnames(dmr_df))) {
+      cached_group1 <- unique(na.omit(as.character(dmr_df$group1_label)))
+      cached_group2 <- unique(na.omit(as.character(dmr_df$group2_label)))
+      if(length(cached_group1) != 1L || length(cached_group2) != 1L ||
+         cached_group1 != config$group1_name || cached_group2 != config$group2_name) {
+        stop(
+          "缓存 DMR 的对比方向与当前 reads_info/config 不一致；请重新运行 Step 3。缓存: ",
+          paste(cached_group1, collapse = ","), " -> ", paste(cached_group2, collapse = ","),
+          "；当前: ", config$group1_name, " -> ", config$group2_name
+        )
+      }
     }
     assign('dmr_anno_df', dmr_df, envir = .GlobalEnv)
   }
@@ -1941,6 +2001,79 @@ ensure_dmr_outputs_loaded <- function() {
     dmr_gr = if(exists('dmr_gr', envir = .GlobalEnv, inherits = FALSE)) get('dmr_gr', envir = .GlobalEnv) else NULL
   ))
 }
+
+ensure_expr_loaded <- function(required = FALSE) {
+  if(!exists('expr_df', envir = .GlobalEnv, inherits = FALSE)) {
+    if(!file.exists(config$rna_seq_file)) {
+      if(required) stop("RNA-seq 结果文件未找到: ", config$rna_seq_file)
+      return(invisible(NULL))
+    }
+    message("⏳ 按需恢复 RNA-seq 结果: ", config$rna_seq_file)
+    assign('expr_df', read_expr_results(config$rna_seq_file), envir = .GlobalEnv)
+  }
+  expr_df <- get('expr_df', envir = .GlobalEnv)
+  significance_spec_rna <- significance_spec("rna")
+  if(!significance_spec_rna$column %in% colnames(expr_df)) {
+    stop(
+      "RNA-seq 结果缺少 ", significance_spec_rna$column,
+      "，无法使用 WGBS_SIGNIFICANCE_MODE=", config$significance_mode
+    )
+  }
+  invisible(expr_df)
+}
+
+ensure_gene_centric_loaded <- function(required = FALSE) {
+  if(!exists('gene_centric_long', envir = .GlobalEnv, inherits = FALSE)) {
+    gene_centric_file <- file.path(config$work_dir, "result/8_multiomics/tables/1/gene_centric_long.csv")
+    if(!file.exists(gene_centric_file)) {
+      if(required) stop("gene-centric 结果未找到: ", gene_centric_file, "；请先运行 Step 8")
+      return(invisible(NULL))
+    }
+    message("⏳ 按需恢复 gene_centric_long: ", gene_centric_file)
+    assign('gene_centric_long', read_csv(gene_centric_file, show_col_types = FALSE), envir = .GlobalEnv)
+  }
+  invisible(get('gene_centric_long', envir = .GlobalEnv))
+}
+
+ensure_dmr_cgi_context <- function(required = FALSE, persist = TRUE) {
+  ensure_dmr_outputs_loaded()
+  dmr_df <- get('dmr_anno_df', envir = .GlobalEnv)
+  if('CGI_context' %in% colnames(dmr_df) && all(!is.na(dmr_df$CGI_context)) &&
+     all(nzchar(as.character(dmr_df$CGI_context)))) {
+    cgi_resources <- get_cgi_context_resources(
+      config, target_gr = get('dmr_gr', envir = .GlobalEnv), required = FALSE
+    )
+    if(!is.null(cgi_resources)) {
+      assign('gr_all_cgi_context', cgi_resources$gr_all_cgi_context, envir = .GlobalEnv)
+    }
+    return(invisible(TRUE))
+  }
+  dmr_gr_local <- get('dmr_gr', envir = .GlobalEnv)
+  cgi_resources <- get_cgi_context_resources(config, target_gr = dmr_gr_local, required = required)
+  if(is.null(cgi_resources)) return(invisible(FALSE))
+
+  hits <- findOverlaps(dmr_gr_local, cgi_resources$gr_all_cgi_context, ignore.strand = TRUE)
+  cgi_map <- tibble(
+    DMR_id = mcols(dmr_gr_local)$DMR_id[queryHits(hits)],
+    CGI_context = as.character(mcols(cgi_resources$gr_all_cgi_context)$context[subjectHits(hits)])
+  ) %>%
+    distinct(DMR_id, CGI_context) %>%
+    group_by(DMR_id) %>%
+    summarise(CGI_context = first(CGI_context), .groups = "drop")
+
+  dmr_df <- dmr_df %>%
+    select(-any_of("CGI_context")) %>%
+    left_join(cgi_map, by = "DMR_id") %>%
+    mutate(CGI_context = replace_na(CGI_context, "Open_Sea"))
+  mcols(dmr_gr_local)$CGI_context <- dmr_df$CGI_context[match(mcols(dmr_gr_local)$DMR_id, dmr_df$DMR_id)]
+  assign('dmr_anno_df', dmr_df, envir = .GlobalEnv)
+  assign('dmr_gr', dmr_gr_local, envir = .GlobalEnv)
+  assign('gr_all_cgi_context', cgi_resources$gr_all_cgi_context, envir = .GlobalEnv)
+  if(persist) {
+    write_csv(dmr_df, file.path(config$work_dir, "result/3_dmr/tables/2/dmr_annotated.csv"))
+  }
+  invisible(TRUE)
+}
 ```
 
 
@@ -1951,9 +2084,32 @@ ensure_dmr_outputs_loaded <- function() {
 sample_table <- read_reads_info(reads_info_path, root_dir = config$work_dir)
 sample_ids <- sample_table$sample
 group_levels <- unique(sample_table$group)
+stage_levels <- unique(sample_table$stage[nzchar(sample_table$stage)])
+if(length(stage_levels) != 1L) {
+  stop("reads_info.txt 必须对应唯一 stage，当前得到: ", paste(stage_levels, collapse = ", "))
+}
+config$stage <- stage_levels[[1]]
 
-config$group1_name <- group_levels[[1]]
-config$group2_name <- group_levels[[2]]
+has_reference <- nzchar(config$reference_group)
+has_comparison <- nzchar(config$comparison_group)
+if(xor(has_reference, has_comparison)) {
+  stop("WGBS_REFERENCE_GROUP 与 WGBS_COMPARISON_GROUP 必须同时设置")
+}
+if(has_reference) {
+  requested_groups <- c(config$reference_group, config$comparison_group)
+  if(anyDuplicated(requested_groups) || !setequal(requested_groups, group_levels)) {
+    stop(
+      "显式对比分组与 reads_info 不一致。配置: ", paste(requested_groups, collapse = " -> "),
+      "；reads_info: ", paste(group_levels, collapse = ", ")
+    )
+  }
+  config$group1_name <- config$reference_group
+  config$group2_name <- config$comparison_group
+  contrast_source <- "environment"
+} else {
+  stop("必须在 project.env 显式设置 reference 和 comparison")
+}
+
 config$group1_idx <- which(sample_table$group == config$group1_name)
 config$group2_idx <- which(sample_table$group == config$group2_name)
 
@@ -1963,7 +2119,10 @@ group_diff_axis_label <- paste0("Methylation Difference (", group_diff_label, ")
 message(
   "✅ 读取 reads_info 完成: ",
   length(sample_ids), " 个样本，分组顺序 ",
-  config$group1_name, " -> ", config$group2_name
+  config$group1_name, " -> ", config$group2_name,
+  "；stage=", config$stage,
+  "；significance=", config$significance_mode,
+  "；contrast source=", contrast_source
 )
 ```
 
@@ -2073,14 +2232,14 @@ viz_pal <- list(
 )
 
 viz_style <- list(
-  base_size = 13,
-  axis_text = 11,
-  axis_title = 12.5,
-  title = 14.5,
-  subtitle = 12,
-  legend_title = 11,
-  legend_text = 10,
-  strip_text = 11,
+  base_size = wgbs_figure_base_size,
+  axis_text = wgbs_figure_tick_size,
+  axis_title = wgbs_figure_base_size,
+  title = wgbs_figure_base_size,
+  subtitle = wgbs_figure_tick_size,
+  legend_title = wgbs_figure_base_size,
+  legend_text = wgbs_figure_tick_size,
+  strip_text = wgbs_figure_base_size,
   point_sm = 0.8,
   point_md = 1.2,
   point_lg = 2.6,
@@ -2089,57 +2248,29 @@ viz_style <- list(
 )
 
 theme_wgbs_classic <- function(base_size = viz_style$base_size, legend = "right") {
-  theme_classic(base_size = base_size) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral_dark),
-      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral_dark),
-      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral_dark),
-      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral_dark),
-      strip.background = element_rect(fill = viz_pal$neutral_light, color = NA),
-      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral_dark),
-      legend.position = legend,
-      legend.title = element_text(size = base_size * 0.85, face = "bold"),
-      legend.text = element_text(size = base_size * 0.78),
-      plot.margin = margin(8, 10, 8, 8)
-    )
+  wgbs_publication_theme(legend = legend)
 }
 
 theme_wgbs_minimal <- function(base_size = viz_style$base_size, legend = "right") {
-  theme_minimal(base_size = base_size) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral_dark),
-      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral_dark),
-      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral_dark),
-      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral_dark),
-      panel.grid.major = element_line(color = alpha(viz_pal$neutral_mid, 0.45), linewidth = 0.35),
-      panel.grid.minor = element_blank(),
-      strip.background = element_rect(fill = viz_pal$neutral_light, color = NA),
-      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral_dark),
-      legend.position = legend,
-      legend.title = element_text(size = base_size * 0.85, face = "bold"),
-      legend.text = element_text(size = base_size * 0.78),
-      plot.margin = margin(8, 10, 8, 8)
-    )
+  wgbs_publication_theme(legend = legend)
 }
 
 theme_wgbs_bw <- function(base_size = viz_style$base_size, legend = "right") {
-  theme_bw(base_size = base_size) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral_dark),
-      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral_dark),
-      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral_dark),
-      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral_dark),
-      panel.grid.major = element_line(color = alpha(viz_pal$neutral_mid, 0.45), linewidth = 0.35),
-      panel.grid.minor = element_blank(),
-      panel.border = element_rect(color = alpha(viz_pal$neutral_dark, 0.35), linewidth = 0.5),
-      strip.background = element_rect(fill = viz_pal$neutral_light, color = NA),
-      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral_dark),
-      legend.position = legend,
-      legend.title = element_text(size = base_size * 0.85, face = "bold"),
-      legend.text = element_text(size = base_size * 0.78),
-      plot.margin = margin(8, 10, 8, 8)
-    )
+  wgbs_publication_theme(legend = legend)
 }
+
+theme_wgbs_void <- function(base_size = viz_style$base_size, legend = "right") {
+  wgbs_publication_void_theme(legend = legend)
+}
+
+ComplexHeatmap::ht_opt(
+  heatmap_row_names_gp = grid::gpar(fontfamily = wgbs_figure_font_family, fontsize = wgbs_figure_tick_size),
+  heatmap_column_names_gp = grid::gpar(fontfamily = wgbs_figure_font_family, fontsize = wgbs_figure_tick_size),
+  heatmap_row_title_gp = grid::gpar(fontfamily = wgbs_figure_font_family, fontsize = wgbs_figure_base_size),
+  heatmap_column_title_gp = grid::gpar(fontfamily = wgbs_figure_font_family, fontsize = wgbs_figure_base_size),
+  legend_title_gp = grid::gpar(fontfamily = wgbs_figure_font_family, fontsize = wgbs_figure_base_size, fontface = "bold"),
+  legend_labels_gp = grid::gpar(fontfamily = wgbs_figure_font_family, fontsize = wgbs_figure_tick_size)
+)
 
 heatmap_diverging_col_fun <- function(x = NULL, midpoint = 0, breaks = NULL, colors = unname(viz_pal$heatmap_diverging)) {
   if(!is.null(breaks)) {

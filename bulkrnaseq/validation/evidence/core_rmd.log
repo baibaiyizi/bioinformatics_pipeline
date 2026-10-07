@@ -1,0 +1,17 @@
+[run] module 1 01_main_setup.R
+工作目录设置为: /tmp/bulk template smoke 5tnnzid_/project 
+
+[run] module 2 02_selection.Rmd
+工作目录设置为: /tmp/bulk template smoke 5tnnzid_/project 
+
+[run] module 3 03_qc.Rmd
+工作目录设置为: /tmp/bulk template smoke 5tnnzid_/project 
+
+[run] module 4 04_pca.Rmd
+工作目录设置为: /tmp/bulk template smoke 5tnnzid_/project 
+
+[run] module 5 05_de.Rmd
+工作目录设置为: /tmp/bulk template smoke 5tnnzid_/project 
+
+Result report written: /tmp/bulk template smoke 5tnnzid_/project/result/index.html
+Report inventory: figures=17, tables=10, modules=6

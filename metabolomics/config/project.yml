@@ -1,0 +1,50 @@
+project_name: LCMS_template
+sample_info_file: config/samples.tsv
+case_group: treated
+control_group: control
+qc_group: QC
+input:
+  mode: peak_table
+  filled_table: inputs/filled.csv
+  detected_table: ""
+  feature_table: inputs/features.csv
+  mzml_manifest: config/mzml.tsv
+raw_dir: inputs
+mzml_dir: inputs
+peak_dir: peak_tables
+result_dir: result
+pipeline:
+  default_qc_role: unverified
+  default_qc_filter: "off"
+  default_drift_correction: none
+  default_normalization: median
+  default_run_order_adjustment: "off"
+  default_significance: nominal
+  default_company_comparison: "off"
+filter:
+  min_group_detection_rate: 0.8
+  qc_rsd_cutoff: 0.3
+  fold_change_cutoff: 1.5
+  p_cutoff: 0.05
+  fdr_cutoff: 0.05
+annotation:
+  table: ""
+  mz_tolerance_ppm: 15
+  rt_tolerance_seconds: 2
+  match_ambiguity_delta: 0.05
+external_statistics_table: ""
+company_comparison_direction: unverified
+pathway:
+  quantitative_table: ""
+pathway_enrichment_file: ""
+pathway_membership_file: ""
+xcms:
+  workers: 4
+  ppm: 15
+  peakwidth: [5, 40]
+  snthresh: 10
+  prefilter: [3, 100]
+  mzdiff: -0.001
+  group_bw: 5
+  group_min_fraction: 0.5
+  retention_correction: obiwarp

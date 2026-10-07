@@ -1,0 +1,22 @@
+# Tissue-specific choices only; merge consciously into a copied core config.
+# These do not establish biological replication or activate reference mapping.
+statistics:
+  case: PFOS
+  control: WT
+  inference_enabled: false
+preprocessing:
+  exclude_hvg_genes: [Ins1, Ins2, Gcg, Sst, Ppy, Iapp, Ghrl]
+markers: examples/islet/markers_flat.yml
+reference_examples:
+  mia_atlas: reference/GSE211799_adata_atlas.h5ad
+  mia_label_key: cell_type_integrated_v2
+  reference_mapping_execution: not_run
+focal_genes: [Mpc1, Mpc2, Atg7]
+condition_colors:
+  PFOS: '#b23a48'
+  WT: '#314e86'
+extensions:
+  velocity: false
+  communication: false
+  grn: false
+  beta_cell: false

@@ -209,7 +209,75 @@ if(exists("dmrs") && nrow(dmrs) > 0) {
   ggsave(file.path(dmr_overview_plot_dir, "dmr_burden_combined.pdf"), p_chr_combo, width = 11, height = 14, device = cairo_pdf)
 }
 
-# 6 补充 DMR 可视化与 Promoter GSEA
+# 6 染色体级平均甲基化差异
+# 从 CpG 层面先按样本、再按组聚合；差异单位为 percentage points。
+chromosome_methylation_diff <- tryCatch({
+  ensure_obj_cpg_loaded()
+  if(!exists("meth_raw_dt", inherits = FALSE)) {
+    meth_raw_dt <- build_sample_methylation_dt(obj.cpg, sample_ids, config)
+  }
+  chr_meth_by_sample <- meth_raw_dt %>%
+    mutate(chr_clean = strip_chr_prefix(chr)) %>%
+    filter(chr_clean %in% as.character(1:19) | chr_clean %in% c("X", "Y")) %>%
+    mutate(chr = paste0("chr", chr_clean)) %>%
+    group_by(Sample, Group, chr) %>%
+    summarise(mean_methylation_pct = mean(Methylation, na.rm = TRUE), .groups = "drop")
+
+  chr_meth_diff <- chr_meth_by_sample %>%
+    group_by(Group, chr) %>%
+    summarise(group_mean_methylation_pct = mean(mean_methylation_pct, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(names_from = Group, values_from = group_mean_methylation_pct, names_prefix = "Mean_")
+
+  group1_col <- paste0("Mean_", config$group1_name)
+  group2_col <- paste0("Mean_", config$group2_name)
+  if(!all(c(group1_col, group2_col) %in% colnames(chr_meth_diff))) {
+    stop("染色体甲基化汇总缺少当前两组列")
+  }
+  chr_meth_diff <- chr_meth_diff %>%
+    mutate(
+      diff_group2_minus_group1_percentage_points = .data[[group2_col]] - .data[[group1_col]],
+      direction = case_when(
+        diff_group2_minus_group1_percentage_points < 0 ~ "Lower in group2",
+        diff_group2_minus_group1_percentage_points > 0 ~ "Higher in group2",
+        TRUE ~ "No difference"
+      ),
+      chr = factor(chr, levels = mouse_main_chr_levels(TRUE))
+    ) %>%
+    arrange(chr) %>%
+    mutate(chr = as.character(chr))
+
+  write_csv(chr_meth_diff, file.path(dmr_overview_table_dir, "chromosome_methylation_difference.csv"))
+
+  p_chr_meth_diff <- ggplot(chr_meth_diff, aes(x = chr, y = diff_group2_minus_group1_percentage_points, fill = direction)) +
+    geom_col(width = 0.7) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.7)) +
+    scale_fill_manual(values = c(
+      "Lower in group2" = unname(viz_pal$dmr["Hypo"]),
+      "Higher in group2" = unname(viz_pal$dmr["Hyper"]),
+      "No difference" = unname(viz_pal$neutral_mid)
+    )) +
+    scale_x_discrete(labels = strip_chr_prefix(mouse_main_chr_levels(TRUE))) +
+    labs(
+      title = "Chromosome-level Methylation Difference",
+      x = "Chromosome",
+      y = paste0("Methylation difference (", group_diff_label, ", percentage points)"),
+      fill = ""
+    ) +
+    theme_wgbs_bw(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  ggsave(file.path(dmr_overview_plot_dir, "chromosome_methylation_difference.pdf"),
+         p_chr_meth_diff, width = 10, height = 5, device = cairo_pdf)
+  chr_meth_diff
+}, error = function(e) {
+  write_csv(
+    tibble(step = "chromosome_methylation_difference", status = "skipped", message = e$message),
+    file.path(dmr_overview_table_dir, "chromosome_methylation_difference_status.csv")
+  )
+  NULL
+})
+
+# 7 补充 DMR 可视化与 Promoter GSEA
 # 这组补充分析虽然更偏 supplementary，但逻辑上仍然属于 DMR overview 的延伸。
 # promoter-only GSEA 这里先做基因层汇总，再进行排序富集，避免同一基因重复计数。
 message("⏳ 在 Stage1 生成补充 DMR 可视化与 Promoter GSEA...")
@@ -320,54 +388,26 @@ if(nrow(promoter_dmrs) > 0) {
     geneList_meth <- sort(geneList_meth, decreasing = TRUE)
 
     if(length(geneList_meth) >= 10) {
-      gse_go_promoter <- tryCatch(
-        gseGO(
-          geneList = geneList_meth,
-          OrgDb = org.Mm.eg.db,
-          ont = "BP",
-          minGSSize = 10,
-          maxGSSize = 500,
-          pvalueCutoff = config$enrichment_p_threshold,
-          verbose = FALSE
-        ),
-        error = function(e) NULL
+      promoter_gsea <- build_gsea_plots(
+        rank_vec = geneList_meth,
+        prefix = file.path(supp_table_dir, "promoter"),
+        title_prefix = "Promoter-associated Methylation",
+        plot_prefix = file.path(supp_plot_dir, "promoter"),
+        context_type = "analysis",
+        context = "promoter_DMR_rank"
       )
-
-      if(!is.null(gse_go_promoter) && nrow(as.data.frame(gse_go_promoter)) > 0) {
-        write_csv(as.data.frame(gse_go_promoter), file.path(supp_table_dir, "promoter_gsea_go_bp.csv"))
-
-        p_gsea_go_dot <- dotplot(gse_go_promoter, showCategory = 10, split = ".sign") +
-          facet_grid(. ~ .sign) +
-          labs(title = "Promoter-associated GO BP GSEA")
-
-        ggsave(file.path(supp_plot_dir, "promoter_gsea_go_dotplot.pdf"),
-               p_gsea_go_dot, width = 10, height = 8, device = cairo_pdf)
-
-        p_gsea_go_top1 <- gseaplot2(gse_go_promoter, geneSetID = 1, title = gse_go_promoter$Description[1])
+      if(!is.null(promoter_gsea$tables)) {
+        write_csv(promoter_gsea$tables, file.path(supp_table_dir, "promoter_gsea_long.csv"))
+      }
+      promoter_go_sig <- filter_enrichment_object(promoter_gsea$go)
+      if(!is.null(promoter_go_sig) && nrow(as.data.frame(promoter_go_sig)) > 0) {
+        p_gsea_go_top1 <- gseaplot2(
+          promoter_go_sig,
+          geneSetID = 1,
+          title = promoter_go_sig$Description[1]
+        )
         ggsave(file.path(supp_plot_dir, "promoter_gsea_go_top1.pdf"),
                p_gsea_go_top1, width = 8, height = 6, device = cairo_pdf)
-      }
-
-      gse_kegg_promoter <- tryCatch(
-        gseKEGG(
-          geneList = geneList_meth,
-          organism = "mmu",
-          minGSSize = 10,
-          pvalueCutoff = config$enrichment_p_threshold,
-          verbose = FALSE
-        ),
-        error = function(e) NULL
-      )
-
-      if(!is.null(gse_kegg_promoter) && nrow(as.data.frame(gse_kegg_promoter)) > 0) {
-        write_csv(as.data.frame(gse_kegg_promoter), file.path(supp_table_dir, "promoter_gsea_kegg.csv"))
-
-        p_gsea_kegg_dot <- dotplot(gse_kegg_promoter, showCategory = 10, split = ".sign") +
-          facet_grid(. ~ .sign) +
-          labs(title = "Promoter-associated KEGG GSEA")
-
-        ggsave(file.path(supp_plot_dir, "promoter_gsea_kegg_dotplot.pdf"),
-               p_gsea_kegg_dot, width = 10, height = 8, device = cairo_pdf)
       }
     }
   }

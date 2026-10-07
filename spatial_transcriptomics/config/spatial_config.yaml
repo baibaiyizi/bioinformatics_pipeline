@@ -57,7 +57,7 @@ normalization:
   n_pcs: 50
 
 integration:
-  method: harmony_if_available
+  method: none
   n_neighbors: 15
   leiden_resolution: 0.8
   umap_min_dist: 0.3
@@ -104,9 +104,6 @@ programs:
   method: nmf
   n_components: 12
   top_genes_per_program: 50
-  de_primary_pvalue: pvalue
-  de_pvalue_threshold: 0.05
-  de_logfc_threshold: 0.25
 
 communication:
   cluster_key: cell_type_pred

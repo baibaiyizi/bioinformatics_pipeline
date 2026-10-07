@@ -1,0 +1,60 @@
+R version 4.5.1 (2025-06-13)
+Platform: x86_64-conda-linux-gnu
+Running under: Ubuntu 22.04.5 LTS
+
+Matrix products: default
+BLAS/LAPACK: /home/h1028/miniconda3/lib/libopenblasp-r0.3.30.so;  LAPACK version 3.12.0
+
+locale:
+ [1] LC_CTYPE=C.UTF-8       LC_NUMERIC=C           LC_TIME=C.UTF-8       
+ [4] LC_COLLATE=C.UTF-8     LC_MONETARY=C.UTF-8    LC_MESSAGES=C.UTF-8   
+ [7] LC_PAPER=C.UTF-8       LC_NAME=C              LC_ADDRESS=C          
+[10] LC_TELEPHONE=C         LC_MEASUREMENT=C.UTF-8 LC_IDENTIFICATION=C   
+
+time zone: Asia/Shanghai
+tzcode source: system (glibc)
+
+attached base packages:
+[1] grid      stats4    stats     graphics  grDevices utils     datasets 
+[8] methods   base     
+
+other attached packages:
+ [1] DESeq2_1.50.2               SummarizedExperiment_1.40.0
+ [3] MatrixGenerics_1.22.0       matrixStats_1.5.0          
+ [5] GenomicRanges_1.62.1        Seqinfo_1.0.0              
+ [7] ComplexHeatmap_2.26.1       edgeR_4.8.2                
+ [9] limma_3.66.0                org.Mm.eg.db_3.22.0        
+[11] AnnotationDbi_1.72.0        IRanges_2.44.0             
+[13] S4Vectors_0.48.1            Biobase_2.70.0             
+[15] BiocGenerics_0.56.0         generics_0.1.4             
+[17] jsonlite_2.0.0              Cairo_1.7-0                
+[19] png_0.1-9                   pheatmap_1.0.13            
+[21] patchwork_1.3.2             RColorBrewer_1.1-3         
+[23] scales_1.4.0                reshape2_1.4.5             
+[25] ggdendro_0.2.0              ggrepel_0.9.8              
+[27] ggplot2_4.0.3               purrr_1.2.2                
+[29] stringr_1.6.0               readr_2.2.0                
+[31] tidyr_1.3.2                 tibble_3.3.1               
+[33] dplyr_1.2.1                
+
+loaded via a namespace (and not attached):
+ [1] tidyselect_1.2.1    farver_2.1.2        blob_1.3.0         
+ [4] Biostrings_2.78.0   S7_0.2.2            fastmap_1.2.0      
+ [7] digest_0.6.39       lifecycle_1.0.5     cluster_2.1.8.3    
+[10] statmod_1.5.2       KEGGREST_1.50.0     RSQLite_3.53.3     
+[13] magrittr_2.0.5      compiler_4.5.1      rlang_1.3.0        
+[16] tools_4.5.1         S4Arrays_1.10.1     bit_4.6.0          
+[19] DelayedArray_0.36.1 plyr_1.8.9          abind_1.4-8        
+[22] BiocParallel_1.44.0 withr_3.0.3         colorspace_2.1-3   
+[25] iterators_1.0.14    MASS_7.3-66         dichromat_2.0-1    
+[28] cli_3.6.6           crayon_1.5.3        otel_0.2.0         
+[31] httr_1.4.8          tzdb_0.5.0          rjson_0.2.23       
+[34] DBI_1.3.0           cachem_1.1.0        parallel_4.5.1     
+[37] XVector_0.50.0      vctrs_0.7.3         Matrix_1.7-6       
+[40] hms_1.1.4           GetoptLong_1.1.1    bit64_4.8.2        
+[43] clue_0.3-68         locfit_1.5-9.12     foreach_1.5.2      
+[46] glue_1.8.1          codetools_0.2-20    stringi_1.8.7      
+[49] gtable_0.3.6        shape_1.4.6.1       pillar_1.11.1      
+[52] circlize_0.4.18     R6_2.6.1            doParallel_1.0.17  
+[55] lattice_0.22-9      memoise_2.0.1       Rcpp_1.1.2         
+[58] SparseArray_1.10.10 pkgconfig_2.0.3     GlobalOptions_0.1.4

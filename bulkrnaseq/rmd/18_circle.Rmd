@@ -32,19 +32,19 @@ circle_enrichment_detail <- bind_rows(
 write_csv_safe(circle_enrichment_detail, "result/18_circle/circle_enrichment_detail.csv", row.names = FALSE)
 
 if (!is.null(go_circle_data) && nrow(go_circle_data) > 0) {
-  write_csv_compat(go_circle_data, "result/18_circle/18_1_GO_enrichment_detailed_table.csv", row.names = FALSE)
+
   draw_enrichment_circle_plot(go_circle_data, "GO Enrichment Circle (ID)", "result/18_circle/18_1_GO_enrichment_circle_ID.pdf", analysis_type = "GO", label_type = "id")
   draw_enrichment_circle_plot(go_circle_data, "GO Enrichment Circle (Description)", "result/18_circle/18_1_GO_enrichment_circle_Description.pdf", analysis_type = "GO", label_type = "description")
 }
 
 if (!is.null(kegg_circle_data) && nrow(kegg_circle_data) > 0) {
-  write_csv_compat(kegg_circle_data, "result/18_circle/18_2_KEGG_enrichment_detailed_table.csv", row.names = FALSE)
+
   draw_enrichment_circle_plot(kegg_circle_data, "KEGG Enrichment Circle (ID)", "result/18_circle/18_2_KEGG_enrichment_circle_ID.pdf", analysis_type = "KEGG", label_type = "id")
   draw_enrichment_circle_plot(kegg_circle_data, "KEGG Enrichment Circle (Description)", "result/18_circle/18_2_KEGG_enrichment_circle_Description.pdf", analysis_type = "KEGG", label_type = "description")
 }
 
 if (!is.null(gsea_circle_data) && nrow(gsea_circle_data) > 0) {
-  write_csv_compat(gsea_circle_data, "result/18_circle/18_3_GSEA_enrichment_detailed_table.csv", row.names = FALSE)
+
   draw_enrichment_circle_plot(gsea_circle_data, "GSEA Enrichment Circle (ID)", "result/18_circle/18_3_GSEA_enrichment_circle_ID.pdf", analysis_type = "GSEA", label_type = "id")
   draw_enrichment_circle_plot(gsea_circle_data, "GSEA Enrichment Circle (Description)", "result/18_circle/18_3_GSEA_enrichment_circle_Description.pdf", analysis_type = "GSEA", label_type = "description")
 }

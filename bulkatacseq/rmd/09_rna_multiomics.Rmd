@@ -1,0 +1,1137 @@
+# Module 09. RNA multiomics 整合
+
+## Step9. RNA 联合分析与多组学呈现
+
+这一部分直接在主报告中完成 RNA / WGCNA / splicing / pathway 的联合分析，并把结果写回 `result/09_rna_multiomics/tables/` 与 `result/09_rna_multiomics/plots/`。
+
+这里也按固定顺序推进：
+
+1. 先读取 RNA 差异表达、表达矩阵、WGCNA、GSEA 和 splicing 候选。
+2. 再做 peak-gene overlap 与 distal link。
+3. 然后计算多组学优先级分数。
+4. 最后输出适合汇报的候选基因、通路一致性和模块支持结果。
+
+```{r recompute_rna_multiomics, fig.width=10, fig.height=8}
+step8_table_dir <- step_table_dir("Step9")
+step8_plot_dir <- step_plot_dir("Step9")
+step8_plot_files <- c(
+  "ATAC_RNA_Consistency.pdf",
+  "ATAC_RNA_Gene_Centric_Scatter.pdf",
+  "ATAC_RNA_Gene_Centric_Violin.pdf",
+  "ATAC_RNA_Quadrant_Composition.pdf",
+  "ATAC_RNA_Quadrant_Enrichment_Heatmap.pdf",
+  "Regulation_Categories.pdf",
+  "Distal_Peak_Expression_Boxplot.pdf",
+  "Distal_Peak_Gene_Links.pdf",
+  "Multiomics_Gene_Priority_Bubble.pdf",
+  "Top_Multiomics_Genes_RNA_Heatmap.pdf",
+  "ATAC_RNA_GSEA_Pathway_Concordance.pdf"
+)
+
+rnaseq_df <- data.frame()
+overlapping_genes <- data.frame()
+full_merged <- data.frame()
+gene_distal_support <- data.frame()
+distal_links <- data.frame()
+multiomics_candidates <- data.frame()
+pathway_concordance <- data.frame()
+gene_centric_wide <- data.frame()
+gene_centric_long <- data.frame()
+quadrant_assignment <- data.frame()
+quadrant_correlation_stats <- data.frame()
+quadrant_enrichment_heatmap_long <- data.frame()
+
+rna_step8_input_audit <- audit_external_input_specs("RNA", get_rna_input_specs())
+save_step_table(rna_step8_input_audit, "Step9", "RNA_Input_Audit.csv")
+
+rna_metric_definitions <- data.frame(
+  Metric = c(
+    "RNA_DE_pvalue",
+    "RNA_DE_metric",
+    "RNASignificanceWeight",
+    "ATACEvidenceScore",
+    "RNAEvidenceScore",
+    "RegulatoryPositionScore",
+    "IntegratedPriorityScore"
+  ),
+  Definition = c(
+    "raw pvalue only; missing pvalue remains unavailable; padj retained for diagnostics",
+    "pvalue or unavailable_pvalue; no fallback to another significance column",
+    "tiered significance weight: 1 for <=0.05, 0.5 for <=0.1, low fallback otherwise",
+    "0-25 ATAC effect score weighted by raw ATAC pvalue; FDR is diagnostic",
+    "0-25 RNA effect score weighted by RNA_DE_pvalue, so non-significant large log2FC is downweighted",
+    "0-10 promoter/peak-count regulatory position score",
+    "sum of ATAC, RNA, regulatory position, distal-link, WGCNA, and splicing evidence scores"
+  ),
+  stringsAsFactors = FALSE
+)
+save_step_table(rna_metric_definitions, "Step9", "RNA_Metric_Definitions.csv")
+
+score_by_abs_effect <- function(effect, full_effect = 1) {
+  effect <- abs(suppressWarnings(as.numeric(effect)))
+  pmin(1, replace_na(effect, 0) / full_effect)
+}
+
+score_by_pvalue <- function(pvalue, strong = 0.05, nominal = 0.1, missing_weight = 0.15) {
+  pvalue <- suppressWarnings(as.numeric(pvalue))
+  dplyr::case_when(
+    is.na(pvalue) ~ missing_weight,
+    pvalue <= strong ~ 1,
+    pvalue <= nominal ~ 0.5,
+    TRUE ~ 0.15
+  )
+}
+
+rnaseq_file <- get_rna_input_path("RNA_DE_Annotated")
+rnaseq_file_ready <- !is.na(rnaseq_file) && file.exists(rnaseq_file) && !dir.exists(rnaseq_file)
+save_step_table(data.frame(
+  File = rnaseq_file, SampleScope = "all prespecified eligible biological units; external input supplied by configuration",
+  Comparison = paste(comparison_group, reference_group, sep = " - "), Significance = "raw pvalue < 0.05; missing pvalue stays missing; padj retained for diagnostics",
+  IntegrationUnit = "genes/annotated intervals, not paired animals",
+  stringsAsFactors = FALSE
+), "Step9", "RNA_DE_Source_and_Scope.csv")
+rnaseq_expr_file <- get_rna_input_path("RNA_Expression_Matrix")
+wgcna_module_file <- get_rna_input_path("RNA_WGCNA_Module")
+wgcna_trait_file <- get_rna_input_path("RNA_WGCNA_Trait")
+splicing_candidate_file <- get_rna_input_path("RNA_Splicing_Candidates")
+gsea_kegg_file <- get_rna_input_path("RNA_GSEA_KEGG")
+
+load_rna_expression_matrix <- function(path) {
+  if(is.na(path) || !file.exists(path) || dir.exists(path)) return(NULL)
+  expr <- read.delim(path, row.names = 1, check.names = FALSE, stringsAsFactors = FALSE)
+  as.matrix(expr)
+}
+
+write_top_multiomics_expression_heatmap <- function(candidates, expr_matrix, plot_file) {
+  if(is.null(expr_matrix) || nrow(candidates) == 0) {
+    write_skipped_state(
+      "Step9",
+      "Top_Multiomics_Genes_RNA_Heatmap",
+      "Missing expression matrix or multi-omics candidates.",
+      clear_plot_files = "Top_Multiomics_Genes_RNA_Heatmap.pdf"
+    )
+    return(invisible(NULL))
+  }
+  top_candidates <- candidates %>%
+    filter(!is.na(RNA_log2FC) & !is.na(MaxATACFold)) %>%
+    arrange(desc(IntegratedPriorityScore), RNA_DE_pvalue, RNA_pvalue) %>%
+    slice_head(n = 25)
+  top_expr_ids <- unique(top_candidates$ensembl_id[!is.na(top_candidates$ensembl_id) & top_candidates$ensembl_id != ""])
+  top_expr_mat <- expr_matrix[intersect(top_expr_ids, rownames(expr_matrix)), , drop = FALSE]
+  if(nrow(top_expr_mat) <= 1) {
+    write_skipped_state(
+      "Step9",
+      "Top_Multiomics_Genes_RNA_Heatmap",
+      "Fewer than two top candidate genes were present in the RNA expression matrix.",
+      clear_plot_files = "Top_Multiomics_Genes_RNA_Heatmap.pdf"
+    )
+    return(invisible(NULL))
+  }
+  top_expr_map <- top_candidates %>%
+    filter(ensembl_id %in% rownames(top_expr_mat)) %>%
+    distinct(ensembl_id, geneSymbol)
+  rownames(top_expr_mat) <- top_expr_map$geneSymbol[match(rownames(top_expr_mat), top_expr_map$ensembl_id)]
+  expr_scaled <- t(scale(t(top_expr_mat)))
+  expr_scaled[is.na(expr_scaled)] <- 0
+  expr_scaled <- expr_scaled[, order_sample_columns(colnames(expr_scaled)), drop = FALSE]
+  draw_pheatmap_dual(
+    plot_file,
+    width = 8,
+    height = 10,
+    pheatmap(
+      expr_scaled,
+      cluster_rows = TRUE,
+      cluster_cols = FALSE,
+      color = viz_pal$heat_meth,
+      show_rownames = TRUE,
+      fontsize_row = 8
+    )
+  )
+  invisible(plot_file)
+}
+
+if(!exists("diff_anno_df") || !is.data.frame(diff_anno_df)) {
+  diff_anno_candidates <- c(step_table_file("Step7", "Annotated_DiffPeaks.csv"))
+  diff_anno_file <- diff_anno_candidates[file.exists(diff_anno_candidates)][1]
+  if(length(diff_anno_file) > 0 && !is.na(diff_anno_file)) {
+    diff_anno_df <- read.csv(diff_anno_file, stringsAsFactors = FALSE)
+  } else {
+    diff_anno_df <- data.frame()
+  }
+}
+if("SYMBOL" %in% colnames(diff_anno_df) && !"geneSymbol" %in% colnames(diff_anno_df)) {
+  colnames(diff_anno_df)[colnames(diff_anno_df) == "SYMBOL"] <- "geneSymbol"
+}
+if(!"geneSymbol" %in% colnames(diff_anno_df)) {
+  diff_anno_df$geneSymbol <- NA_character_
+}
+
+step8_cached_files <- c(
+  "Overlapping_Genes.csv",
+  "Regulation_Category_Analysis.csv",
+  "Distal_Peak_Gene_Links.csv",
+  "Distal_Gene_Link_Summary.csv",
+  "Multiomics_Gene_Priority_Table.csv",
+  "ATAC_RNA_Gene_Centric_Wide.csv",
+  "ATAC_RNA_Gene_Centric_Long.csv",
+  "ATAC_RNA_Gene_Centric_Correlation_Stats.csv",
+  "ATAC_RNA_Quadrant_Assignment.csv",
+  "ATAC_RNA_Quadrant_Enrichment_Heatmap_Long.csv"
+)
+step8_ready <- rnaseq_file_ready && nrow(res_df) > 0 && nrow(diff_anno_df) > 0
+rna_multiomics_readiness <- data.frame(
+  Check = c("RNA_DE_Annotated", "Differential_Peaks", "Annotated_DiffPeaks", "ReadyToCompute"),
+  Status = c(
+    ifelse(rnaseq_file_ready, "PASS", "MISSING"),
+    ifelse(nrow(res_df) > 0, "PASS", "MISSING"),
+    ifelse(nrow(diff_anno_df) > 0, "PASS", "MISSING"),
+    ifelse(step8_ready, "PASS", "MISSING")
+  ),
+  Rows = c(
+    ifelse(rnaseq_file_ready, count_file_rows(rnaseq_file) - 1L, NA_integer_),
+    nrow(res_df),
+    nrow(diff_anno_df),
+    NA_integer_
+  ),
+  Path = c(
+    ifelse(rnaseq_file_ready, rnaseq_file, NA_character_),
+    step_table_file("Step5", "Differential_Peaks.csv"),
+    step_table_file("Step7", "Annotated_DiffPeaks.csv"),
+    NA_character_
+  ),
+  stringsAsFactors = FALSE
+)
+save_step_table(rna_multiomics_readiness, "Step9", "RNA_Multiomics_Readiness.csv")
+
+if(!should_compute_step("Step9", step8_cached_files)) {
+  overlapping_genes <- read_step_table("Step9", "Overlapping_Genes.csv")
+  full_merged <- read_step_table("Step9", "Regulation_Category_Analysis.csv")
+  gene_distal_support <- read_step_table("Step9", "Distal_Gene_Link_Summary.csv")
+  distal_links <- read_step_table("Step9", "Distal_Peak_Gene_Links.csv")
+  multiomics_candidates <- read_step_table("Step9", "Multiomics_Gene_Priority_Table.csv")
+  pathway_concordance <- read_step_table("Step9", "ATAC_RNA_GSEA_Pathway_Concordance.csv")
+  gene_centric_wide <- read_step_table("Step9", "ATAC_RNA_Gene_Centric_Wide.csv")
+  gene_centric_long <- read_step_table("Step9", "ATAC_RNA_Gene_Centric_Long.csv")
+  quadrant_assignment <- read_step_table("Step9", "ATAC_RNA_Quadrant_Assignment.csv")
+  quadrant_correlation_stats <- read_step_table("Step9", "ATAC_RNA_Gene_Centric_Correlation_Stats.csv")
+  quadrant_enrichment_heatmap_long <- read_step_table("Step9", "ATAC_RNA_Quadrant_Enrichment_Heatmap_Long.csv")
+  report_status("INFO", "Step9 使用现有标准表，跳过重计算。")
+} else if(step8_ready) {
+  if(grepl("\\.csv$", rnaseq_file, ignore.case = TRUE)) {
+    rnaseq_df <- read.csv(rnaseq_file, stringsAsFactors = FALSE)
+  } else {
+    rnaseq_df <- read.table(rnaseq_file, header = TRUE, sep = "\t", stringsAsFactors = FALSE)
+  }
+
+  if(!all(c("sampleA", "sampleB") %in% names(rnaseq_df)) ||
+     anyNA(rnaseq_df$sampleA) || anyNA(rnaseq_df$sampleB) ||
+     !identical(unique(as.character(rnaseq_df$sampleA)), comparison_group) ||
+     !identical(unique(as.character(rnaseq_df$sampleB)), reference_group)) {
+    stop("RNA DE 方向缺失或不匹配；sampleA 必须为 comparison，sampleB 为 reference")
+  }
+  if("ensembl_id" %in% colnames(rnaseq_df)) {
+    rnaseq_df$ensembl_id <- rnaseq_df$ensembl_id
+  } else if("gene_id" %in% colnames(rnaseq_df)) {
+    rnaseq_df$ensembl_id <- rnaseq_df$gene_id
+  } else {
+    rnaseq_df$ensembl_id <- rownames(rnaseq_df)
+  }
+  rnaseq_df$ensembl_id <- sub("\\..*$", "", rnaseq_df$ensembl_id)
+
+  if("SYMBOL" %in% colnames(rnaseq_df) && !"GeneSymbol" %in% colnames(rnaseq_df)) {
+    rnaseq_df$GeneSymbol <- rnaseq_df$SYMBOL
+  }
+  if("ENTREZID" %in% colnames(rnaseq_df) && !"entrez_id" %in% colnames(rnaseq_df)) {
+    rnaseq_df$entrez_id <- as.character(rnaseq_df$ENTREZID)
+  } else if("ENTREZID.x" %in% colnames(rnaseq_df) && !"entrez_id" %in% colnames(rnaseq_df)) {
+    rnaseq_df$entrez_id <- as.character(rnaseq_df$ENTREZID.x)
+  } else if("ENTREZID.y" %in% colnames(rnaseq_df) && !"entrez_id" %in% colnames(rnaseq_df)) {
+    rnaseq_df$entrez_id <- as.character(rnaseq_df$ENTREZID.y)
+  }
+
+  for(num_col in c("baseMean", "log2FoldChange", "pvalue", "padj")) {
+    if(!num_col %in% colnames(rnaseq_df)) rnaseq_df[[num_col]] <- NA_real_
+    rnaseq_df[[num_col]] <- suppressWarnings(as.numeric(rnaseq_df[[num_col]]))
+  }
+  rnaseq_df$pvalue[!is.finite(rnaseq_df$pvalue) | rnaseq_df$pvalue < 0 | rnaseq_df$pvalue > 1] <- NA_real_
+  rnaseq_df$DE_p_for_filter <- rnaseq_df$pvalue
+  rnaseq_df$DE_p_metric <- ifelse(!is.na(rnaseq_df$pvalue), "pvalue", "unavailable_pvalue")
+
+  valid_ensembl <- intersect(rnaseq_df$ensembl_id, keys(org.Mm.eg.db, keytype = "ENSEMBL"))
+  if(length(valid_ensembl) == 0 && !"GeneSymbol" %in% colnames(rnaseq_df)) {
+    rnaseq_df$GeneSymbol <- NA_character_
+    rnaseq_df$entrez_id <- NA_character_
+  } else if(!("GeneSymbol" %in% colnames(rnaseq_df) && "entrez_id" %in% colnames(rnaseq_df))) {
+    gene_map_symbol <- mapIds(
+      org.Mm.eg.db, keys = valid_ensembl, column = "SYMBOL",
+      keytype = "ENSEMBL", multiVals = "first"
+    )
+    gene_map_entrez <- mapIds(
+      org.Mm.eg.db, keys = valid_ensembl, column = "ENTREZID",
+      keytype = "ENSEMBL", multiVals = "first"
+    )
+    rnaseq_df$GeneSymbol <- unname(gene_map_symbol[rnaseq_df$ensembl_id])
+    rnaseq_df$entrez_id <- unname(gene_map_entrez[rnaseq_df$ensembl_id])
+  }
+
+  de_genes <- rnaseq_df %>%
+    filter(!is.na(DE_p_for_filter) & DE_p_for_filter < 0.05 & abs(log2FoldChange) > 0.58) %>%
+    filter(!is.na(GeneSymbol))
+
+  diff_anno_genes <- diff_anno_df %>%
+    filter(!is.na(geneId) & geneId != "") %>%
+    mutate(geneId = as.character(geneId)) %>%
+    dplyr::select(geneId, geneSymbol, annotation, distanceToTSS) %>%
+    distinct()
+
+  merged_peak_genes <- diff_anno_df %>%
+    mutate(
+      seqnames = ensure_ucsc_seqnames(seqnames),
+      peak_id = paste(seqnames, start, end, sep = ":"),
+      geneId = as.character(geneId)
+    )
+
+  if(!"Fold" %in% colnames(merged_peak_genes)) {
+    merged_peak_genes <- merged_peak_genes %>%
+      left_join(
+        res_df %>%
+          mutate(
+            seqnames = ensure_ucsc_seqnames(seqnames),
+            peak_id = paste(seqnames, start, end, sep = ":")
+          ) %>%
+          dplyr::select(peak_id, Fold, FDR, pvalue),
+        by = "peak_id"
+      )
+  }
+  merged_peak_genes <- merged_peak_genes %>%
+    filter(!is.na(geneId) & geneId != "" & !is.na(Fold)) %>%
+    dplyr::select(-any_of("ATAC_pvalue")) %>%
+    left_join(
+      res_df %>%
+        mutate(peak_id = paste(ensure_ucsc_seqnames(seqnames), start, end, sep = ":")) %>%
+        dplyr::select(peak_id, ATAC_pvalue = pvalue) %>%
+        distinct(peak_id, .keep_all = TRUE),
+      by = "peak_id"
+    ) %>%
+    mutate(ATAC_pvalue = ifelse(is.finite(ATAC_pvalue) & ATAC_pvalue >= 0 & ATAC_pvalue <= 1,
+                               ATAC_pvalue, NA_real_))
+
+  overlapping_genes <- inner_join(
+    diff_anno_genes %>% dplyr::select(geneId) %>% distinct(),
+    de_genes %>%
+      mutate(geneId = as.character(entrez_id)) %>%
+      dplyr::select(geneId, GeneSymbol, log2FoldChange, pvalue, padj, DE_p_for_filter, DE_p_metric),
+    by = "geneId"
+  )
+  write.csv(overlapping_genes, file.path(step8_table_dir, "Overlapping_Genes.csv"), row.names = FALSE)
+
+  promoter_peaks <- merged_peak_genes %>% filter(grepl("^Promoter", annotation, ignore.case = TRUE))
+  if(nrow(promoter_peaks) > 0) {
+    promoter_peaks_full <- promoter_peaks %>%
+      left_join(
+        rnaseq_df %>%
+          mutate(geneId = as.character(entrez_id)) %>%
+          filter(!is.na(geneId)) %>%
+          dplyr::select(geneId, log2FoldChange, pvalue, padj, DE_p_for_filter, DE_p_metric),
+        by = "geneId"
+      ) %>%
+      filter(!is.na(log2FoldChange))
+
+    if(nrow(promoter_peaks_full) > 0) {
+      promoter_peaks_full <- promoter_peaks_full %>%
+        rename(Fold_RNA = log2FoldChange)
+      write.csv(promoter_peaks_full, file.path(step8_table_dir, "ATAC_RNA_Promoter_Correlation.csv"), row.names = FALSE)
+
+      p_consistency <- ggplot(promoter_peaks_full, aes(x = Fold, y = Fold_RNA)) +
+        geom_point(alpha = 0.6) +
+        geom_smooth(method = "lm", se = TRUE, color = viz_pal$group[comparison_group]) +
+        geom_vline(xintercept = 0, linetype = "dashed") +
+        geom_hline(yintercept = 0, linetype = "dashed") +
+        theme_atac_classic(base_size = 12) +
+        labs(
+          title = "ATAC-RNA consistency at promoter-linked peaks",
+          x = paste("ATAC log2FC (", contrast_label, ")"),
+          y = paste("RNA log2FC (", contrast_label, ")")
+        )
+      save_plot_pdf(p_consistency, file.path(step8_plot_dir, "ATAC_RNA_Consistency.pdf"), width = 8, height = 6)
+    }
+  }
+
+  full_merged <- merged_peak_genes %>%
+    left_join(
+      rnaseq_df %>%
+        mutate(geneId = as.character(entrez_id)) %>%
+        filter(!is.na(geneId)),
+      by = "geneId"
+    ) %>%
+    filter(!is.na(Fold) & !is.na(log2FoldChange)) %>%
+    mutate(
+      regulation_category = case_when(
+        Fold > 0.58 & log2FoldChange > 0.58 ~ "Activated",
+        Fold < -0.58 & log2FoldChange < -0.58 ~ "Repressed",
+        Fold > 0.58 & log2FoldChange < -0.58 ~ "ATAC_up_RNA_down",
+        Fold < -0.58 & log2FoldChange > 0.58 ~ "ATAC_down_RNA_up",
+        TRUE ~ "Neutral"
+      )
+    )
+  write.csv(full_merged, file.path(step8_table_dir, "Regulation_Category_Analysis.csv"), row.names = FALSE)
+
+  if(nrow(full_merged) > 0) {
+    full_merged$regulation_category <- factor(
+      full_merged$regulation_category,
+      levels = c("Neutral", "Activated", "Repressed", "ATAC_up_RNA_down", "ATAC_down_RNA_up")
+    )
+    p_category <- ggplot(full_merged, aes(x = Fold, y = log2FoldChange)) +
+      geom_point(
+        data = subset(full_merged, regulation_category == "Neutral"),
+        color = pal_pick(viz_pal$neutral_mid),
+        alpha = 0.32,
+        size = 1.8
+      ) +
+      geom_point(
+        data = subset(full_merged, regulation_category != "Neutral"),
+        aes(color = regulation_category),
+        alpha = 0.92,
+        size = 2.8
+      ) +
+      scale_color_manual(values = pal_named(
+        Neutral = viz_pal$neutral_mid,
+        Activated = viz_pal$group[comparison_group],
+        Repressed = viz_pal$group[reference_group],
+        ATAC_up_RNA_down = viz_pal$dmr["Hyper"],
+        ATAC_down_RNA_up = viz_pal$feature_core["Intergenic"]
+      )) +
+      geom_vline(xintercept = c(-0.58, 0.58), linetype = "dashed") +
+      geom_hline(yintercept = c(-0.58, 0.58), linetype = "dashed") +
+      theme_atac_classic(base_size = 12) +
+      labs(
+        title = "ATAC-RNA regulation categories",
+        x = paste("ATAC log2FC (", contrast_label, ")"),
+        y = paste("RNA log2FC (", contrast_label, ")"),
+        color = "Category"
+      )
+    save_plot_pdf(p_category, file.path(step8_plot_dir, "Regulation_Categories.pdf"), width = 8, height = 6)
+  }
+
+  activated_genes <- full_merged %>% filter(regulation_category == "Activated") %>% distinct(geneSymbol)
+  repressed_genes <- full_merged %>% filter(regulation_category == "Repressed") %>% distinct(geneSymbol)
+  write.csv(activated_genes, file.path(step8_table_dir, "Activated_Genes.csv"), row.names = FALSE)
+  write.csv(repressed_genes, file.path(step8_table_dir, "Repressed_Genes.csv"), row.names = FALSE)
+
+  distal_peaks <- merged_peak_genes %>% filter(annotation == "Distal Intergenic")
+  if(nrow(distal_peaks) > 0) {
+    distal_peaks_expr <- distal_peaks %>%
+      left_join(rnaseq_df %>% mutate(geneId = as.character(entrez_id)), by = "geneId") %>%
+      filter(!is.na(log2FoldChange)) %>%
+      mutate(Peak_Change = ifelse(Fold > 0, "Peak Up", "Peak Down"))
+
+    if(nrow(distal_peaks_expr) > 0) {
+      write.csv(distal_peaks_expr, file.path(step8_table_dir, "Distal_Peak_Expression_Data.csv"), row.names = FALSE)
+      p_distal_box <- ggplot(distal_peaks_expr, aes(x = Peak_Change, y = log2FoldChange, fill = Peak_Change)) +
+        geom_boxplot() +
+        geom_hline(yintercept = 0, linetype = "dashed") +
+        scale_fill_manual(values = pal_named(
+          `Peak Up` = viz_pal$group[comparison_group],
+          `Peak Down` = viz_pal$group[reference_group]
+        )) +
+        theme_atac_classic(base_size = 12) +
+        labs(
+          title = "Expression shifts linked to distal peaks",
+          x = NULL,
+          y = paste("RNA log2FC (", contrast_label, ")")
+        )
+      save_plot_pdf(p_distal_box, file.path(step8_plot_dir, "Distal_Peak_Expression_Boxplot.pdf"), width = 6, height = 6)
+    }
+  }
+
+  distal_links <- merged_peak_genes %>%
+    mutate(
+      peak_id = paste(seqnames, start, end, sep = ":"),
+      geneId = as.character(geneId)
+    ) %>%
+    filter(annotation == "Distal Intergenic", !is.na(geneId), geneId != "") %>%
+    left_join(
+      rnaseq_df %>%
+        mutate(
+          geneId = as.character(entrez_id),
+          GeneSymbol = if("GeneSymbol" %in% colnames(.)) GeneSymbol else if("SYMBOL" %in% colnames(.)) SYMBOL else NA_character_
+        ) %>%
+        dplyr::select(
+          geneId, GeneSymbol, RNA_log2FC = log2FoldChange,
+          RNA_pvalue = pvalue, RNA_padj = padj,
+          RNA_DE_pvalue = DE_p_for_filter, RNA_DE_metric = DE_p_metric
+        ),
+      by = "geneId"
+    ) %>%
+    mutate(
+      distance_abs = abs(distanceToTSS),
+      RNA_LinkSignificanceWeight = score_by_pvalue(RNA_DE_pvalue, strong = 0.05, nominal = 0.1, missing_weight = 0.1),
+      LinkClass = case_when(
+        Fold > 0 & RNA_log2FC > 0 ~ "Concordant_open_up",
+        Fold < 0 & RNA_log2FC < 0 ~ "Concordant_close_down",
+        Fold > 0 & RNA_log2FC < 0 ~ "Discordant_open_down",
+        Fold < 0 & RNA_log2FC > 0 ~ "Discordant_close_up",
+        TRUE ~ "Neutral"
+      ),
+      DistanceWeight = exp(-pmin(replace_na(distance_abs, 200000), 200000) / 50000),
+      DistalLinkScore = round(
+        abs(Fold) * pmax(abs(replace_na(RNA_log2FC, 0)), 0.25) * DistanceWeight * RNA_LinkSignificanceWeight +
+          ifelse(grepl("^Concordant", LinkClass), 0.5 * RNA_LinkSignificanceWeight, 0),
+        3
+      )
+    ) %>%
+    arrange(desc(DistalLinkScore), RNA_pvalue, distance_abs)
+  write.csv(distal_links, file.path(step8_table_dir, "Distal_Peak_Gene_Links.csv"), row.names = FALSE)
+
+  gene_distal_support <- distal_links %>%
+    group_by(geneId) %>%
+    summarise(
+      DistalLinkedPeakCount = n(),
+      MaxDistalLinkScore = max(DistalLinkScore, na.rm = TRUE),
+      MeanDistalLinkScore = mean(DistalLinkScore, na.rm = TRUE),
+      DistalConcordantCount = sum(grepl("^Concordant", LinkClass), na.rm = TRUE),
+      .groups = "drop"
+    )
+  write.csv(gene_distal_support, file.path(step8_table_dir, "Distal_Gene_Link_Summary.csv"), row.names = FALSE)
+
+  if(nrow(distal_links) > 0) {
+    top_distal_links <- distal_links %>%
+      filter(!is.na(RNA_log2FC), !is.na(distance_abs)) %>%
+      slice_head(n = 30)
+    p_distal_link <- ggplot(top_distal_links,
+                            aes(x = distance_abs / 1000, y = DistalLinkScore, color = LinkClass, size = abs(Fold))) +
+      geom_point(alpha = 0.8) +
+      geom_text_repel(aes(label = GeneSymbol), size = 3, max.overlaps = 30) +
+      scale_color_manual(values = pal_named(
+        Concordant_open_up = viz_pal$group[comparison_group],
+        Concordant_close_down = viz_pal$group[reference_group],
+        Discordant_open_down = viz_pal$dmr["Hyper"],
+        Discordant_close_up = viz_pal$feature_core["Intergenic"],
+        Neutral = viz_pal$neutral_mid
+      )) +
+      theme_atac_classic(base_size = 12) +
+      labs(
+        title = "Distal peak-gene linking candidates",
+        x = "Distance to TSS (kb)",
+        y = "Distal link score",
+        size = "|ATAC log2FC|",
+        color = "Link class"
+      )
+    save_plot_pdf(p_distal_link, file.path(step8_plot_dir, "Distal_Peak_Gene_Links.pdf"), width = 10, height = 6)
+  }
+
+  expr_summary <- data.frame()
+  expr_mat <- NULL
+  if(file.exists(rnaseq_expr_file)) {
+    expr_mat <- read_rna_expression_matrix(rnaseq_expr_file)
+    expr_summary <- summarise_rna_expression_by_group(expr_mat)
+  }
+  if(nrow(expr_summary) == 0) {
+    expr_summary <- data.frame(
+      ensembl_id = character(),
+      RNA_MeanExpr_Reference = numeric(),
+      RNA_MeanExpr_Comparison = numeric(),
+      RNA_Expr_Delta = numeric(),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  module_assign <- if(file.exists(wgcna_module_file)) {
+    read.csv(wgcna_module_file, stringsAsFactors = FALSE) %>%
+      mutate(geneId = as.character(ENTREZID)) %>%
+      dplyr::select(geneId, module_label, module_gene_direction = direction) %>%
+      filter(!is.na(geneId) & geneId != "") %>%
+      distinct()
+  } else {
+    data.frame(
+      geneId = character(),
+      module_label = character(),
+      module_gene_direction = character(),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  module_trait <- if(file.exists(wgcna_trait_file)) {
+    read.csv(wgcna_trait_file, stringsAsFactors = FALSE) %>%
+      transmute(
+        module_label = Module,
+        module_trait_correlation = correlation,
+        module_trait_pvalue = pvalue,
+        module_size = module_size
+      )
+  } else {
+    data.frame(
+      module_label = character(),
+      module_trait_correlation = numeric(),
+      module_trait_pvalue = numeric(),
+      module_size = numeric(),
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  splicing_candidates <- if(file.exists(splicing_candidate_file)) {
+    read.csv(splicing_candidate_file, stringsAsFactors = FALSE) %>%
+      mutate(
+        geneId = dplyr::coalesce(
+          if("ENTREZID" %in% colnames(.)) as.character(ENTREZID) else NA_character_,
+          if("ENTREZID.x" %in% colnames(.)) as.character(ENTREZID.x) else NA_character_,
+          if("ENTREZID.y" %in% colnames(.)) as.character(ENTREZID.y) else NA_character_,
+          if("geneId" %in% colnames(.)) as.character(geneId) else NA_character_,
+          if("gene_id" %in% colnames(.)) as.character(gene_id) else NA_character_
+        )
+      ) %>%
+      transmute(
+        geneId,
+        is_splicing_candidate = TRUE,
+        splicing_priority = dplyr::coalesce(
+          if("candidate_priority" %in% colnames(.)) candidate_priority else NA_real_,
+          if("priority" %in% colnames(.)) priority else NA_real_,
+          0
+        ),
+        splicing_status = dplyr::coalesce(
+          if("candidate_status" %in% colnames(.)) as.character(candidate_status) else NA_character_,
+          if("status" %in% colnames(.)) as.character(status) else NA_character_,
+          "candidate"
+        )
+      ) %>%
+      filter(!is.na(geneId) & geneId != "") %>%
+      distinct()
+  } else {
+    data.frame(
+      geneId = character(),
+      is_splicing_candidate = logical(),
+      splicing_priority = numeric(),
+      splicing_status = character(),
+      stringsAsFactors = FALSE
+    )
+  }
+
+  gene_level_atac <- full_merged %>%
+    filter(!is.na(geneId) & geneId != "") %>%
+    mutate(geneId = as.character(geneId)) %>%
+    group_by(geneId, geneSymbol) %>%
+    summarise(
+      PeakCount = n(),
+      PromoterPeakCount = sum(grepl("^Promoter", annotation, ignore.case = TRUE), na.rm = TRUE),
+      DistalPeakCount = sum(annotation == "Distal Intergenic", na.rm = TRUE),
+      MaxATACFold = Fold[which.max(abs(Fold))][1],
+      MeanATACFold = mean(Fold, na.rm = TRUE),
+      BestATACPvalue = ifelse(all(is.na(ATAC_pvalue)), NA_real_, min(ATAC_pvalue, na.rm = TRUE)),
+      BestATACFDR = ifelse(all(is.na(FDR)), NA_real_, min(FDR, na.rm = TRUE)),
+      DominantCategory = names(sort(table(regulation_category), decreasing = TRUE))[1],
+      AnnotationClasses = paste(sort(unique(annotation)), collapse = ";"),
+      .groups = "drop"
+    )
+
+  rnaseq_gene_meta <- rnaseq_df %>%
+    mutate(geneId = as.character(entrez_id))
+  if(!"GeneSymbol" %in% colnames(rnaseq_gene_meta) && "SYMBOL" %in% colnames(rnaseq_gene_meta)) {
+    rnaseq_gene_meta$GeneSymbol <- rnaseq_gene_meta$SYMBOL
+  }
+  rnaseq_gene_meta <- rnaseq_gene_meta %>%
+    dplyr::select(
+      geneId, ensembl_id, GeneSymbol,
+      RNA_baseMean = baseMean,
+      RNA_log2FC = log2FoldChange,
+      RNA_pvalue = pvalue,
+      RNA_padj = padj,
+      RNA_DE_pvalue = DE_p_for_filter,
+      RNA_DE_metric = DE_p_metric
+    ) %>%
+    filter(!is.na(geneId) & geneId != "") %>%
+    distinct()
+
+  multiomics_candidates <- gene_level_atac %>%
+    left_join(rnaseq_gene_meta, by = "geneId") %>%
+    mutate(geneSymbol = coalesce(geneSymbol, GeneSymbol)) %>%
+    left_join(expr_summary, by = "ensembl_id") %>%
+    left_join(gene_distal_support, by = "geneId") %>%
+    left_join(module_assign, by = "geneId") %>%
+    left_join(module_trait, by = "module_label") %>%
+    left_join(splicing_candidates, by = "geneId") %>%
+    mutate(
+      is_splicing_candidate = replace_na(is_splicing_candidate, FALSE),
+      splicing_priority = replace_na(suppressWarnings(as.numeric(splicing_priority)), 0),
+      ATACSignificanceWeight = score_by_pvalue(BestATACPvalue, strong = 0.05, nominal = 0.1, missing_weight = 0.5),
+      RNASignificanceWeight = score_by_pvalue(RNA_DE_pvalue, strong = 0.05, nominal = 0.1, missing_weight = 0.1),
+      WGCNASignificanceWeight = score_by_pvalue(module_trait_pvalue, strong = 0.05, nominal = 0.1, missing_weight = 0.5),
+      ATACEvidenceScore = round(25 * score_by_abs_effect(MaxATACFold, full_effect = 1.5) * ATACSignificanceWeight, 2),
+      RNAEvidenceScore = round(25 * score_by_abs_effect(RNA_log2FC, full_effect = 2) * RNASignificanceWeight, 2),
+      RegulatoryPositionScore = round(pmin(10, ifelse(PromoterPeakCount > 0, 7, 0) + pmin(3, log2(PeakCount + 1) * 1.5)), 2),
+      DistalEvidenceScore = round(8 * pmin(1, replace_na(MaxDistalLinkScore, 0) / 2.5), 2),
+      WGCNAEvidenceScore = round(7 * pmin(1, abs(replace_na(module_trait_correlation, 0)) / 0.8) * WGCNASignificanceWeight, 2),
+      SplicingEvidenceScore = round(ifelse(is_splicing_candidate, pmin(5, 2.5 + pmin(2.5, replace_na(splicing_priority, 0))), 0), 2),
+      ATACScore = ATACEvidenceScore,
+      RNAScore = RNAEvidenceScore,
+      PromoterBonus = RegulatoryPositionScore,
+      PeakSupportBonus = 0,
+      DistalSupportBonus = DistalEvidenceScore,
+      WGCNABonus = WGCNAEvidenceScore,
+      SplicingBonus = SplicingEvidenceScore,
+      IntegratedPriorityScore = round(
+        ATACEvidenceScore + RNAEvidenceScore + RegulatoryPositionScore +
+          DistalEvidenceScore + WGCNAEvidenceScore + SplicingEvidenceScore,
+        2
+      )
+    ) %>%
+    arrange(desc(IntegratedPriorityScore), RNA_DE_pvalue, RNA_pvalue, BestATACPvalue)
+  write.csv(multiomics_candidates, file.path(step8_table_dir, "Multiomics_Gene_Priority_Table.csv"), row.names = FALSE)
+
+  gene_centric_wide <- multiomics_candidates %>%
+    mutate(
+      ATAC_RNA_Quadrant = case_when(
+        MaxATACFold > 0.58 & RNA_log2FC > 0.58 ~ "Open-Up",
+        MaxATACFold < -0.58 & RNA_log2FC < -0.58 ~ "Close-Down",
+        MaxATACFold > 0.58 & RNA_log2FC < -0.58 ~ "Open-Down",
+        MaxATACFold < -0.58 & RNA_log2FC > 0.58 ~ "Close-Up",
+        TRUE ~ "Weak/Neutral"
+      ),
+      ATAC_Support = is.finite(BestATACPvalue) & BestATACPvalue >= 0 & BestATACPvalue < atac_primary_p_cutoff &
+        (!atac_primary_require_fc | abs(replace_na(MaxATACFold, 0)) >= atac_diff_log2fc_cutoff),
+      RNA_Support = abs(replace_na(RNA_log2FC, 0)) > 0.58 & is.finite(RNA_pvalue) & RNA_pvalue >= 0 & RNA_pvalue < 0.05,
+      Distal_Support = replace_na(MaxDistalLinkScore, 0) > 1,
+      WGCNA_Support = abs(replace_na(module_trait_correlation, 0)) >= 0.3,
+      Splicing_Support = replace_na(is_splicing_candidate, FALSE)
+    ) %>%
+    arrange(desc(IntegratedPriorityScore), desc(PeakCount), RNA_DE_pvalue, RNA_pvalue, BestATACPvalue)
+  save_step_table(gene_centric_wide, "Step9", "ATAC_RNA_Gene_Centric_Wide.csv")
+
+  quadrant_assignment <- gene_centric_wide %>%
+    dplyr::select(
+      geneId, geneSymbol, ATAC_RNA_Quadrant, MaxATACFold, RNA_log2FC, RNA_DE_pvalue, RNA_DE_metric,
+      IntegratedPriorityScore, PeakCount, PromoterPeakCount, DistalPeakCount
+    )
+  save_step_table(quadrant_assignment, "Step9", "ATAC_RNA_Quadrant_Assignment.csv")
+
+  gene_centric_long <- gene_centric_wide %>%
+    dplyr::select(
+      geneId, geneSymbol, ATAC_RNA_Quadrant, IntegratedPriorityScore,
+      ATAC = MaxATACFold,
+      RNA = RNA_log2FC,
+      DistalLink = MaxDistalLinkScore,
+      WGCNA = module_trait_correlation,
+      Splicing = splicing_priority
+    ) %>%
+    pivot_longer(
+      cols = c(ATAC, RNA, DistalLink, WGCNA, Splicing),
+      names_to = "EvidenceType",
+      values_to = "EvidenceValue"
+    )
+  save_step_table(gene_centric_long, "Step9", "ATAC_RNA_Gene_Centric_Long.csv")
+
+  safe_cor <- function(x, y, method = "pearson") {
+    keep <- complete.cases(x, y)
+    if(sum(keep) < 3) return(c(estimate = NA_real_, pvalue = NA_real_, n = sum(keep)))
+    test <- suppressWarnings(tryCatch(cor.test(x[keep], y[keep], method = method), error = function(e) NULL))
+    if(is.null(test)) return(c(estimate = NA_real_, pvalue = NA_real_, n = sum(keep)))
+    c(estimate = unname(test$estimate), pvalue = test$p.value, n = sum(keep))
+  }
+
+  quadrant_correlation_stats <- bind_rows(
+    {
+      cor_res <- safe_cor(gene_centric_wide$MaxATACFold, gene_centric_wide$RNA_log2FC, method = "pearson")
+      data.frame(
+        Scope = "All genes",
+        CorrelationMethod = "pearson",
+        Estimate = cor_res["estimate"],
+        PValue = cor_res["pvalue"],
+        N = cor_res["n"],
+        stringsAsFactors = FALSE
+      )
+    },
+    gene_centric_wide %>%
+      filter(!is.na(ATAC_RNA_Quadrant), ATAC_RNA_Quadrant != "Weak/Neutral") %>%
+      group_by(ATAC_RNA_Quadrant) %>%
+      group_modify(~{
+        cor_res <- safe_cor(.x$MaxATACFold, .x$RNA_log2FC, method = "pearson")
+        data.frame(
+          Scope = .y$ATAC_RNA_Quadrant,
+          CorrelationMethod = "pearson",
+          Estimate = cor_res["estimate"],
+          PValue = cor_res["pvalue"],
+          N = cor_res["n"],
+          stringsAsFactors = FALSE
+        )
+      }) %>%
+      ungroup()
+  )
+  save_step_table(quadrant_correlation_stats, "Step9", "ATAC_RNA_Gene_Centric_Correlation_Stats.csv")
+
+  if(nrow(gene_centric_wide) > 0) {
+    quadrant_gene_lists <- split(
+      unique(gene_centric_wide$geneId[!is.na(gene_centric_wide$geneId) & gene_centric_wide$geneId != ""]),
+      gene_centric_wide$ATAC_RNA_Quadrant[match(
+        unique(gene_centric_wide$geneId[!is.na(gene_centric_wide$geneId) & gene_centric_wide$geneId != ""]),
+        gene_centric_wide$geneId
+      )]
+    )
+    quadrant_gene_lists <- quadrant_gene_lists[names(quadrant_gene_lists) != "Weak/Neutral"]
+    quadrant_go_heatmap <- list()
+    bg_gene_ids <- unique(gene_centric_wide$geneId[!is.na(gene_centric_wide$geneId) & gene_centric_wide$geneId != ""])
+
+    for(q_name in names(quadrant_gene_lists)) {
+      gene_ids <- unique(quadrant_gene_lists[[q_name]])
+      safe_name <- gsub("[^A-Za-z0-9]+", "_", q_name)
+      go_bp_raw <- run_go_enrichment(gene_ids, q_name, "BP", universe_genes = bg_gene_ids)
+      save_csv_df(go_bp_raw, file.path(step8_table_dir, paste0("Quadrant_GO_BP_", safe_name, ".csv")))
+      kegg_raw <- run_kegg_enrichment(gene_ids, q_name, universe_genes = bg_gene_ids)
+      save_csv_df(kegg_raw, file.path(step8_table_dir, paste0("Quadrant_KEGG_", safe_name, ".csv")))
+
+      go_bp_top <- tryCatch(as.data.frame(filter_enrich_result(go_bp_raw, p_cutoff = 0.05)), error = function(e) data.frame())
+      if(nrow(go_bp_top) > 0) {
+        go_bp_top$EnrichmentP <- if("pvalue" %in% colnames(go_bp_top)) go_bp_top$pvalue else NA_real_
+        quadrant_go_heatmap[[q_name]] <- go_bp_top %>%
+          filter(is.finite(EnrichmentP), EnrichmentP >= 0, EnrichmentP < 0.05) %>%
+          mutate(
+            Quadrant = q_name,
+            EnrichmentScore = -log10(pmax(EnrichmentP, 1e-300))
+          ) %>%
+          arrange(EnrichmentP, desc(Count)) %>%
+          slice_head(n = 5) %>%
+          dplyr::select(Quadrant, Description, EnrichmentScore)
+      }
+    }
+    quadrant_enrichment_heatmap_long <- bind_rows(quadrant_go_heatmap)
+    save_step_table(quadrant_enrichment_heatmap_long, "Step9", "ATAC_RNA_Quadrant_Enrichment_Heatmap_Long.csv")
+  }
+
+  module_support <- multiomics_candidates %>%
+    filter(!is.na(module_label) & module_label != "") %>%
+    group_by(module_label, module_trait_correlation, module_trait_pvalue, module_size) %>%
+    summarise(
+      CandidateGeneCount = n(),
+      MeanIntegratedPriorityScore = mean(IntegratedPriorityScore, na.rm = TRUE),
+      SplicingCandidateCount = sum(is_splicing_candidate, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    arrange(desc(CandidateGeneCount), desc(abs(module_trait_correlation)))
+  write.csv(module_support, file.path(step8_table_dir, "ATAC_RNA_WGCNA_Module_Summary.csv"), row.names = FALSE)
+
+  if(nrow(multiomics_candidates) > 0) {
+    top_candidates <- multiomics_candidates %>%
+      filter(!is.na(RNA_log2FC) & !is.na(MaxATACFold)) %>%
+      slice_max(order_by = IntegratedPriorityScore, n = 25, with_ties = FALSE)
+
+    p_priority_full <- ggplot(
+      multiomics_candidates %>% filter(!is.na(RNA_log2FC) & !is.na(MaxATACFold)),
+      aes(x = RNA_log2FC, y = MaxATACFold, size = PeakCount, color = IntegratedPriorityScore)
+    ) +
+      geom_hline(yintercept = c(-0.58, 0.58), linetype = "dashed", color = viz_pal$neutral_dark) +
+      geom_vline(xintercept = c(-0.58, 0.58), linetype = "dashed", color = viz_pal$neutral_dark) +
+      geom_point(alpha = 0.75) +
+      geom_text_repel(data = top_candidates, aes(label = geneSymbol), size = 3, max.overlaps = 40) +
+      scale_color_gradientn(colors = viz_pal$heat_meth) +
+      theme_atac_classic(base_size = 12) +
+      labs(
+        title = "Integrated ATAC-RNA candidate prioritization",
+        x = paste("RNA log2FC (", contrast_label, ")"),
+        y = paste("Max ATAC log2FC (", contrast_label, ")"),
+        size = "Peak count",
+        color = "Priority score"
+      )
+    save_plot_pdf(p_priority_full, file.path(step8_plot_dir, "Multiomics_Gene_Priority_Bubble.pdf"), width = 10, height = 8)
+
+    if(!is.null(expr_mat) && nrow(top_candidates) > 1) {
+      top_expr_ids <- unique(top_candidates$ensembl_id[!is.na(top_candidates$ensembl_id)])
+      top_expr_mat <- expr_mat[intersect(top_expr_ids, rownames(expr_mat)), , drop = FALSE]
+      if(nrow(top_expr_mat) > 1) {
+        top_expr_map <- top_candidates %>%
+          filter(ensembl_id %in% rownames(top_expr_mat)) %>%
+          distinct(ensembl_id, geneSymbol)
+        rownames(top_expr_mat) <- top_expr_map$geneSymbol[match(rownames(top_expr_mat), top_expr_map$ensembl_id)]
+        expr_scaled <- t(scale(t(top_expr_mat)))
+        expr_scaled[is.na(expr_scaled)] <- 0
+        expr_scaled <- expr_scaled[, order_sample_columns(colnames(expr_scaled)), drop = FALSE]
+        draw_pheatmap_dual(
+          file.path(step8_plot_dir, "Top_Multiomics_Genes_RNA_Heatmap.pdf"),
+          width = 8,
+          height = 10,
+          pheatmap(
+            expr_scaled,
+            cluster_rows = TRUE,
+            cluster_cols = FALSE,
+            color = viz_pal$heat_meth,
+            show_rownames = TRUE,
+            fontsize_row = 8
+          )
+        )
+      }
+    }
+  }
+
+  if(nrow(multiomics_candidates) > 0 && file.exists(gsea_kegg_file)) {
+    gsea_kegg <- read.csv(gsea_kegg_file, stringsAsFactors = FALSE)
+    if(!"pvalue" %in% names(gsea_kegg)) {
+      gsea_kegg$pvalue <- NA_real_
+      report_status("WARN", "RNA GSEA raw pvalue column is missing; pathway concordance is unavailable.")
+    }
+    gsea_kegg$pvalue <- suppressWarnings(as.numeric(gsea_kegg$pvalue))
+    activated_ids <- unique(multiomics_candidates$geneId[multiomics_candidates$DominantCategory == "Activated"])
+    repressed_ids <- unique(multiomics_candidates$geneId[multiomics_candidates$DominantCategory == "Repressed"])
+
+    pathway_concordance <- gsea_kegg %>%
+      filter(is.finite(pvalue) & pvalue >= 0 & pvalue < 0.05 & !is.na(core_enrichment) & core_enrichment != "") %>%
+      rowwise() %>%
+      mutate(
+        leading_ids = list(strsplit(core_enrichment, "/", fixed = TRUE)[[1]]),
+        ATAC_Activated_Overlap = sum(unlist(leading_ids) %in% activated_ids),
+        ATAC_Repressed_Overlap = sum(unlist(leading_ids) %in% repressed_ids),
+        ATAC_Total_Overlap = ATAC_Activated_Overlap + ATAC_Repressed_Overlap
+      ) %>%
+      ungroup() %>%
+      filter(ATAC_Total_Overlap > 0) %>%
+      arrange(desc(ATAC_Total_Overlap), desc(abs(NES)))
+    write.csv(pathway_concordance, file.path(step8_table_dir, "ATAC_RNA_GSEA_Pathway_Concordance.csv"), row.names = FALSE)
+
+    if(nrow(pathway_concordance) > 0) {
+      top_pathways <- pathway_concordance %>% slice_head(n = 15)
+      p_pathway_full <- ggplot(top_pathways,
+                               aes(x = reorder(Description, NES), y = NES, size = ATAC_Total_Overlap, color = -log10(pmax(pvalue, 1e-300)))) +
+        geom_point(alpha = 0.85) +
+        coord_flip() +
+        scale_color_gradient(low = viz_pal$group[reference_group], high = viz_pal$group[comparison_group]) +
+        theme_atac_classic(base_size = 12) +
+        labs(
+          title = "RNA GSEA pathways supported by ATAC-linked genes",
+          x = NULL,
+          y = "RNA GSEA NES",
+          size = "ATAC-linked leading-edge genes",
+          color = "-log10(raw pvalue)"
+        )
+      save_plot_pdf(p_pathway_full, file.path(step8_plot_dir, "ATAC_RNA_GSEA_Pathway_Concordance.pdf"), width = 10, height = 6)
+    }
+  }
+} else {
+  write_skipped_state(
+    "Step9",
+    "RNA_Multiomics_Module",
+    "Missing RNA input, missing differential peaks, or missing annotated differential peak table.",
+    clear_plot_files = step8_plot_files,
+    extra = list(
+      rnaseq_file = ifelse(rnaseq_file_ready, basename(rnaseq_file), "missing"),
+      rnaseq_expr = ifelse(file.exists(rnaseq_expr_file), basename(rnaseq_expr_file), "missing"),
+      wgcna_module = ifelse(file.exists(wgcna_module_file), basename(wgcna_module_file), "missing"),
+      wgcna_trait = ifelse(file.exists(wgcna_trait_file), basename(wgcna_trait_file), "missing"),
+      splicing_candidates = ifelse(file.exists(splicing_candidate_file), basename(splicing_candidate_file), "missing"),
+      gsea_kegg = ifelse(file.exists(gsea_kegg_file), basename(gsea_kegg_file), "missing")
+    )
+  )
+}
+```
+
+```{r step8_multiomics_visualization, fig.width=12, fig.height=6}
+multiomics_candidates_plot <- read_step_table("Step9", "Multiomics_Gene_Priority_Table.csv")
+distal_links_plot <- read_step_table("Step9", "Distal_Peak_Gene_Links.csv")
+pathway_concordance_plot <- read_step_table("Step9", "ATAC_RNA_GSEA_Pathway_Concordance.csv")
+gene_centric_wide_plot <- read_step_table("Step9", "ATAC_RNA_Gene_Centric_Wide.csv")
+gene_centric_long_plot <- read_step_table("Step9", "ATAC_RNA_Gene_Centric_Long.csv")
+quadrant_assignment_plot <- read_step_table("Step9", "ATAC_RNA_Quadrant_Assignment.csv")
+quadrant_heatmap_plot <- read_step_table("Step9", "ATAC_RNA_Quadrant_Enrichment_Heatmap_Long.csv")
+
+expr_mat_plot <- if(exists("expr_mat") && !is.null(expr_mat)) expr_mat else read_rna_expression_matrix(rnaseq_expr_file)
+if(!is.null(expr_mat_plot) && nrow(multiomics_candidates_plot) > 0) {
+  top_expr_candidates <- multiomics_candidates_plot %>%
+    filter(!is.na(ensembl_id) & ensembl_id != "", !is.na(geneSymbol) & geneSymbol != "") %>%
+    arrange(desc(IntegratedPriorityScore), RNA_DE_pvalue, RNA_pvalue) %>%
+    slice_head(n = 25)
+  top_expr_ids <- unique(top_expr_candidates$ensembl_id)
+  top_expr_mat <- expr_mat_plot[intersect(top_expr_ids, rownames(expr_mat_plot)), , drop = FALSE]
+  if(nrow(top_expr_mat) > 1) {
+    top_expr_map <- top_expr_candidates %>%
+      filter(ensembl_id %in% rownames(top_expr_mat)) %>%
+      distinct(ensembl_id, geneSymbol)
+    rownames(top_expr_mat) <- top_expr_map$geneSymbol[match(rownames(top_expr_mat), top_expr_map$ensembl_id)]
+    expr_scaled <- t(scale(t(top_expr_mat)))
+    expr_scaled[is.na(expr_scaled)] <- 0
+    expr_scaled <- expr_scaled[, order_sample_columns(colnames(expr_scaled)), drop = FALSE]
+    sample_annotation <- data.frame(
+      Group = factor(sample_group(colnames(expr_scaled)), levels = group_levels),
+      row.names = colnames(expr_scaled)
+    )
+    draw_pheatmap_dual(
+      file.path(step8_plot_dir, "Top_Multiomics_Genes_RNA_Heatmap.pdf"),
+      width = 8,
+      height = 10,
+      pheatmap(
+        expr_scaled,
+        cluster_rows = TRUE,
+        cluster_cols = FALSE,
+        annotation_col = sample_annotation,
+        annotation_colors = list(Group = group_colors),
+        color = viz_pal$heat_meth,
+        show_rownames = TRUE,
+        fontsize_row = 8,
+        main = "Top multi-omics candidate RNA expression"
+      )
+    )
+  }
+}
+
+if(nrow(gene_centric_wide_plot) > 0) {
+  top_candidates <- gene_centric_wide_plot %>%
+    filter(!is.na(geneSymbol) & geneSymbol != "", !is.na(MaxATACFold), !is.na(RNA_log2FC)) %>%
+    arrange(desc(IntegratedPriorityScore), RNA_pvalue) %>%
+    slice_head(n = 25)
+
+  p_gene_centric_scatter <- ggplot(
+    gene_centric_wide_plot %>% filter(!is.na(MaxATACFold), !is.na(RNA_log2FC)),
+    aes(x = RNA_log2FC, y = MaxATACFold, color = ATAC_RNA_Quadrant, size = PeakCount)
+  ) +
+    geom_hline(yintercept = c(-0.58, 0.58), linetype = "dashed", color = viz_pal$neutral_dark) +
+    geom_vline(xintercept = c(-0.58, 0.58), linetype = "dashed", color = viz_pal$neutral_dark) +
+    geom_point(alpha = 0.8) +
+    geom_text_repel(data = top_candidates, aes(label = geneSymbol), size = 3, max.overlaps = 40) +
+    scale_color_manual(values = pal_named(
+      `Open-Up` = viz_pal$group[comparison_group],
+      `Close-Down` = viz_pal$group[reference_group],
+      `Open-Down` = viz_pal$dmr["Hyper"],
+      `Close-Up` = viz_pal$feature_core["Intergenic"],
+      `Weak/Neutral` = viz_pal$neutral_mid
+    )) +
+    theme_atac_classic(base_size = 12) +
+    labs(
+      title = "ATAC-RNA gene-centric scatter",
+      subtitle = "Quadrants are defined directly from full gene-centric evidence table",
+      x = paste("RNA log2FC (", contrast_label, ")"),
+      y = paste("ATAC max log2FC (", contrast_label, ")"),
+      size = "Peak count",
+      color = "Quadrant"
+    )
+  save_plot_pdf(p_gene_centric_scatter, file.path(step8_plot_dir, "ATAC_RNA_Gene_Centric_Scatter.pdf"), width = 10, height = 8)
+  print(p_gene_centric_scatter)
+
+  quadrant_order <- c("Open-Up", "Close-Down", "Open-Down", "Close-Up", "Weak/Neutral")
+  p_quadrant_comp <- gene_centric_wide_plot %>%
+    mutate(ATAC_RNA_Quadrant = factor(ATAC_RNA_Quadrant, levels = quadrant_order)) %>%
+    count(ATAC_RNA_Quadrant, name = "GeneCount") %>%
+    ggplot(aes(x = ATAC_RNA_Quadrant, y = GeneCount, fill = ATAC_RNA_Quadrant)) +
+    geom_col(width = 0.72) +
+    scale_fill_manual(values = pal_named(
+      `Open-Up` = viz_pal$group[comparison_group],
+      `Close-Down` = viz_pal$group[reference_group],
+      `Open-Down` = viz_pal$dmr["Hyper"],
+      `Close-Up` = viz_pal$feature_core["Intergenic"],
+      `Weak/Neutral` = viz_pal$neutral_mid
+    )) +
+    theme_atac_classic(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 25, hjust = 1)) +
+    labs(title = "ATAC-RNA quadrant composition", x = NULL, y = "Gene count", fill = "Quadrant")
+  save_plot_pdf(p_quadrant_comp, file.path(step8_plot_dir, "ATAC_RNA_Quadrant_Composition.pdf"), width = 8, height = 6)
+
+  p_priority <- gene_centric_wide_plot %>%
+    filter(!is.na(geneSymbol) & geneSymbol != "") %>%
+    arrange(desc(IntegratedPriorityScore), RNA_pvalue) %>%
+    slice_head(n = 20) %>%
+    ggplot(
+      aes(x = reorder(geneSymbol, IntegratedPriorityScore), y = IntegratedPriorityScore,
+          fill = factor(MaxATACFold > 0, levels = c(FALSE, TRUE)))
+    ) +
+    geom_col() +
+    coord_flip() +
+    scale_fill_manual(values = pal_named(
+      `FALSE` = viz_pal$group[reference_group],
+      `TRUE` = viz_pal$group[comparison_group]
+    )) +
+    theme_atac_classic(base_size = 12) +
+    labs(title = "Top ATAC-RNA multi-omics candidates", x = NULL, y = "Integrated priority score", fill = comparison_open_label)
+  print(p_priority)
+}
+
+if(nrow(gene_centric_long_plot) > 0) {
+  violin_df <- gene_centric_long_plot %>%
+    filter(EvidenceType %in% c("ATAC", "RNA", "DistalLink"), !is.na(EvidenceValue)) %>%
+    mutate(ATAC_RNA_Quadrant = factor(ATAC_RNA_Quadrant, levels = c("Open-Up", "Close-Down", "Open-Down", "Close-Up", "Weak/Neutral")))
+
+  if(nrow(violin_df) > 0) {
+    p_gene_centric_violin <- ggplot(violin_df, aes(x = ATAC_RNA_Quadrant, y = EvidenceValue, fill = ATAC_RNA_Quadrant)) +
+      geom_violin(alpha = 0.78, trim = FALSE) +
+      geom_boxplot(width = 0.12, outlier.shape = NA, fill = viz_pal$neutral["light"], alpha = 0.7) +
+      facet_wrap(~EvidenceType, scales = "free_y") +
+      scale_fill_manual(values = pal_named(
+        `Open-Up` = viz_pal$group[comparison_group],
+        `Close-Down` = viz_pal$group[reference_group],
+        `Open-Down` = viz_pal$dmr["Hyper"],
+        `Close-Up` = viz_pal$feature_core["Intergenic"],
+        `Weak/Neutral` = viz_pal$neutral_mid
+      )) +
+      theme_atac_classic(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 25, hjust = 1), legend.position = "none") +
+      labs(title = "Gene-centric evidence distribution by ATAC-RNA quadrant", x = NULL, y = "Evidence value")
+    save_plot_pdf(p_gene_centric_violin, file.path(step8_plot_dir, "ATAC_RNA_Gene_Centric_Violin.pdf"), width = 11, height = 7)
+  }
+}
+
+if(nrow(distal_links_plot) > 0) {
+  top_distal <- distal_links_plot %>%
+    filter(!is.na(distance_abs), !is.na(DistalLinkScore)) %>%
+    arrange(desc(DistalLinkScore), RNA_pvalue) %>%
+    slice_head(n = 25)
+
+  p_distal <- ggplot(
+    top_distal,
+    aes(x = distance_abs / 1000, y = DistalLinkScore, color = LinkClass, size = abs(Fold))
+  ) +
+    geom_point(alpha = 0.8) +
+    geom_text_repel(aes(label = GeneSymbol), size = 3, max.overlaps = 30) +
+    theme_atac_classic(base_size = 12) +
+    labs(title = "Top distal peak-gene links", x = "Distance to TSS (kb)", y = "Distal link score", size = "|ATAC log2FC|")
+  print(p_distal)
+}
+
+if(nrow(quadrant_heatmap_plot) > 0) {
+  quadrant_heatmap_plot <- quadrant_heatmap_plot %>%
+    mutate(
+      Quadrant = factor(Quadrant, levels = c("Open-Up", "Close-Down", "Open-Down", "Close-Up")),
+      Description = factor(Description, levels = rev(unique(Description)))
+    )
+  p_quadrant_heatmap <- ggplot(quadrant_heatmap_plot, aes(x = Quadrant, y = Description, fill = EnrichmentScore)) +
+    geom_tile(color = viz_pal$neutral["light"], linewidth = 0.25) +
+    scale_fill_gradientn(colors = viz_pal$heat_warm) +
+    theme_atac_classic(base_size = 11) +
+    labs(
+      title = "ATAC-RNA quadrant enrichment heatmap",
+      subtitle = "GO BP terms are filtered on the fly from full quadrant enrichment tables",
+      x = NULL,
+      y = NULL,
+      fill = "-log10(raw pvalue)"
+  )
+  save_plot_pdf(p_quadrant_heatmap, file.path(step8_plot_dir, "ATAC_RNA_Quadrant_Enrichment_Heatmap.pdf"), width = 10, height = 8)
+} else {
+  write_skipped_state(
+    "Step9",
+    "ATAC_RNA_Quadrant_Enrichment_Heatmap",
+    "No GO BP terms passed raw pvalue < 0.05 for ATAC-RNA quadrant enrichment heatmap.",
+    clear_plot_files = "ATAC_RNA_Quadrant_Enrichment_Heatmap.pdf"
+  )
+}
+
+if(nrow(pathway_concordance_plot) > 0) {
+  top_pathways <- pathway_concordance_plot %>%
+    arrange(desc(ATAC_Total_Overlap), desc(abs(NES))) %>%
+    slice_head(n = 15)
+  p_pathway <- ggplot(
+    top_pathways,
+    aes(x = reorder(Description, NES), y = NES, size = ATAC_Total_Overlap, color = -log10(pmax(pvalue, 1e-300)))
+  ) +
+    geom_point(alpha = 0.85) +
+    coord_flip() +
+    scale_color_gradient(low = viz_pal$group[reference_group], high = viz_pal$group[comparison_group]) +
+    theme_atac_classic(base_size = 12) +
+    labs(title = "ATAC-supported RNA pathways", x = NULL, y = "RNA GSEA NES", size = "Overlap")
+  print(p_pathway)
+}
+```
+
+```{r save_multiomics_state, include=FALSE}
+save_state(
+  "09_multiomics_state.rds",
+  c(
+    "rnaseq_df", "de_genes", "overlapping_genes", "full_merged",
+    "gene_distal_support", "distal_links", "multiomics_candidates",
+    "pathway_concordance", "gene_centric_wide", "gene_centric_long",
+    "quadrant_assignment", "quadrant_correlation_stats",
+    "quadrant_enrichment_heatmap_long", "expr_mat", "module_assign",
+    "module_trait", "splicing_candidates", "module_support"
+  )
+)
+```

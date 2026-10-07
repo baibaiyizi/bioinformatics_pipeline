@@ -1,0 +1,5 @@
+check	status	note
+contract_checks.py	PASS	22 cases replayed after path parameterization
+direction_checks.R	PASS	rMATS identity/NA/direction and reversed DE
+replay_core.sh	PASS_SYNTAX	bash -n only; full core not rerun during evidence packaging
+generate_counts_fixture.R	PASS_SYNTAX	R parse only; original fixture recipe retained

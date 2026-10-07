@@ -1,0 +1,162 @@
+{
+  "signature": "4845bd401f576cc8c82928aee2d917586daf61f9394ba812e0c3c6588252004a",
+  "config": {
+    "project": {
+      "sample_key": "sample",
+      "group_key": "group",
+      "batch_key": "batch",
+      "spatial_key": "spatial",
+      "random_seed": 20260629,
+      "organism": "mouse",
+      "name": "spatial_model",
+      "default_tissue": "generic",
+      "condition_key": "condition"
+    },
+    "paths": {
+      "processed_dir": "02processed_h5ad",
+      "integrated_dir": "03integrated_h5ad",
+      "deconvolution_dir": "04deconvolution",
+      "result_dir": "result",
+      "cache_dir": ".cache/spatial",
+      "marker_gene_file": "config/marker_genes.tsv",
+      "manifest": "01rawdata/spatial_info.tsv",
+      "extended_manifest": "01rawdata/spatial_info.extended.tsv",
+      "segment_rule_file": "config/segment_rules.tsv",
+      "method_options_file": "config/method_options.yaml",
+      "platform_profiles_file": "config/platform_profiles.yaml"
+    },
+    "input": {
+      "visium_count_file": "filtered_feature_bc_matrix.h5",
+      "load_images": true,
+      "matrix_orientation": "genes_by_spots",
+      "make_var_names_unique": true
+    },
+    "qc": {
+      "min_counts": 1,
+      "min_genes": 1,
+      "max_mito_percent": 25,
+      "min_cells_per_gene": 1,
+      "spatial_local_outlier_k": 8,
+      "spatial_low_count_ratio": 0.25,
+      "mito_prefix": {
+        "mouse": "mt-",
+        "human": "MT-"
+      },
+      "ribo_prefix": {
+        "mouse": [
+          "Rpl",
+          "Rps"
+        ],
+        "human": [
+          "RPL",
+          "RPS"
+        ]
+      }
+    },
+    "normalization": {
+      "target_sum": 10000,
+      "hvg_flavor": "cell_ranger",
+      "n_top_genes": 80,
+      "regress_out": [],
+      "scale_max_value": 10,
+      "n_pcs": 8
+    },
+    "integration": {
+      "method": "none",
+      "n_neighbors": 6,
+      "leiden_resolution": 0.8,
+      "umap_min_dist": 0.3
+    },
+    "spatial": {
+      "coord_type": "generic",
+      "n_neighs": 6,
+      "radius": null,
+      "moran_top_genes": 1000,
+      "moran_permutations": 100,
+      "nhood_permutations": 1000
+    },
+    "domains": {
+      "resolution": 0.8,
+      "spatial_weight": 0.25,
+      "min_segment_spots": 5,
+      "method": "expression_spatial_leiden"
+    },
+    "annotation": {
+      "min_marker_genes": 2,
+      "unknown_margin": 0.05,
+      "method": "marker_score"
+    },
+    "deconvolution": {
+      "method": "marker_score",
+      "reference_h5ad": "",
+      "reference_cell_type_key": "cell_type",
+      "reference_batch_key": "batch",
+      "cell2location": {
+        "n_cells_per_location": 8,
+        "detection_alpha": 20,
+        "max_epochs_reference": 250,
+        "max_epochs_spatial": 30000,
+        "use_gpu": "auto"
+      }
+    },
+    "segments": {
+      "source_key": "spatial_domain",
+      "layer_key": "cell_type_pred",
+      "distance_threshold": "auto",
+      "min_spots": 5,
+      "compute_scaled_distance": true
+    },
+    "programs": {
+      "n_components": 3,
+      "top_genes_per_program": 50,
+      "de_pvalue_threshold": 0.05,
+      "de_logfc_threshold": 0.25,
+      "method": "nmf"
+    },
+    "communication": {
+      "cluster_key": "cell_type_pred",
+      "min_spots_per_group": 10,
+      "run_squidpy_ligrec": false,
+      "ligand_receptor_source": "omnipath"
+    },
+    "plotting": {
+      "palette": [
+        "#A1C9F4",
+        "#FFB482",
+        "#8DE5A1",
+        "#FF9F9B",
+        "#B39FDB",
+        "#FDFFB6",
+        "#D4D9DE",
+        "#5A666F"
+      ],
+      "dpi": 300,
+      "save_pdf": true,
+      "save_png": true
+    }
+  },
+  "manifest": [
+    {
+      "sample": "A0",
+      "group": "control",
+      "organism": "mouse",
+      "input_type": "h5ad",
+      "input_path": "inputs/A0.h5ad",
+      "exclude": "0"
+    },
+    {
+      "sample": "A1",
+      "group": "treated",
+      "organism": "mouse",
+      "input_type": "h5ad",
+      "input_path": "inputs/A1.h5ad",
+      "exclude": "0"
+    }
+  ],
+  "inputs": {
+    "/tmp/spatial-template-e2e-e9_x7sy2/copy with space/config/marker_genes.tsv": "9cf6dd6e9e59fab7b9bfe736dd17d32defc32681fcb0d8ff9ca077071f80f8e7",
+    "/tmp/spatial-template-e2e-e9_x7sy2/copy with space/inputs/A0.h5ad": "85221b640067b62ffc6cb10dbdbc925189261b00e5a88b34b44c434fb04b4913",
+    "/tmp/spatial-template-e2e-e9_x7sy2/copy with space/inputs/A1.h5ad": "33271e8358176e8737fcdb3b39c5c59dc10d87d71e103d357b6a0b91b2da6e23",
+    "/tmp/spatial-template-e2e-e9_x7sy2/copy with space/scripts/spatial_pipeline.py": "873c3df30f5befd698dd8fb0ba6aff5057c31a17aee65281a0662a9cba856184"
+  }
+}

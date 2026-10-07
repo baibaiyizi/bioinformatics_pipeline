@@ -1,0 +1,28 @@
+## Module 14. 监督分类可行性状态
+
+当前研究每组仅 2 个 ATAC 文库，缺少独立验证集和已核实的父鼠/窝级样本结构。本项目不拟合监督分类器，也不输出交叉验证准确率或特征重要性。增加文库数不会自动启用模型；未来预测问题须另行预先定义独立单位、训练集和验证集，并将所有特征选择与调参限制在训练折内。
+
+```{r ml_classification}
+ml_labels <- if(exists("conditions") && length(conditions) > 0) {
+  as.character(conditions)
+} else {
+  sample_group(samples)
+}
+class_counts <- table(ml_labels[!is.na(ml_labels) & nzchar(ml_labels)])
+save_step_table(
+  data.frame(Group = names(class_counts), LibraryCount = as.integer(class_counts)),
+  "Step14", "Machine_Learning_Sample_Counts.csv"
+)
+# 旧模型产物不能在本模块停止拟合后继续被下游解释为当前结果。
+unlink(vapply(c("LOOCV_Results.csv", "Feature_Importance.csv", "Top50_Important_Peaks_Annotated.csv"),
+              function(x) step_table_file("Step14", x), character(1)))
+write_skipped_state(
+  "Step14", "Machine_Learning_Classification",
+  paste("Supervised prediction is not part of the current Comparison ATAC analysis;",
+        "independent biological-unit metadata and a prespecified validation design are absent.",
+        "Observed libraries:", paste(names(class_counts), class_counts, sep = "=", collapse = ", ")),
+  clear_plot_files = c("Feature_Importance_Optimized.pdf", "Top_Features_Heatmap.pdf"),
+  extra = list(EvidenceRole = "feasibility status only; no fitted model or prediction performance")
+)
+write_module_status_plot("Step14", "Module 14: supervised prediction not performed")
+```

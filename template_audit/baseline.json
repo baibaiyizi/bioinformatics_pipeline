@@ -1,0 +1,1294 @@
+{
+  "created_utc": "2026-09-29T14:55:33.313723+00:00",
+  "model_head": "e62fa0faf7331fdbde708ff7ad8089bbc60661aa",
+  "preexisting_dirty_file": {
+    "path": "/home/h1028/workspace/model/tests/test_sci_agent_config.py",
+    "sha256": "2d1dd823deed23c38f4d43b912a35b6ea149cafffcbbbb39c078beeeca7ffd72"
+  },
+  "sources": [
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/run_rmd.sh",
+      "sha256": "6a8118aa65ea40642802832ca4483134c0eb261cbb81c2b7dad9213e34f61efd"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rnaseq_second.sh",
+      "sha256": "52128dd70eef055a37578f396853d7c62ab10c16daa5ddeb7f49e0a4bb19b77d"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rnaseq_first.sh",
+      "sha256": "08a5f1db6a72ae8aafa22c429b26ad1f29cd7dc2efc0093f054ba34b10ff4e14"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rnaseq_third.sh",
+      "sha256": "2bd5911e3c671dc8e40430eda0b19c9faf87886202a0dc11ede8d489d954dd14"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/04_pca.Rmd",
+      "sha256": "f47a0c229814b91178ee0d1f3238dc31a8a9d575a6adbb09d4c8191c050ab760"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/01_main_setup.R",
+      "sha256": "9d3a13cdf823afbdc504e447f9905576a1cacff7258a866adbd3242516e2369f"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/15_splicing.Rmd",
+      "sha256": "b61d37454ffa59e3420626ea74773433d02b5d7e9826ffe040b8479ad0138911"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/06_enrichment.Rmd",
+      "sha256": "53632987b49772439194b544765e2874d166faf2c4833b15d8c5d32ddb6e5e0e"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/07_go.Rmd",
+      "sha256": "175e436cf151b7be265948ab9654a97c5a58c6214909fa02f404aca1b85e058e"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/16_immune.Rmd",
+      "sha256": "8c9e13186452856e153b79f9fa74f2556a08054feba23129c06fc2ce160395da"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/18_circle.Rmd",
+      "sha256": "9b774241e1f80d6a5f091412437c84c1c394d3e864f4277c7f31899d09da2a03"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/08_gsea.Rmd",
+      "sha256": "91b92a46229dfc06fba9001ff842504134ef8908feee936a13eb8da1a34dc5e7"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/05_de.Rmd",
+      "sha256": "2b6e7c169fe802a9edcae10a5dd69ba3091b635b89759ece1581863d9d7bf886"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/10_tf_regulator.Rmd",
+      "sha256": "959db08e70b7f1468bb7b07864aca0544623e8b857741589b920080bf416205f"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/03_qc.Rmd",
+      "sha256": "2a032327d5afcc959bc85a92c503451e2b72e2e66e10f69fed14d05a219d7839"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/13_apa.Rmd",
+      "sha256": "bce3771ed2fee88dbcf19518be6c3f0a74bdbf2b9d018160c4437feeae0bd8bc"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/12_wgcna.Rmd",
+      "sha256": "e860b411adf5a9f68e88615227bd4a1003303d5d3ce8b57dc8d8f1e593a5b56f"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/09_gsva.Rmd",
+      "sha256": "c553281f29cf92953aef5b4cfcd1d126387123b579413f844aff2147e55ce96f"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/14_der.Rmd",
+      "sha256": "6228db8680595a5790b0e89bf4fbd24fa165bc433fc4df9a807d18d62e42843b"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/11_ppi.Rmd",
+      "sha256": "73873f373797657dcc39244a7291044ac49cec17b38c8a0bd6bf4e8c4366b908"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/17_pathway_activity.Rmd",
+      "sha256": "f1355bcc07e21220f12c7662614bd5b5127349ca71d05c6f2721129c98e1dd3d"
+    },
+    {
+      "path": "/home/h1028/workspace/model/bulkrnaseq/rmd/02_selection.Rmd",
+      "sha256": "f7a2fb49b847a98a904b39e75b865662cc4f97eee5bbf47c625a996bffbb84c0"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/sperm.sh",
+      "sha256": "f11d690a046737f384307c81ebe1d98e110dfae8d433df8e55b0d50e9635966d"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/run_wgbs.sh",
+      "sha256": "2a88d65afee0e0346342641f3fba150b52b63b5d8b1f6d78c8542fd6ecdeb523"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/11_sperm.Rmd",
+      "sha256": "77d545cb45351498be97c1d0f421f5d6652e60d54172759c917215e5333fc024"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/9_degfocused.Rmd",
+      "sha256": "04dad400614e3572dc575ff2b8a67724950d5ac39959a88f967e45d36a6c6aaa"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/8_multiomics.Rmd",
+      "sha256": "afd5027404c8cc1bec644f191e4cf65ce7b57b21b1dc601cf02b03f57dd6e0a1"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/6_genomecontext.Rmd",
+      "sha256": "05181687ed8ea655ecbc04c30be03015ee862aaec414c405913930db4beef515"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/7_regulatory.Rmd",
+      "sha256": "0cd8f58eadb5fa625111ada8492f14df14f7d24ae3f8cf420acdb1bc6d992359"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/1_setup.Rmd",
+      "sha256": "a27ef87332d96843959bdc895a126ec308f415db8a933743b16d9a99452da0e6"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/2_qc.Rmd",
+      "sha256": "9f80dfa6f4cf909ba48d85dbf78e96363a6dee5613176ba54c58b87d020b4c40"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/4_dmroverview.Rmd",
+      "sha256": "1e006fb8c094b2c08e156d57b8a5f13ed200b27a571762fb1c071670c3898038"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/10_browser.Rmd",
+      "sha256": "33d1732f9603bb1aab0a19cb4f0d34e96b48192cd6eba3a26a268bc96ce82ed4"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/3_dmr.Rmd",
+      "sha256": "b13c7b1b5ac57932cb8cea9802c29ef6967017e340a58e20322dbedbd5611f21"
+    },
+    {
+      "path": "/home/h1028/workspace/model/wgbsseq/rmd/5_enrichment.Rmd",
+      "sha256": "b880a015dfef8a2971f2665415d9eacde855af28d3fdfd08c6cdb00791d42935"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/README.md",
+      "sha256": "fb79f8879fe4302f12cfaed903f708cc6714e53284bd6e982e368278d54bbd83"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/environment.yml",
+      "sha256": "3c4ef126fe2dfa41190beb7bb57916c8cddcbaf9b6e96b8fa0c23eaef281c016"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/run_spatial.sh",
+      "sha256": "e2e3a85a51324a5564acb7823223d07c566d431fe2cada6840ae80ad9fdfa34a"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/config/segment_rules.tsv",
+      "sha256": "f520e7285ab3a6055708123b4b6a9bed118679eb4b7b39a929c98ebed57c86d4"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/config/method_options.yaml",
+      "sha256": "e50f76bf4eb311433e47f8fc0c361746d7b85c97bd84e71d96bba05800c6d355"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/config/spatial_config.yaml",
+      "sha256": "63b60bac6a7a7218645c79600b96092a03a234eaa60aaea439cfdb32eb21153d"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/config/platform_profiles.yaml",
+      "sha256": "1e6a477788220ae9361a740f8fd51c8005a998bca1cb113787a50f80b59a7449"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/config/marker_genes.tsv",
+      "sha256": "fd48c2e2eadc7efca8cb052e73f6f41ad2e5d83ae76076d1986bc1a7ca9dc9f9"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/rmd/01_main_setup.R",
+      "sha256": "5ac37df408415905bb8a619d9a3b5b5dc9b7bfc38b7127292cbd2aa4ddcc43eb"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/rmd/04_deconvolution_review.Rmd",
+      "sha256": "f036c93c3de6b475cd5c5b40f1ef89ae53be24b42a47979eb973ab36ef4cd6e2"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/rmd/06_segment_programs.Rmd",
+      "sha256": "b501f8915a0f1a189f3a4446e78e9631ed747bcc80fc7db306c98b68649efa64"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/rmd/05_neighborhood_communication.Rmd",
+      "sha256": "6c4179ec9ce17f572b2f4671290bce45028cac0788704fc896ec10eacf0bd03e"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/rmd/02_qc_overview.Rmd",
+      "sha256": "df0daeda7cba9d0e852af536fafecad4fdeaf484720f4a9b6fab32cf59509835"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/rmd/07_multi_sample_summary.Rmd",
+      "sha256": "56a67ca97fec0ba3a3291854e3d4cd6479444ff4f77ffb981639cca8280c4470"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/rmd/03_spatial_domains.Rmd",
+      "sha256": "f13d1dda885c2eba6711fd4ee5d2fd527943ce94c7cb0f090fa89ec455327254"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/docs/source_notes.md",
+      "sha256": "90f1d81d67425ab60e14779cf7f07a15ce61b34d09997e9e96a37713431f86ed"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/docs/method_catalog.md",
+      "sha256": "60819764f3da839f8e99852cf5fcc68665dd67581e59ce8cdca12971d301ad00"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/docs/decision_matrix.md",
+      "sha256": "e9b09e22c24a483c59f082d56c2c77c773c00d62d6179feae7e29676cf5c88ef"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/docs/platform_playbook.md",
+      "sha256": "bb70a95527681e5e8f6116004ac9e27a1cb6e7ed0f83c8e8d1daea0eb51ebeef"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/scripts/spatial_pipeline.py",
+      "sha256": "d32e51e3e05ed32853be270d06e7d23c70482ab0ccb2d7f3fc6be0084e9d6669"
+    },
+    {
+      "path": "/home/h1028/workspace/model/spatial_transcriptomics/scripts/run_rmd.sh",
+      "sha256": "19c1c235f685025c1210bb6b7216d9127166c30d8afbf7412a2b99d7dd92cad9"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/README.md",
+      "sha256": "77d0c5af8679e7108d604f30d14d55b9fdf88cd1cf420686a94b018761597282"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/run_rmd.sh",
+      "sha256": "6d09b4d270c3599dbb760e1d1ea93a9588ea4c788bf041aa332fa4f31bc9c198"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rnaseq_second.sh",
+      "sha256": "52128dd70eef055a37578f396853d7c62ab10c16daa5ddeb7f49e0a4bb19b77d"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rnaseq_first.sh",
+      "sha256": "7ecb60dd9f47c354e9c40b61d8546d3f217644d2b01a8efb3a918894092736af"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rnaseq_third.sh",
+      "sha256": "0c3ac8693e1c991e6d88408e2dc7d5bf91c7613099d12f672167538ab0fbd527"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/result_pca/auto_selection_summary.tsv",
+      "sha256": "be38d53b3abad9a0f04981acf1466428269ec7bc2ca888b423a0e192ee6ad60c"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/04_pca.Rmd",
+      "sha256": "1b91a19f9b111980d10d510fe153a7fd0e44db0590bb4f5c24676f77a29347e8"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/01_main_setup.R",
+      "sha256": "2b4dc691205b0ce60e59abf414954bc509396d2fddaecada43e6d802662562f6"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/15_splicing.Rmd",
+      "sha256": "33c66a64bac19d009a21618294b0d66120e895323aa8734dbb251a6fcbd8e48a"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/06_enrichment.Rmd",
+      "sha256": "2d680fd6352b2ed9360732f4acec45492a776e673e37e324d21143f2fd48a02d"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/07_go.Rmd",
+      "sha256": "6ef857e17137b01fe4704486f3f56ae4fb3e515d7cbbbd9dc5cf20659f3163ac"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/16_immune.Rmd",
+      "sha256": "ab87e7617397aa155677e30904b99c99e03063aceec3e2cfd846efe12b800ae9"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/18_circle.Rmd",
+      "sha256": "9b774241e1f80d6a5f091412437c84c1c394d3e864f4277c7f31899d09da2a03"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/08_gsea.Rmd",
+      "sha256": "8504c65adf75e6ecb7bc76e630eb092148c6b88cd3e239e2e4db501987fb4532"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/05_de.Rmd",
+      "sha256": "41f0500bf0772053e16c3c6d7d91627b7149d122aaae9726e34e8bd49e90dbe3"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/10_tf_regulator.Rmd",
+      "sha256": "d72a7804d1875fb9679c4c453ea52a09050b2af28eaa5f75601c368fecdfbed3"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/03_qc.Rmd",
+      "sha256": "747e64b8d94321bb8895f04dc09241ba8420e36b1560dd0db0bb11b928e198dd"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/13_apa.Rmd",
+      "sha256": "cdfbc59c8e6e7a71aba765e047f1c9246a79768d8a3919843cd2675076ce9485"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/12_wgcna.Rmd",
+      "sha256": "b352118d5f0e92156f33b0038522b3658196a3b66198355d20e3c4886a66cf29"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/09_gsva.Rmd",
+      "sha256": "b423bcfb17447ba0952a7f3ec42833794c104a375f9f2e1b846907b716505ca4"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/rmats_direction.R",
+      "sha256": "c38db76cafb1e469a2df2a08e83849238882288918c6bd7c5f87a8a87635c291"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/14_der.Rmd",
+      "sha256": "17366f9575652786d5e4d9b6526bd2e720a2f8b450eff234cbf19641e5de12ae"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/11_ppi.Rmd",
+      "sha256": "620ab2fe99958b35c6f20a2c5e3fb8c11ecdc266affa232ba1d951f7dff69510"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/generate_result_report.R",
+      "sha256": "9a666f91520add21d4b5dffafdaac8b360a791c9d49590b4f401fffdee13b2c6"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/17_pathway_activity.Rmd",
+      "sha256": "cc9d4dad8ac5004d53b61be421dd368e58dc2e6a10e8fbd7589aaf7d2388c519"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/02_selection.Rmd",
+      "sha256": "94dbff4415ba8850d420fbd5e0e146a6462d9f9e318a150f6eba335e125c3b56"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/README.md",
+      "sha256": "9430a80a70f1188bae27a72198760ca37b6305ddc7cc207e16db02c86e8f65d1"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/run_rmd.sh",
+      "sha256": "6d09b4d270c3599dbb760e1d1ea93a9588ea4c788bf041aa332fa4f31bc9c198"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rnaseq_second.sh",
+      "sha256": "52128dd70eef055a37578f396853d7c62ab10c16daa5ddeb7f49e0a4bb19b77d"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rnaseq_first.sh",
+      "sha256": "08a5f1db6a72ae8aafa22c429b26ad1f29cd7dc2efc0093f054ba34b10ff4e14"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rnaseq_third.sh",
+      "sha256": "f045ddbc2e29fe0f33950fabedebcabf982419bb53914c36a4f0ab2b93ff585c"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/result_pca/auto_selection_summary.tsv",
+      "sha256": "41ba9acbf039eaa8b77bc555a0f5e951456431a6fe0d8fe607b303e368994bb5"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/04_pca.Rmd",
+      "sha256": "1b91a19f9b111980d10d510fe153a7fd0e44db0590bb4f5c24676f77a29347e8"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/01_main_setup.R",
+      "sha256": "2b4dc691205b0ce60e59abf414954bc509396d2fddaecada43e6d802662562f6"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/15_splicing.Rmd",
+      "sha256": "24e3d321d0608e777455141e0f89b099de73fbbc5b4949e8c77e3704bea11654"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/06_enrichment.Rmd",
+      "sha256": "2d680fd6352b2ed9360732f4acec45492a776e673e37e324d21143f2fd48a02d"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/07_go.Rmd",
+      "sha256": "6ef857e17137b01fe4704486f3f56ae4fb3e515d7cbbbd9dc5cf20659f3163ac"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/16_immune.Rmd",
+      "sha256": "ab87e7617397aa155677e30904b99c99e03063aceec3e2cfd846efe12b800ae9"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/18_circle.Rmd",
+      "sha256": "9b774241e1f80d6a5f091412437c84c1c394d3e864f4277c7f31899d09da2a03"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/08_gsea.Rmd",
+      "sha256": "8504c65adf75e6ecb7bc76e630eb092148c6b88cd3e239e2e4db501987fb4532"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/05_de.Rmd",
+      "sha256": "41f0500bf0772053e16c3c6d7d91627b7149d122aaae9726e34e8bd49e90dbe3"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/10_tf_regulator.Rmd",
+      "sha256": "d72a7804d1875fb9679c4c453ea52a09050b2af28eaa5f75601c368fecdfbed3"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/03_qc.Rmd",
+      "sha256": "747e64b8d94321bb8895f04dc09241ba8420e36b1560dd0db0bb11b928e198dd"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/13_apa.Rmd",
+      "sha256": "cdfbc59c8e6e7a71aba765e047f1c9246a79768d8a3919843cd2675076ce9485"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/12_wgcna.Rmd",
+      "sha256": "b352118d5f0e92156f33b0038522b3658196a3b66198355d20e3c4886a66cf29"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/09_gsva.Rmd",
+      "sha256": "b423bcfb17447ba0952a7f3ec42833794c104a375f9f2e1b846907b716505ca4"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/rmats_direction.R",
+      "sha256": "41cefbe0db2f69534e4d1a080110ef8eca09fe8c0b42d54af6c6a3092e3e0ae5"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/14_der.Rmd",
+      "sha256": "17366f9575652786d5e4d9b6526bd2e720a2f8b450eff234cbf19641e5de12ae"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/11_ppi.Rmd",
+      "sha256": "620ab2fe99958b35c6f20a2c5e3fb8c11ecdc266affa232ba1d951f7dff69510"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/generate_result_report.R",
+      "sha256": "9a666f91520add21d4b5dffafdaac8b360a791c9d49590b4f401fffdee13b2c6"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/17_pathway_activity.Rmd",
+      "sha256": "cc9d4dad8ac5004d53b61be421dd368e58dc2e6a10e8fbd7589aaf7d2388c519"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/02_selection.Rmd",
+      "sha256": "94dbff4415ba8850d420fbd5e0e146a6462d9f9e318a150f6eba335e125c3b56"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/run_new_libraries.sh",
+      "sha256": "20c878a9223b57f078b434826be8d10bc0281cd84ea516f66ac002d0bb9880ff"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/RUN_NOTES.md",
+      "sha256": "39daf6682914edb369fb52f34a6aac51ae3e685d456c807a296002f2b5b79a25"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/README.md",
+      "sha256": "2d949a31d2e5467a010c05832263262f8441b76d4ca8df6a6ed12bb5b840c522"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/run_rmd.sh",
+      "sha256": "58615f1b896e100dc6edfbb0eafa9f1a19521bf97cd2f477ef9b2cfb1ebb1b0f"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rnaseq_second.sh",
+      "sha256": "52128dd70eef055a37578f396853d7c62ab10c16daa5ddeb7f49e0a4bb19b77d"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rnaseq_first.sh",
+      "sha256": "ce54d92538f9f29fc97e4f7859d9862d18d85411a859daf76eddf5e96a2fe8e3"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rnaseq_third.sh",
+      "sha256": "babd5f4c92648a028c801f3e1c0d2e5adb62e6ada860075b00556ac359445db6"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/compare_relibrary.R",
+      "sha256": "45150c8c24f6192593830028b2f30202104d36911f78ae84546816d6edc2ac8a"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/run_analysis.sh",
+      "sha256": "bfba6251d5bbf29ac32564581317d78b4ed5fdb73548f96ca6a7c27511880625"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/04_pca.Rmd",
+      "sha256": "1b91a19f9b111980d10d510fe153a7fd0e44db0590bb4f5c24676f77a29347e8"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/01_main_setup.R",
+      "sha256": "2b4dc691205b0ce60e59abf414954bc509396d2fddaecada43e6d802662562f6"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/15_splicing.Rmd",
+      "sha256": "24e3d321d0608e777455141e0f89b099de73fbbc5b4949e8c77e3704bea11654"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/06_enrichment.Rmd",
+      "sha256": "2d680fd6352b2ed9360732f4acec45492a776e673e37e324d21143f2fd48a02d"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/07_go.Rmd",
+      "sha256": "6ef857e17137b01fe4704486f3f56ae4fb3e515d7cbbbd9dc5cf20659f3163ac"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/16_immune.Rmd",
+      "sha256": "f54504d9ab5a78d3344f226487fdc8b9e8f5fc903dbb7edba1a34ca56d753daf"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/18_circle.Rmd",
+      "sha256": "9b774241e1f80d6a5f091412437c84c1c394d3e864f4277c7f31899d09da2a03"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/08_gsea.Rmd",
+      "sha256": "8504c65adf75e6ecb7bc76e630eb092148c6b88cd3e239e2e4db501987fb4532"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/05_de.Rmd",
+      "sha256": "41f0500bf0772053e16c3c6d7d91627b7149d122aaae9726e34e8bd49e90dbe3"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/10_tf_regulator.Rmd",
+      "sha256": "d72a7804d1875fb9679c4c453ea52a09050b2af28eaa5f75601c368fecdfbed3"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/03_qc.Rmd",
+      "sha256": "747e64b8d94321bb8895f04dc09241ba8420e36b1560dd0db0bb11b928e198dd"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/13_apa.Rmd",
+      "sha256": "cdfbc59c8e6e7a71aba765e047f1c9246a79768d8a3919843cd2675076ce9485"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/12_wgcna.Rmd",
+      "sha256": "b352118d5f0e92156f33b0038522b3658196a3b66198355d20e3c4886a66cf29"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/09_gsva.Rmd",
+      "sha256": "b423bcfb17447ba0952a7f3ec42833794c104a375f9f2e1b846907b716505ca4"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/rmats_direction.R",
+      "sha256": "41cefbe0db2f69534e4d1a080110ef8eca09fe8c0b42d54af6c6a3092e3e0ae5"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/14_der.Rmd",
+      "sha256": "17366f9575652786d5e4d9b6526bd2e720a2f8b450eff234cbf19641e5de12ae"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/11_ppi.Rmd",
+      "sha256": "620ab2fe99958b35c6f20a2c5e3fb8c11ecdc266affa232ba1d951f7dff69510"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/generate_result_report.R",
+      "sha256": "9a666f91520add21d4b5dffafdaac8b360a791c9d49590b4f401fffdee13b2c6"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/17_pathway_activity.Rmd",
+      "sha256": "b5a4e57e8dfabd362c029e58eb27a4e55b4183cd541bc0a323299ddd5bb77972"
+    },
+    {
+      "path": "/home/h1028/workspace/rna_seq/Mus/aging/L2C_MYnew/rmd/02_selection.Rmd",
+      "sha256": "94dbff4415ba8850d420fbd5e0e146a6462d9f9e318a150f6eba335e125c3b56"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/README.md",
+      "sha256": "d50d1eac226c87f2a3cec4034c5c988914b66ec2cfbb657daf6b8f240de8f994"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/sperm.sh",
+      "sha256": "ee0ba36f3c6b0ffe5347f4a8104068ae74cc7314e21996de29e191a49a8f846a"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/run_wgbs.sh",
+      "sha256": "df97a992470d6a657aaf53169fedefa916d8a9a748fdab05ee22c178cfaf4dd9"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/11_sperm.Rmd",
+      "sha256": "93b20d8841b7b8d933f5598bc7a2d4124868f14e32cf8bac27c105c6c1acf016"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/9_degfocused.Rmd",
+      "sha256": "939185003fe4437f29ceb3aa7c44391d606d972f3258fcb9f3cd63f50d15c72d"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/8_multiomics.Rmd",
+      "sha256": "3957c9e35c0d6e34502eb944631e643a08d1bd0765b2d9fd8a72508a7c7eb889"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/6_genomecontext.Rmd",
+      "sha256": "cb6348c7e8c0cf9d1c117d094c7ed046d46fc1239c1d665e522cf91b5a2e0a82"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/7_regulatory.Rmd",
+      "sha256": "8df66a60810c8f0d176a984e44df5591448836d2170821aa36ac8519e4c2eae1"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/1_setup.Rmd",
+      "sha256": "c6fac2a339875646b3f91b187125248fda600631b2a372bbee1643344422ed02"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/2_qc.Rmd",
+      "sha256": "e3981e00d2a38b3405a04b505c9d703b08d7b31335508fb88fd2ffd169296657"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/4_dmroverview.Rmd",
+      "sha256": "593c1ba50982d6da0b9f6314e7a493221ddfa09485f5c2a948085c5ac21f8990"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/10_browser.Rmd",
+      "sha256": "9dfe526f557a359103358a9433e2828390db75bcd22993b0cbdd1a8e54ff1b05"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/3_dmr.Rmd",
+      "sha256": "c16af7755ff8343652708b12fd810a3722a9bded8d6ecc07779d524b53e2314c"
+    },
+    {
+      "path": "/home/h1028/workspace/wgbs/Mus/wgbs_sperm/rmd/5_enrichment.Rmd",
+      "sha256": "b1d555f528b228018eb00acd0987e3c4ef3b83e2546da9099aa5c0bb582c4b4d"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/README.md",
+      "sha256": "579439f847e704ab7fe2b38e76107ba607769b7b5119bb7953c33b3143dda101"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/run_rmd.sh",
+      "sha256": "40464faac738296555e6dfd7de743d7c1b8821594d308addd11919c3b3b94471"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/liver_atac.sh",
+      "sha256": "082e952e0ea605cd0027dbe0768d554c38d4c2a89a039afb27022d161f1ee8db"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/06qc_report/TSS_Enrichment_Method.tsv",
+      "sha256": "9b2fe31d3c31e52358b383aab36f6d93be46ac73a95b1a20e91abe0612ab8c38"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/06qc_report/Library_Complexity_Metrics.tsv",
+      "sha256": "c80a7c848a4105bfaecf8debb0147cc186279d7aa1f3acd27e738b93a9fbdc6b"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/06qc_report/software_versions.tsv",
+      "sha256": "c874ddd8fcfc0717daf19bbfe6e6813782b7dfda3d762b6ea172361a48917a90"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/06qc_report/Optional_Tool_Status.tsv",
+      "sha256": "2e830a74da848b4ef745571dbccaab2650e1ceec1b23fa2e32116608942a3a13"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/06qc_report/Fragment_Size_Classes.tsv",
+      "sha256": "148e2e058b3aedcf33008c674601f477c70c4235bf5a5390cac7b94bfb3f1623"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/05bigwig/raw_macs2_bigwig_status.tsv",
+      "sha256": "1f8ad92d180d1e11368e01d7cceaf1d6448128cbe3f52671dc5dc1f86ed54480"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/07footprinting/Footprinting_Track_Manifest.tsv",
+      "sha256": "4db1f47db27b09f377d817f304d210e9d5092b5d3f72008fb5df259f4f66af83"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/07footprinting/Footprinting_Input_Manifest.tsv",
+      "sha256": "aec2df9f4da26852ed0238a249f904740ba6f6c36cfadb65a5e6af7a1e272948"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/01_main_setup.R",
+      "sha256": "9ffa91133dfdc17e93e291a6539aff6ab2d6d1b11ae7c1811bd8e334458076e6"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/significance_helpers.R",
+      "sha256": "76c6259de11c0dcb072ad899de3b01b64ed172da439372cd79d2c3393a7aff21"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/06_genome_tracks.Rmd",
+      "sha256": "21c6b96b6e645e50a9b2be8d46720cc241733cf7bcd60032a07bbe5a3e16ba99"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/09_rna_multiomics.Rmd",
+      "sha256": "547c9ea093ce9d9af5ed02f80d86552cead48059e9820fed3751095c8f8f905e"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/11_wgbs_integration.Rmd",
+      "sha256": "9f7a30c2fea2f8e8e0413a10fd3e3a628e2086a41d5fdbafb3ddcbebc1068ce1"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/05_differential_accessibility.Rmd",
+      "sha256": "c9e5f2929eef6a43302d6daa3cc732d5007872a0d5ae77967481bc28ae7a58fc"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/12_tf_gene_network.Rmd",
+      "sha256": "52b04dfa128203b93ca71e02b2d490155f524c8a2cac9a9e625ac7c59765cc61"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/13_conservation_gc.Rmd",
+      "sha256": "bfa2fe8d961531cc740b6ff035531852af9f8d65fe0b1477a5b8a5215d647246"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/08_motif_activity.Rmd",
+      "sha256": "447f44bf97c899dd9bbdc71b04f8ab438f644dea9c52718105b30a35b52e2cde"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/15_keygenes_locus_reports.Rmd",
+      "sha256": "5659a27f7e5d64ef1bf4f0f6cf51fd03a12b7201634b00248253579fac124f18"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/14_machine_learning.Rmd",
+      "sha256": "214ee9e3c83161bd9505adb829008a768039f0fe6351fb17165a11def57a95d5"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/03_atac_qc.Rmd",
+      "sha256": "494b94c8793f26ac4993abfd648e511d00e3b687ede9f25b77d1b8a02de3a9ad"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/02_project_inventory.Rmd",
+      "sha256": "f2582af83943698101917f5d3c6b8b310a83035126396b5cb09c397ee19ee0a1"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/16_export_summary_manifest.Rmd",
+      "sha256": "142218d27fda7063b9d36e450cb0b835250c5deeaccf1c8e0e9601365b1d78af"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/10_footprinting_tf_evidence.Rmd",
+      "sha256": "d9e6511c783bce32bea452a3d2605eb98c44a392948d2bfe5ff2263dfd386147"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/generate_result_report.R",
+      "sha256": "d0b2504df7b6334a2aca08b376a2d97d0ad1b3dcb74240688659027ccd2eda41"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/07_peak_gene_enrichment.Rmd",
+      "sha256": "4e611ac4943d12bd0c8f8366ca581af3e9f0ba3c2ca1eee0e1261e8597c8a3c5"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/rmd/04_peak_catalog_annotation.Rmd",
+      "sha256": "d6a615e81a3865f25c577502ecf129f42d59554130a3a225a55efa4f5728fce2"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/04counts/Consensus_Count_Matrix_Method.tsv",
+      "sha256": "bd2681bf4b5ed300e8040cb1cf19a3d25b09756d48c1fbdd0e486ceb3b439832"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/04counts/consensus_peak_counts.library_size.tsv",
+      "sha256": "e382fa28ff53fc69bd01f344f1a83cbf73d4386c0291741c3611db05bb0ee578"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/04counts/Consensus_Count_Matrix_Status.tsv",
+      "sha256": "75a5cb53b8217966d530f41425a2c460a55ff527a9590e94aaf82a1e35c527af"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/04counts/FRiP_Method.tsv",
+      "sha256": "ce16fe3aeee13b7e2c303e81f2acfadbfe7e7da21105b29574898a07bb47133a"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/03peaks/IDR_Reproducibility_Summary.tsv",
+      "sha256": "bb529decd55d1a70217d592400f528381b8a2f0f9977edc90b546785633d7215"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/metadata/upstream_config_signature.tsv",
+      "sha256": "22a49eb427ffa6c8592ac399397570df718ca17dde651505e3aac99b9792b648"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/metadata/sample_manifest.tsv",
+      "sha256": "2a7afb006fb27c8a01a1bc4a733db29cfb9ab5b512e2e952b3f3efdde7074034"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/02mapping/qc/PFOSliver2.library_complexity.tsv",
+      "sha256": "b2cf73e67b2d5d96d4514b1d4eccfd4523eda281a411f57851a1ddf819e6ac3e"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/02mapping/qc/WTliver1.library_complexity.tsv",
+      "sha256": "f3a6ac1f646e4463c4c4e8970e80759d5d2e7c3a563a322b0223e798e35129f4"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/02mapping/qc/PFOSliver1.fragment_classes.tsv",
+      "sha256": "9648cf95689cfe3407e4d7a93a4bd031c4a0b9e0d6ff667ce7604c4a76c6517a"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/02mapping/qc/WTliver2.library_complexity.tsv",
+      "sha256": "5a4c46bbd7e9a70ac229d60c35b053d6edf30a9f38b8cfd79bd2dd0b71c24fbe"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/02mapping/qc/WTliver1.fragment_classes.tsv",
+      "sha256": "fd97eb4a97305ea2018a124eec698cc83b47bd5fdcfbee7d1cc693773cd91cb5"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/02mapping/qc/WTliver2.fragment_classes.tsv",
+      "sha256": "5bdb2f09416f283e89615ea77673e56949146e30ca4669cd8190a65419c50aee"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/02mapping/qc/PFOSliver2.fragment_classes.tsv",
+      "sha256": "5498191cdea4d5bb491cc5a0aa2460d2ff5fa971e9f5929a2135da895b6be36f"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/02mapping/qc/PFOSliver1.library_complexity.tsv",
+      "sha256": "7054b4e8215d0e5e58fa28f1ad2c2163a31d342ef50c20639466b26bbcf9c3b1"
+    },
+    {
+      "path": "/home/h1028/workspace/atac/Mus/liver/06qc_report/ataqv/Ataqv_QC_Status.tsv",
+      "sha256": "89c017a9abcf49f42e09fd8003421beb527a3e5f05c6beffda098ee3ea30e2d0"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/uv.lock",
+      "sha256": "42aeacdb11658b16900b00bdf97dc45d19174152b2c50c057d73ad5161673ef0"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/README.md",
+      "sha256": "d6e24c7639eae2d18c91ea70658fa62148af832eb15b8d66fd37fa6731c5e13b"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/pyproject.toml",
+      "sha256": "abd799602daedfa0c09c8b9894f15b3a2c160d38b649c0141ae20383f1fc90ab"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/run_scrna.sh",
+      "sha256": "29d8a0a1a0202a397c8d92ebaeea3c768461dcc0a7015b7afe965d6ff67fa031"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/sources/github_mouse_cross_condition_islet_atlas_README.md",
+      "sha256": "a63079c23c8d7aa2c92e3e9503e534e71e5c71fbc96af30502f0440adcb453f4"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/sources/github_mouse_cross_condition_islet_atlas_reference_mapping_README.md",
+      "sha256": "ab77aac46d0bdcabdbebf220508d07390a943a517e03007b4b69bb85e898c605"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/sources/github_mouse_cross_condition_islet_atlas_reference_mapping.py",
+      "sha256": "8638004d7410f6131a9d1c3da3e2f32d891860c97ef8bac15b2ee3819065ef92"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/sources/retrieval_log.md",
+      "sha256": "1a487005848b6eaaf006d27b8dcc83ed8945b5783e82fdcb5685d19403b84034"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/sources/research_network_methods_20260905.md",
+      "sha256": "ad7b055b279259948c98d4e51741c8ab3d21bc7931c3a711f3085d806c8986b5"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_extension_enrichment.py",
+      "sha256": "baf05bfc993f38dd4231541e3c4ed25cb679b39cee895f0066e28e637affe66d"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_extension_beta.py",
+      "sha256": "43533614266ce91d2a01456b27a0cd320d5c5e7423215d111608094b3532bb97"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_extension_networks.py",
+      "sha256": "bf9f42ced4b2a2074eb273745997b47bfe135492c3382e2a1842b8d627a47e43"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_synthetic_e2e.py",
+      "sha256": "434ea7fbe00f6c566ee2c8032370938ff0df1348784089d92e94e5a9a1e5a96c"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/conftest.py",
+      "sha256": "ecbd4803369e769b2718d1476a36fb34dd9c93422687484f4ceec7f5b2e06419"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_qc_contract.py",
+      "sha256": "9ce83ef3d883108d1c9a41ae2f3ae00d9ee9338bae193160c0eb7f9d5d072f3a"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_velocity_reference_alias.py",
+      "sha256": "e089f1c353ebd6b3c92a69ba623ce1b74690aa7de6a3fd6f3c30b697e57e2a45"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_cellranger_resume.py",
+      "sha256": "edbe01a8ae6067efd42e27c42e3bab005d4dc5316a3647fd9cf9dc825df89eca"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_extension_contract.py",
+      "sha256": "87db56c0af233254118d053f6dd26f34ea3d0b02f18300fe84c49bdf293e6c1b"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_inputs.py",
+      "sha256": "d4d6de1278c80fc24fe4d577ae2f89aef1347b276b0b78e43906613c5d5229ea"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_velocity_model_e2e.py",
+      "sha256": "18859835e3878b5ae2d157cdedaad4abca6fd279192e235b1444ad349a48f78e"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_replicated_inference.py",
+      "sha256": "13f69c06e502a3913a4e8826f5df5e7376dd867c703f997834e1824266aacc9d"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/tests/test_config_eligibility.py",
+      "sha256": "5d7e75083d23415c66ac59a9a0631f5c32d714e198d392de58c778110a720066"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/config/samples.tsv",
+      "sha256": "f3394fbfb73e49a8a508c061111b534f0b1653428685c726053380e443579b1e"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/config/gene_sets.tsv",
+      "sha256": "0cc69313fcad2fc4e40586fb42c9be5884aab127dd91ef5e15610c3263581268"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/config/markers.yml",
+      "sha256": "278980d0bf306f43c009fcf9b90e3cfd3394348f18e8a9d3d1ace8cc4eaf7447"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/config/project.yml",
+      "sha256": "ef9de3da145e87f6de030c4b99797c6839aa032643184c73b6a778d072cedbfc"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/input_audit/post_rename_md5_verification.tsv",
+      "sha256": "9fd38aa7ef2f1c0af85c087c84f063fb8c93d8d52cfa5af70684eff14e9a0683"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/input_audit/gzip_test.tsv",
+      "sha256": "540534406e9fdaf90260493dc4c821e679125d33a6857f26b261b5929a13bfe4"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/input_audit/seqkit_stats.tsv",
+      "sha256": "41850ef65cd366799aed418978e0e4d1fb430b69e127cdab24d4eb6d0b5a5fda"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/input_audit/sha256_manifest.tsv",
+      "sha256": "9266f94fbc6a63501f19f0d31aa76a6ac0845365ee265562e3e8251c236c9ad2"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/input_audit/rename_mapping.tsv",
+      "sha256": "f99b7ed229bc95c73fdf0905ce4efe44288807c2202f3163f0103997c28cfae8"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/input_audit/vendor_md5_verification.tsv",
+      "sha256": "26a61fc3ef7d113478cef9c950ae4da7e4a3450ecd2c5bc23d8bef31b8136ae5"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/input_audit/read_pair_check.tsv",
+      "sha256": "56d83444658c963195dc10f919d75a814a09fda90e1daa1b311f90d5a4c89972"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/extension_beta_methods.md",
+      "sha256": "392bde3cd187f4b4bcae88888f688c1a2d5964e145bc6c9a1071d0e5e8d189f5"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/scrna_workflow_design.md",
+      "sha256": "b449aa1e68f3f8b550f36775c6a7658a4d97715db16b603444b943ca130ffa12"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/evidence_adopt_adapt_reject.md",
+      "sha256": "6e45fd61c42f7e28fb57633c2e277670449f5248ca27ad263879e69928482cf7"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/extension_velocity_reference.md",
+      "sha256": "f490ca206d5458c9c17a5b620c29de1865edfcd24129a8b15cee0b73f0c07075"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/extension_v2_execution_amendment.md",
+      "sha256": "ea54d2b528891bce5faadf967cbf359bc413a1f9ccc3fa541fb2e18c89508ca7"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/extension_beta_report_zh.md",
+      "sha256": "da7b64d39595b0c7199f0ed8c6092d0e1da48ce93cae186692f8a71b418822ec"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/extension_networks_methods.md",
+      "sha256": "5154dba95071365432cf2137f99443a976c9f0ba86a0389ebb5ce2863b42edca"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/extension_enrichment_methods.md",
+      "sha256": "6f3aa619c5f37ce526ab888e1d5b0501c5b2e63c54e13838aa3a46efddef6887"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/extension_lessons.md",
+      "sha256": "7a614079fe468cda9eedccd884c50d6c125469d8cbfe849230bb175847447e14"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/docs/extension_analysis_plan.md",
+      "sha256": "fe3587dd52b182695955c56397725ce014091d14841be67f50cc6c8122488e4a"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/scripts/extension_scenic_figure_finalize.py",
+      "sha256": "6de3800999eb69dd434285d9e4b1fbd7d537e91e5e994cb0f8a0bc3afd07ddf8"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/scripts/extension_scenic_runner.py",
+      "sha256": "5bb9042bb572dc270fdb771cace231825d1c2aa01ad5ce4e79dd35e5aaec8b02"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/scripts/run_singler.R",
+      "sha256": "ec0fd408d4fc0ef14a205504bdf0ca9ab73849fe1f6119c6c3f3c17051ca7b10"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/scripts/extension_scenic_requirements.lock",
+      "sha256": "f60b567ef0417f84a72305be706cb803a2f4aa6b0aaa682f4ff50e4bba9b58fd"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/scripts/run_soupx.R",
+      "sha256": "259452c1af80c1a8f57a5c7741eed4db691dd8f01675257a27f4324af65880b1"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/scripts/extension_enrichment.R",
+      "sha256": "a5d90058773f1b4b982cdf42c709b381e9402b42b5a571786cc5dd6750b38b24"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/scripts/extension_scenic_smoke.py",
+      "sha256": "2a50241f998c7b0cd2a29b98b57ce71eb6df655f39da601c6b6031b14ac0e795"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/environments/velocity/uv.lock",
+      "sha256": "66dd2c90f062694ad9ac2c7f194f509ac229d6ea20bd09c49c2f5e5f1c3fca91"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/environments/velocity/pyproject.toml",
+      "sha256": "e6aee7f39f9bb1be8e466b16e17d8bf7c1d3af1a5567f7471c711ea99e1bbe46"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/reference/extension_gene_sets/kegg_term2gene.tsv",
+      "sha256": "4b0b71ee172ed09d83e01320b1dc7e527183431ba3f067c97a1902a98f94c17a"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/reference/extension_gene_sets/resource_gene_symbols.tsv",
+      "sha256": "53d4ee90a52c1bae5e7647ac8af4ce0e231bf18c4d81dc18a6153dbe28f3186d"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/reference/extension_gene_sets/kegg_term2name.tsv",
+      "sha256": "c723a692ea4492dd07e32324c4c7628cf1d48d063d3762a9d76534570466c3c3"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/reference/extension_gene_sets/symbol_to_entrez.tsv",
+      "sha256": "ee7febae8f7e3516bbf5a64b3252bf53917888f64e87dcd44ea5dfdabdf84068"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/reference/extension_gene_sets/go_term2name.tsv",
+      "sha256": "2a977b6377d382e02c6fa2b4c9f20db130649469ca50d42fa399ac1227321262"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/reference/extension_gene_sets/resource_metadata.tsv",
+      "sha256": "852381a39ca39b5cb8cf4f18b28ec433652e3df81ef2fadc150f8c13c61864fa"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/reference/velocity/mm39.chromAlias.tsv",
+      "sha256": "4824ffcdfb92ac68eb0ba2abd1af8aba737f24a76f4a9f8a97d9b51fac825770"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/report_assets.py",
+      "sha256": "babd2b477eae8c4932f1774c1dd8f5f5249c0a310aa3b342f31e192ea5e1d3cc"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/extension_beta.py",
+      "sha256": "346d216e41392b88eb17ad0e40125329fcd3f293fcd63211395b0402e17e679f"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/inference.py",
+      "sha256": "e222f46c74eaad97e4f0bfb48c5f959380dffd37ae72b3de9d893e28fa60444e"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/cellranger.py",
+      "sha256": "c4efd4a8c5e6dc6b67776cb97fe6ffec0be8d0cb69c69a3c26fda69f60617fd5"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/inputs.py",
+      "sha256": "4abb9e3317bff798da08dff0ae051418c3314ac8b6216aaa1c3a1312a531ec5f"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/pipeline.py",
+      "sha256": "bc87c11a06da574098a97fc5f9a2b8cc7f616add314193c869e1038e095e3189"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/extension_velocity_model.py",
+      "sha256": "6105f57d4bec49c7c4b4473ccd7547bcea4d8ca2428209a54804279d03dcee32"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/descriptive.py",
+      "sha256": "f5f5220e5be1944d6471174a3b983a0b89bd7968ef2af5c662d554062ba4554b"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/qc.py",
+      "sha256": "768e7bea9bded6df659dd2ccca0a2b287518173dd98d080da226d5eb91627db4"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/__main__.py",
+      "sha256": "19f07de3d1765a6803d4332ab1e67346381236f7769f47640e73849922394790"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/reporting.py",
+      "sha256": "7f6784f7f4df0266e2f89b1e23eafcba9cd00f1d9a77b578fc01b51a29caf5b6"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/fixtures.py",
+      "sha256": "d84bf0222f35c6a6f27c2b919b910739ca0bf97c8e7f7654fe4b4dafff383eda"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/runtime.py",
+      "sha256": "e510f0d0bd96fd734f80199e44c1c60031f390165800bff174338fab8108b77c"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/cli.py",
+      "sha256": "1a9d117c151724a98eb1e02fd5215151d69c3344c8ec345b3530448e872eda7d"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/config.py",
+      "sha256": "92ce92751fd2e7d01bf27540af7df35745860b6533e37c04f4ae0fe9b9068e5c"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/audit.py",
+      "sha256": "dfa353fa09eec7a34bf1e9851f4d8a250342d90f05220f2a80d53b66c44ac96a"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/extension.py",
+      "sha256": "d08e1c4dd06e5845ef0a39ddcfe56424cc7c1e6c172faa6c95d78e4cf9b09969"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/preflight.py",
+      "sha256": "1c0b21568f36edde5c44cfef7c79cbf5e280ea823035fd1da63a3b596bbf2b79"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/eligibility.py",
+      "sha256": "d3e56ba7e9358a5f8f6e77b4c60c1b4981cc0df473191a2198ebae07287404cf"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/__init__.py",
+      "sha256": "f2c453f5804409eda9fc5586b81471d112a2b5ba4d38724b04e11d3f92ff3d31"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/extension_velocity.py",
+      "sha256": "3730b6f0b3da863b0579ce6828bccbfeac56a8745fc817de4034823a8adeb305"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/extension_networks.py",
+      "sha256": "92d05fef583e922eb40ce9dafbdf4ee96d11cda8873273e3083b8d82e155bef4"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/annotation.py",
+      "sha256": "7b214c3ba5a79f92191c0e0e99a3f1d1ba56e17153fd007aee525c40735fa877"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/analysis.py",
+      "sha256": "28dbcc7de28dbba64f21aecbe1329b5338d45ed341b16fa34b3e510d17a483a9"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/plotting.py",
+      "sha256": "89ffea1263ac31461b37d61acc78c9f911591ad3d1dcdff051691ac55ab31a4a"
+    },
+    {
+      "path": "/home/h1028/workspace/sc/Mus/PFOS/src/pfos_scrna/extension_enrichment.py",
+      "sha256": "a9ec9e6a1238648f56553fe5197f5c4b529c3f112a599509c6419d4c082796ec"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/additional_analysis_recommendations.md",
+      "sha256": "7f8527cb58c2c205457bd66b9c16712056dabd7f1680c66bbf6d656397215fda"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/sports.sh",
+      "sha256": "9dc831b39ce73051e3a40f490c32474bc7940c5f3cf4ffbe5324dd3fabfcbe3a"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/README.md",
+      "sha256": "61bcd7a2f535d0da4fc505308697c6553e13fb291dc4f039831f57221f4b04bf"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/run_rmd.sh",
+      "sha256": "0165494634c57e12ff0e3f818377110ec1ad502eb9e514b7448931e25faf299a"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/rmd/05_tsrna_compare.Rmd",
+      "sha256": "643a41c3492ad176569bfe8d922f41fb4b3d5672058faebf5f7189aac2286f37"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/rmd/07_mirna_compare.Rmd",
+      "sha256": "7ed2acbf6d037099edb26c408b4d099d3e565e3cfd723d3c15bc550c3a6d1d4e"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/rmd/09_endosirna.Rmd",
+      "sha256": "408cde01371bf29adf44754814611a6c6288fcbf3a028e2943eb30371697cbc9"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/rmd/04_sncRNA_compare.Rmd",
+      "sha256": "402687df1618b72bbd93d34c0b7ee012dee7113e1d06e21aefecfc510e32cf62"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/rmd/02_single_group.Rmd",
+      "sha256": "a462a5df4168931f58c1db7ee3c2a42fa043f5f1383dd988387ef0c235cb52eb"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/rmd/08_pirna_compare.Rmd",
+      "sha256": "1a21144e8c00eb0b9278a248fe4d06d4eb0b64ae6b1e621d7013cfd0aca9dd4e"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/rmd/03_pca.Rmd",
+      "sha256": "6492e8cb4f1690b41ffe5a8b8f6ca46ba1df0ee1668598df140260b7aa08b026"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/rmd/01_setup.R",
+      "sha256": "3becf0aa0b601c5825b56e14013a5c2f59d0d551665f3a83a10ff9ec039d1f5e"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Mus/MII/rmd/06_rsrna_compare.Rmd",
+      "sha256": "b913e97e3f428da84a95aff9c092a84f6ee7a60109e0f62f6cca87ae61507e19"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/sports.sh",
+      "sha256": "a52b2d31bfa7e954b8470c98e6a1258ff2a38fdb13f73c832852b77f50a9fad0"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/README.md",
+      "sha256": "8f18911a2e39ef8ad0b5e279d182259ccfae2d47e5dc4919858e2b89b26bc8c4"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/run_rmd.sh",
+      "sha256": "205af137a4312ff4b075e08794b9e9d64e79229e7ca50baa7a7f5267d68d5016"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/1.md",
+      "sha256": "1ad0b64fdf9fdd462f9ccf9d1ff89420498f3dc26329547a109bdb079dee061e"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/tmp_fastq/reads_info.normalized.tsv",
+      "sha256": "c052172d983d3b25adf8fc49c0b4fb1fc53a14d5fc5d5afc54aa0c5c525580ab"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/sources/research_summary.md",
+      "sha256": "e70e247d5db6dc96a4f3fee1261169a9a148dbbd6589b4a2dd7a5b9f12ae861c"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/05_tsrna_compare.Rmd",
+      "sha256": "3d239429d596b357dfc06ec8c749bcdc5401646add1185c0067f598cd0c8813b"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/07_mirna_compare.Rmd",
+      "sha256": "3dc45d1bc4836ad9cc5afe5c058837fb1f5f273996797bca66251cf5c36ff149"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/10_capture_bias_diagnostics.Rmd",
+      "sha256": "d433633587e7fbce73d45dca3d1811ed41f2955c72f20c5d2f39157c8db80fcb"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/13_spikein_qc.Rmd",
+      "sha256": "d54ecc366d10ae9355b9cb025bcdd726e2b59cd0fada2468a0683ecaf4d2c2f9"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/04_sncRNA_compare.Rmd",
+      "sha256": "ed66c7830e27fe2b90f19d27a26e02b5a69648539252db4339add4224377effb"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/02_single_group.Rmd",
+      "sha256": "5828310b1b9964d91208bf06ae7a4433a7a91e8b5f51310a74f6de7d204a3b2f"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/08_pirna_compare.Rmd",
+      "sha256": "2840adc9ada9372e9111c19db5351f4d390c500e1a80bbf5a331468ae448f067"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/03_pca.Rmd",
+      "sha256": "5706bddd6d6066574d6f846d5cb0c6084d3762f26a8c64f3f64cce7591a86457"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/09_differential_capture.Rmd",
+      "sha256": "86dc51372e61c1ce9ce0bfa06b05213d40b010bd272a8bf563b7f895c76870b0"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/01_setup.R",
+      "sha256": "b5cd7dd8e8735437148d9093578316ed64bad7bc37a21f7d12cb42f2cb83cb32"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/06_rsrna_compare.Rmd",
+      "sha256": "0f26df38b61f57c09ecb102244f3616e28d602ebc91f71c512c59be7e9dd1930"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/12_snrna_compare.Rmd",
+      "sha256": "0d76d79b608c7488c3965817561254fd3298e72ab3f8166adf1e2cb4199813be"
+    },
+    {
+      "path": "/home/h1028/workspace/pandoraseq/Homo/serum/rmd/11_method_similarity.Rmd",
+      "sha256": "9835425ebd5810a4effdcc319df8257e9f4df4753f5d3d50a269a68a52cd1ad0"
+    },
+    {
+      "path": "/home/h1028/workspace/Metabolism/Mus/model/metabo_first.sh",
+      "sha256": "22b880959a3af5ec5eee69063899a21401777b0cbef98eda30626ec7cf77f3d0"
+    },
+    {
+      "path": "/home/h1028/workspace/Metabolism/Mus/model/README.md",
+      "sha256": "b02cb7b10b79d7651fb7d6e2b321df34646150bdde9f7bbe397a3bb3886944fb"
+    },
+    {
+      "path": "/home/h1028/workspace/Metabolism/Mus/model/metabo_second.sh",
+      "sha256": "bab2edd6dcfb4034a10d3b12de930b8668866db217658848bdbaf8d0e6ef55eb"
+    },
+    {
+      "path": "/home/h1028/workspace/Metabolism/Mus/model/00_config.yml",
+      "sha256": "61760d604455e9ddf60db6ae2bb8eb73e3722660b00ce8bea8d4084790dd428d"
+    },
+    {
+      "path": "/home/h1028/workspace/Metabolism/Mus/model/run.sh",
+      "sha256": "9c3cb777bb2b51a79ee94b0910ebb03710cfaa578361bde970060af64ffb2510"
+    },
+    {
+      "path": "/home/h1028/workspace/Metabolism/Mus/model/pipeline.R",
+      "sha256": "c1f79c3310c06eee7f31df8ec88af69e5f1f4827097cd2fe2155a9605bfb3f65"
+    },
+    {
+      "path": "/home/h1028/workspace/Metabolism/Mus/model/sources/methods.md",
+      "sha256": "4db85b919788e2fca8d9d7a19934e17caa98dd4d531fdd95d79b2632571f0c18"
+    },
+    {
+      "path": "/home/h1028/workspace/Metabolism/Mus/model/R/metabo_core.R",
+      "sha256": "e16a696e38a5b0faaf3b26aac6ae43f28d9926819fef07520ca26f7f71a52de0"
+    }
+  ]
+}

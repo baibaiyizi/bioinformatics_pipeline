@@ -485,13 +485,15 @@ if(requireNamespace("MethylSeekR", quietly = TRUE)) {
       final_pdf <- file.path("result/6_genomecontext/plots/2_segmentation", paste0(tolower(grp), "_final_segmentation.pdf"))
       
       pmd_segments <- tryCatch(
-        MethylSeekR::segmentPMDs(
-          m = seekr_gr,
-          chr.sel = chr_train,
-          pdfFilename = pmd_pdf,
-          seqLengths = seq_lengths_seg[names(seq_lengths_seg) %in% seqlevels(seekr_gr)],
-          num.cores = 1
-        ),
+        wgbs_capture_base_pdf(pmd_pdf, width = 5, height = 5, draw = function() {
+          MethylSeekR::segmentPMDs(
+            m = seekr_gr,
+            chr.sel = chr_train,
+            pdfFilename = NULL,
+            seqLengths = seq_lengths_seg[names(seq_lengths_seg) %in% seqlevels(seekr_gr)],
+            num.cores = 1
+          )
+        }),
         error = function(e) {
           message("   PMD segmentation failed in ", grp, ": ", e$message)
           NA
@@ -500,17 +502,19 @@ if(requireNamespace("MethylSeekR", quietly = TRUE)) {
       pmd_for_umr_lmr <- if(is(pmd_segments, "GRanges")) pmd_segments else NULL
       
       umlmr_segments <- tryCatch(
-        MethylSeekR::segmentUMRsLMRs(
-          m = seekr_gr,
-          meth.cutoff = 0.5,
-          nCpG.cutoff = 3,
-          PMDs = pmd_for_umr_lmr,
-          pdfFilename = umlmr_pdf,
-          num.cores = 1,
-          myGenomeSeq = BSgenome.Mmusculus.UCSC.mm39,
-          seqLengths = seq_lengths_seg[names(seq_lengths_seg) %in% seqlevels(seekr_gr)],
-          minCover = 5
-        ),
+        wgbs_capture_base_pdf(umlmr_pdf, width = 5, height = 5, draw = function() {
+          MethylSeekR::segmentUMRsLMRs(
+            m = seekr_gr,
+            meth.cutoff = 0.5,
+            nCpG.cutoff = 3,
+            PMDs = pmd_for_umr_lmr,
+            pdfFilename = NULL,
+            num.cores = 1,
+            myGenomeSeq = BSgenome.Mmusculus.UCSC.mm39,
+            seqLengths = seq_lengths_seg[names(seq_lengths_seg) %in% seqlevels(seekr_gr)],
+            minCover = 5
+          )
+        }),
         error = function(e) {
           message("   UMR/LMR segmentation failed in ", grp, ": ", e$message)
           NULL
@@ -529,14 +533,20 @@ if(requireNamespace("MethylSeekR", quietly = TRUE)) {
         }
         
         tryCatch({
-          MethylSeekR::plotFinalSegmentation(
-            m = seekr_gr,
-            segs = umlmr_segments,
-            PMDs = pmd_segments,
-            meth.cutoff = 0.5,
-            numRegions = 3,
-            pdfFilename = final_pdf
-          )
+          set.seed(1)
+          wgbs_capture_base_pdf(final_pdf, width = 15, height = 8, draw = function() {
+            for(region_index in seq_len(3L)) {
+              MethylSeekR::plotFinalSegmentation(
+                m = seekr_gr,
+                segs = umlmr_segments,
+                PMDs = pmd_segments,
+                meth.cutoff = 0.5,
+                numRegions = 1,
+                pdfFilename = NULL
+              )
+            }
+            invisible(NULL)
+          })
         }, error = function(e) message("   plotFinalSegmentation failed in ", grp, ": ", e$message))
         
         seg_summary <- umlmr_segments_df %>%
@@ -552,6 +562,7 @@ if(requireNamespace("MethylSeekR", quietly = TRUE)) {
         
         seg_summary_list[[grp]] <- seg_summary
       }
+
     }
     
     if(length(seg_summary_list) > 0) {

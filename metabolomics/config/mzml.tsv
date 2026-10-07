@@ -1,0 +1,7 @@
+file	sample	polarity
+inputs/C1_POS.mzML	C1	POS
+inputs/T1_POS.mzML	T1	POS
+inputs/C2_POS.mzML	C2	POS
+inputs/T2_POS.mzML	T2	POS
+inputs/C3_POS.mzML	C3	POS
+inputs/T3_POS.mzML	T3	POS

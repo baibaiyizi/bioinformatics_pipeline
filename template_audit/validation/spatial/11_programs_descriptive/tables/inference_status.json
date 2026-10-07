@@ -1,0 +1,6 @@
+{
+  "cross_sample_inference": "not_implemented",
+  "unit": "sample summary",
+  "pvalues_produced": false,
+  "reason": "spots/sections are not independent biological replicates; no condition test implemented"
+}

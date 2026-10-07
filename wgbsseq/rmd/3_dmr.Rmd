@@ -78,11 +78,8 @@ dml_df <- dml_df %>%
 
 # 全量 DML 位点表很大，不再默认写成 CSV；保留压缩 RDS 供后续追溯。
 # 当前显著筛选口径仍沿用 config$dmr_p_threshold；严格解读时建议同步查看 FDR/qvalue。
-dml_legacy_csv <- file.path(dmr_table_dir_1, "dml_results.csv")
-dml_legacy_target <- file.path(dmr_table_dir_1, "dml_results_legacy_full_csv_not_regenerated.csv")
-if(file.exists(dml_legacy_csv) && !file.exists(dml_legacy_target)) {
-  file.rename(dml_legacy_csv, dml_legacy_target)
-}
+if(!is.na(dml_pval_col)) dml_df$padj_BH <- p.adjust(dml_df[[dml_pval_col]], method = "BH")
+# padj_BH 是位点层校正，不能被报告为 DMR 区域 FDR。
 saveRDS(dml_df, file.path(dmr_table_dir_1, "dml_results.rds"), compress = "gzip")
 if(!is.na(dml_pval_col)) {
   dml_sig_df <- dml_df %>% filter(.data[[dml_pval_col]] < config$dmr_p_threshold)
@@ -230,7 +227,7 @@ dmr_sensitivity_summary <- bind_rows(lapply(seq_len(nrow(dmr_sensitivity_grid)),
 write_csv(dmr_sensitivity_summary, file.path(dmr_table_dir_1, "dmr_threshold_sensitivity_summary.csv"))
 
 # dmrseq region-level 交叉验证
-# 默认启用以提供 DMR 结果的统计稳健性验证。
+# 可选 region-level 交叉验证，默认关闭；启用后独立记录方法与结果。
 # 若需跳过（例如节省运行时间），设置 WGBS_SKIP_DMRSEQ=1
 dmrseq_status_file <- file.path(dmr_table_dir_1, "dmrseq_crosscheck_status.csv")
 if(isTRUE(config$run_dmrseq_crosscheck)) {
@@ -352,6 +349,9 @@ if("geneId" %in% colnames(dmr_anno_df)) {
 dmr_anno_df$annotation_simple <- normalize_feature_label(dmr_anno_df$annotation)
 
 write_csv(dmr_anno_df, file.path(dmr_table_dir_2, "dmr_annotated.csv"))
+if(!isTRUE(ensure_dmr_cgi_context(required = FALSE, persist = TRUE))) {
+  message("⚠️ 未找到 CpG Island 参考，DMR 注释暂不包含 CGI_context；相关下游分析将明确跳过。")
+}
 
 ```
 

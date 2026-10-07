@@ -1,0 +1,2 @@
+step,status,message
+dmrseq,skipped,unset WGBS_SKIP_DMRSEQ or set it to a value other than 1 to enable

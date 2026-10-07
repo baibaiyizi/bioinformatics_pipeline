@@ -126,6 +126,34 @@ class SciAgentConfigurationTests(unittest.TestCase):
         ]:
             self.assertIn(token, evidence)
 
+    def test_quantitative_literature_learning_and_figure_value_gates(self):
+        router = self.agents["sci"][1]["developer_instructions"]
+        evidence = self.agents["sci_evidence"][1]["developer_instructions"]
+        shared = (AGENT_DIR / "sci_analysis_contract.md").read_text(encoding="utf-8")
+
+        for token in [
+            "固定篇数",
+            "精确发表日期",
+            "规范化标题",
+            "独立生物学单位",
+            "引用数必须带数据库与快照日期",
+            "四层分离",
+        ]:
+            self.assertIn(token, "\n".join([router, evidence]))
+        for token in [
+            "方法采用以问题为单位",
+            "预先写明的 estimand",
+            "图形数量不是分析充分性的验收标准",
+            "同一统计结果换配色、换图型或拆成多个文件不计为新增分析证据",
+            "证据漏斗",
+            "竞争型或自身型零假设",
+            "不能用强制联合批次校正制造共同效应",
+            "失败运行和负结果必须保留",
+        ]:
+            self.assertIn(token, shared)
+        for token in ["public_metadata_gate", "对应推断分支必须 `NO-GO`", "队列内按其物理尺度估计"]:
+            self.assertIn(token, router)
+
     def test_review_writing_and_visualization_learning_contracts(self):
         router = self.agents["sci"][1]["developer_instructions"]
         evidence = self.agents["sci_evidence"][1]["developer_instructions"]

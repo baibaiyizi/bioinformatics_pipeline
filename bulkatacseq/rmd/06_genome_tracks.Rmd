@@ -1,0 +1,103 @@
+## Module 06. 基因组轨迹可视化 (Gviz)
+
+展示当前主差异集合中最显著 Peak 的局部覆盖。所有样本均读取上游 RPGC bigWig，并使用相同纵轴范围；轨道是归一化可及性浏览图，不能替代组间统计检验。
+
+```{r gviz_track, fig.width=10, fig.height=8}
+track_files <- file.path(work_dir, "05bigwig", paste0(samples, "_RPGC.bw"))
+names(track_files) <- samples
+track_status <- data.frame(Status = "SKIPPED", Reason = "No primary differential peaks", stringsAsFactors = FALSE)
+remove_output_with_preview(step_plot_file("Step6", "Top_DiffPeak_Track.pdf"))
+unlink(c(step_table_file("Step6", "Top_DiffPeak_Track_Skipped_State.csv"),
+         step_table_file("Step6", "Top_DiffPeak_Track_Input_and_Scale.csv")))
+
+if(nrow(res_df) == 0) {
+  write_skipped_state("Step6", "Top_DiffPeak_Track", track_status$Reason)
+} else if(!all(file.exists(track_files))) {
+  track_status$Reason <- paste("Missing canonical RPGC bigWig:", paste(samples[!file.exists(track_files)], collapse = ", "))
+  write_skipped_state("Step6", "Top_DiffPeak_Track", track_status$Reason)
+} else {
+  top_peak <- res_df[which.min(res_df$SelectedSignificanceValue), , drop = FALSE]
+  plot_chr <- ensure_ucsc_seqnames(as.character(top_peak$seqnames))
+  from <- max(1L, as.integer(top_peak$start) - 2000L)
+  to <- as.integer(top_peak$end) + 2000L
+  chr_length <- GenomeInfoDb::seqlengths(TxDb.Mmusculus.UCSC.mm39.refGene)[plot_chr]
+  if(length(chr_length) == 1L && !is.na(chr_length)) to <- min(to, chr_length)
+  positions <- seq.int(from, to)
+
+  read_rpgc_region <- function(path) {
+    bw <- rtracklayer::BigWigFile(path)
+    bw_seqinfo <- GenomeInfoDb::seqinfo(bw)
+    aliases <- unique(c(plot_chr, sub("^chr", "", plot_chr)))
+    bw_chr <- aliases[aliases %in% GenomeInfoDb::seqlevels(bw_seqinfo)]
+    if(length(bw_chr) != 1L) stop("Cannot uniquely match chromosome in RPGC bigWig: ", path)
+    query <- GenomicRanges::GRanges(bw_chr, IRanges::IRanges(from, to))
+    signal <- rtracklayer::import(bw, which = query)
+    values <- numeric(length(positions))
+    if(length(signal) > 0L) {
+      if(any(!is.finite(signal$score))) stop("Non-finite RPGC values: ", path)
+      for(i in seq_along(signal)) {
+        first <- max(from, BiocGenerics::start(signal)[i])
+        last <- min(to, BiocGenerics::end(signal)[i])
+        if(first <= last) values[seq.int(first, last) - from + 1L] <- signal$score[i]
+      }
+    }
+    values
+  }
+
+  track_result <- tryCatch({
+    signal_matrix <- vapply(track_files, read_rpgc_region, numeric(length(positions)))
+    common_ylim <- c(0, max(1, signal_matrix, na.rm = TRUE) * 1.05)
+    axis_track <- Gviz::GenomeAxisTrack()
+    gene_track <- Gviz::GeneRegionTrack(
+      TxDb.Mmusculus.UCSC.mm39.refGene, chromosome = plot_chr, start = from, end = to,
+      name = "Genes", transcriptAnnotation = "symbol", background.title = viz_pal$accent["warm"]
+    )
+    data_tracks <- lapply(seq_along(samples), function(i) {
+      track_colour <- unname(viz_pal$group[as.character(conditions[i])])
+      Gviz::DataTrack(
+        start = positions, end = positions, data = signal_matrix[, i],
+        genome = "mm39", chromosome = plot_chr, type = "histogram",
+        name = paste(samples[i], "RPGC"), col.histogram = track_colour,
+        fill.histogram = track_colour, ylim = common_ylim
+      )
+    })
+    tracks <- c(list(axis_track, gene_track), data_tracks)
+    tracks <- lapply(tracks, function(track) {
+      Gviz::displayPars(track) <- list(
+        fontfamily = atac_figure_font_family, fontfamily.title = atac_figure_font_family,
+        fontsize = atac_figure_tick_size, cex = 0.7, cex.axis = 0.7, cex.title = 0.55,
+        fontface.title = 1, rotation.title = 90
+      )
+      track
+    })
+    save_step_table(data.frame(
+      Sample = samples, BigWig = unname(track_files), Normalization = "RPGC",
+      Chromosome = plot_chr, Start = from, End = to,
+      SharedYAxisMin = common_ylim[1], SharedYAxisMax = common_ylim[2],
+      RegionalMean = colMeans(signal_matrix), RegionalMax = apply(signal_matrix, 2, max),
+      EvidenceRole = "normalized locus visualization, not a differential test",
+      stringsAsFactors = FALSE
+    ), "Step6", "Top_DiffPeak_Track_Input_and_Scale.csv")
+    if(should_render_plots()) {
+      track_title <- sprintf("Primary differential peak: %s:%s-%s (RPGC; shared y-axis)", plot_chr, from, to)
+      draw_gviz_dual(
+        step_plot_file("Step6", "Top_DiffPeak_Track.pdf"), width = 10, height = 8,
+        Gviz::plotTracks(tracks, from = from, to = to, chromosome = plot_chr,
+                         main = track_title, cex.main = 0.8, fontface.main = 1, margin = 4)
+      )
+    }
+    TRUE
+  }, error = function(e) {
+    track_status$Reason <<- conditionMessage(e)
+    FALSE
+  })
+  if(isTRUE(track_result)) {
+    track_status$Status <- "COMPLETED"
+    track_status$Reason <- "Canonical RPGC bigWigs; same genomic interval and y-axis across samples"
+  } else {
+    write_skipped_state("Step6", "Top_DiffPeak_Track", track_status$Reason,
+                        clear_plot_files = "Top_DiffPeak_Track.pdf")
+  }
+}
+save_step_table(track_status, "Step6", "Genome_Track_Status.csv")
+```

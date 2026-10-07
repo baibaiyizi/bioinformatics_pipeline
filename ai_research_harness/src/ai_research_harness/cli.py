@@ -26,7 +26,7 @@ EXIT_BLOCKED = 2
 EXIT_GATE_FAILED = 3
 EXIT_ENVIRONMENT = 4
 AGENT_DIR = Path("/home/h1028/.codex/agents")
-AI_LEARNING_DIR = Path("/home/h1028/workspace/ai_learning")
+AI_LEARNING_DIR = Path("/home/h1028/workspace/sci_learning/ai")
 QUALIFICATION = ASSETS / "evals" / "frozen_qualification.yaml"
 
 

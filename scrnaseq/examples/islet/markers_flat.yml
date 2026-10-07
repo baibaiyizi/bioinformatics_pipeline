@@ -1,0 +1,122 @@
+cell_types:
+  acinar:
+    positive:
+    - Prss1
+    - Prss2
+    - Cpa1
+    - Amy2a1
+    - Cela3b
+    negative:
+    - Krt19
+    - Pecam1
+    - Ptprc
+  ductal:
+    positive:
+    - Krt19
+    - Krt8
+    - Krt18
+    - Krt7
+    - Muc1
+    - Spp1
+    negative:
+    - Prss1
+    - Pecam1
+    - Ptprc
+  endothelial:
+    positive:
+    - Kdr
+    - Esam
+    - Emcn
+    - Pecam1
+    - Klf2
+    negative:
+    - Ptprc
+    - Krt19
+    - Col1a1
+  mesenchymal:
+    positive:
+    - Col1a1
+    - Col1a2
+    - Col3a1
+    - Dcn
+    - Lum
+    negative:
+    - Pecam1
+    - Ptprc
+    - Krt19
+  immune:
+    positive:
+    - Ptprc
+    - Lst1
+    - Tyrobp
+    - Cd74
+    - C1qa
+    negative:
+    - Krt19
+    - Pecam1
+    - Col1a1
+  neural:
+    positive:
+    - S100b
+    - Plp1
+    - Sox10
+    - Mpz
+    negative:
+    - Ptprc
+    - Pecam1
+    - Krt19
+  beta:
+    positive:
+    - Ins1
+    - Ins2
+    - Iapp
+    - Pdx1
+    - Nkx6-1
+    - Mafa
+    - Slc2a2
+    negative:
+    - Gcg
+    - Sst
+    - Ppy
+    - Ghrl
+  alpha:
+    positive:
+    - Gcg
+    - Mafb
+    - Arx
+    - Ttr
+    - Irx2
+    negative:
+    - Ins1
+    - Ins2
+    - Sst
+    - Ppy
+  delta:
+    positive:
+    - Sst
+    - Hhex
+    - Ghsr
+    negative:
+    - Ins1
+    - Ins2
+    - Gcg
+    - Ppy
+  gamma:
+    positive:
+    - Ppy
+    - Pyy
+    - Pantr1
+    negative:
+    - Ins1
+    - Ins2
+    - Gcg
+    - Sst
+  epsilon:
+    positive:
+    - Ghrl
+    - Irs4
+    negative:
+    - Ins1
+    - Ins2
+    - Gcg
+    - Sst

@@ -1,8 +1,9 @@
-# Step 16: 差异免疫浸润
+# Step 16: 免疫相关表达评分
 
 ## 16.1 免疫分数矩阵与差异检验
 
 ```{r}
+if (!truthy_env("RNASEQ_IMMUNE_APPLICABLE", default=FALSE)) stop("16 模块需明确 RNASEQ_IMMUNE_APPLICABLE=true 并确认组织/参考适用")
 ensure_module_result_layout("16_immune")
 
 immune_expr_mat <- make_gene_symbol_matrix(log2(gene_exp + 1), de_result)
@@ -83,8 +84,8 @@ write.table(mmcp_mat, file.path(step12_dir, "16_2_mmcpcounter_score_matrix.tsv")
 immune_differential_scores <- bind_rows(immune_ssgsea_diff, immune_mmcp_diff) %>%
   dplyr::select(method, everything())
 write_csv_safe(immune_differential_scores, file.path(step12_dir, "16_immune_differential_scores.csv"), row.names = FALSE)
-write_csv_compat(immune_ssgsea_diff, file.path(step12_dir, "16_3_ssgsea_differential_scores.csv"), row.names = FALSE)
-write_csv_compat(immune_mmcp_diff, file.path(step12_dir, "16_4_mmcpcounter_differential_scores.csv"), row.names = FALSE)
+
+
 
 immune_ssgsea_diff$key <- sanitize_pathway_key(immune_ssgsea_diff$cell_type)
 immune_mmcp_diff$key <- sanitize_pathway_key(immune_mmcp_diff$cell_type)
@@ -100,9 +101,24 @@ write_csv_safe(immune_method_concordance, file.path(step12_dir, "16_5_method_con
 ## 16.2 免疫浸润图表
 
 ```{r}
+immune_ssgsea_plot_tbl <- immune_ssgsea_diff
+immune_ssgsea_plot_tbl$figure_significance <- figure_significance_values(
+  immune_ssgsea_plot_tbl,
+  pvalue_candidates = "P.Value",
+  fdr_candidates = "adj.P.Val"
+)
+immune_ssgsea_plot_tbl <- immune_ssgsea_plot_tbl %>% arrange(figure_significance, desc(abs(logFC)))
+immune_mmcp_plot_tbl <- immune_mmcp_diff
+immune_mmcp_plot_tbl$figure_significance <- figure_significance_values(
+  immune_mmcp_plot_tbl,
+  pvalue_candidates = "P.Value",
+  fdr_candidates = "adj.P.Val"
+)
+immune_mmcp_plot_tbl <- immune_mmcp_plot_tbl %>% arrange(figure_significance, desc(abs(logFC)))
+
 immune_heatmap_mat <- rbind(
-  immune_ssgsea_mat[rownames(immune_ssgsea_mat) %in% head(immune_ssgsea_diff$cell_type, 10), , drop = FALSE],
-  mmcp_mat[rownames(mmcp_mat) %in% head(immune_mmcp_diff$cell_type, 10), , drop = FALSE]
+  immune_ssgsea_mat[rownames(immune_ssgsea_mat) %in% head(immune_ssgsea_plot_tbl$cell_type, 10), , drop = FALSE],
+  mmcp_mat[rownames(mmcp_mat) %in% head(immune_mmcp_plot_tbl$cell_type, 10), , drop = FALSE]
 )
 if (nrow(immune_heatmap_mat) >= 2) {
   immune_heatmap_scaled <- safe_scale_rows(immune_heatmap_mat)
@@ -125,8 +141,8 @@ if (nrow(immune_heatmap_mat) >= 2) {
 }
 
 top_immune_features <- bind_rows(
-  immune_ssgsea_diff %>% slice_head(n = 5) %>% mutate(method = "ssGSEA"),
-  immune_mmcp_diff %>% slice_head(n = 5) %>% mutate(method = "mMCPcounter")
+  immune_ssgsea_plot_tbl %>% slice_head(n = 5) %>% mutate(method = "ssGSEA"),
+  immune_mmcp_plot_tbl %>% slice_head(n = 5) %>% mutate(method = "mMCPcounter")
 ) %>%
   distinct(method, cell_type, .keep_all = TRUE)
 
@@ -150,7 +166,7 @@ if (nrow(immune_score_long) > 0) {
     facet_grid(method ~ cell_type, scales = "free_y") +
     scale_fill_manual(values = group_colors) +
     labs(title = "Top differential immune infiltration signals", x = NULL, y = "Immune score") +
-    theme_rnaseq_bw(base_size = viz_style$compact_size) +
+    theme_rnaseq_publication(base_size = viz_style$compact_size) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
   save_plot_versions(immune_violin, file.path(step12_dir, "16_7_top_immune_boxplots.pdf"), width = 12, height = 8)
 }
@@ -159,11 +175,11 @@ if (nrow(immune_method_concordance) > 0) {
   concord_plot <- immune_method_concordance %>%
     ggplot(aes(x = logFC_ssgsea, y = logFC_mmcp)) +
     geom_point(size = 2.2, color = viz_pal$sig_gradient["high"], alpha = 0.85) +
-    geom_text_repel(aes(label = cell_type_ssgsea), size = 3) +
+    geom_text_repel(aes(label = cell_type_ssgsea), size = rnaseq_figure_text_size) +
     geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
     geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
     labs(title = "Immune method concordance", x = "ssGSEA logFC", y = "mMCPcounter logFC") +
-    theme_rnaseq_bw()
+    theme_rnaseq_publication()
   save_plot_versions(concord_plot, file.path(step12_dir, "16_8_method_concordance_scatter.pdf"), width = 7.5, height = 6)
 
   concord_mat <- cor(rbind(immune_ssgsea_mat, mmcp_mat), use = "pairwise.complete.obs")
@@ -173,7 +189,7 @@ if (nrow(immune_method_concordance) > 0) {
     geom_tile(color = viz_pal$neutral["light"]) +
     scale_fill_heatmap_diverging(midpoint = 0) +
     labs(title = "Immune score sample-correlation heatmap", x = NULL, y = NULL, fill = "r") +
-    theme_rnaseq_minimal(base_size = viz_style$compact_size) +
+    theme_rnaseq_publication(base_size = viz_style$compact_size) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
   save_plot_versions(concord_heatmap, file.path(step12_dir, "16_9_method_concordance_heatmap.pdf"), width = 8, height = 7)
 }
@@ -201,14 +217,18 @@ write_immune_state <- function() {
 }
 write_immune_state()
 
-immune_rank_plot <- immune_rank_tbl %>%
+immune_rank_plot_tbl <- bind_rows(immune_ssgsea_plot_tbl, immune_mmcp_plot_tbl) %>%
+  mutate(label = paste(method, cell_type, sep = " | ")) %>%
+  arrange(figure_significance, desc(abs(logFC))) %>%
+  slice_head(n = 20)
+immune_rank_plot <- immune_rank_plot_tbl %>%
   mutate(label = factor(label, levels = rev(label))) %>%
   ggplot(aes(x = label, y = logFC, fill = method)) +
   geom_col(width = 0.75) +
   coord_flip() +
-  scale_fill_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), immune_rank_tbl$method)) +
+  scale_fill_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), immune_rank_plot_tbl$method)) +
   labs(title = "Differential immune infiltration ranking", x = NULL, y = paste0(group2_label, " - ", group1_label, " logFC")) +
-  theme_rnaseq_minimal()
+  theme_rnaseq_publication()
 save_plot_versions(immune_rank_plot, file.path(step12_dir, "16_11_differential_immune_ranking_plot.pdf"), width = 9, height = 7)
 write_immune_state()
 ```

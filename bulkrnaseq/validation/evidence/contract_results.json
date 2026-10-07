@@ -1,0 +1,112 @@
+[
+  {
+    "case": "rnaseq_first.sh--help",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "rnaseq_first.sh--list",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "rnaseq_first.sh--preflight",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "rnaseq_second.sh--help",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "rnaseq_second.sh--list",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "rnaseq_second.sh--preflight",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "rnaseq_third.sh--help",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "rnaseq_third.sh--list",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "rnaseq_third.sh--preflight",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "run_rmd.sh--help",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "run_rmd.sh--list",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "run_rmd.sh--preflight",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "readonly_help_list_preflight",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "duplicate_sample",
+    "pass": true,
+    "detail": "ERROR: sample 为空、格式无效或重复: C1"
+  },
+  {
+    "case": "duplicate_biological_unit",
+    "pass": true,
+    "detail": "ERROR: 生物学单位未知或重复；本模板要求每个独立动物/池一列: C2"
+  },
+  {
+    "case": "unknown_biological_unit",
+    "pass": true,
+    "detail": "ERROR: 生物学单位未知或重复；本模板要求每个独立动物/池一列: C1"
+  },
+  {
+    "case": "third_group",
+    "pass": true,
+    "detail": "ERROR: 未知组别: other"
+  },
+  {
+    "case": "prepare_original",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "row_order_invariant",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "stale_counts_rejected",
+    "pass": true,
+    "detail": "ERROR: STALE: 输入/配置变更。请使用全新输出目录重新运行；旧结果不能证明当前配置已执行\n"
+  },
+  {
+    "case": "fastq_name_contract",
+    "pass": true,
+    "detail": ""
+  },
+  {
+    "case": "fastq_dry_run_readonly",
+    "pass": true,
+    "detail": ""
+  }
+]

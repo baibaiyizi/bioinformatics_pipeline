@@ -1,0 +1,6 @@
+{
+  "n_iter": 500,
+  "max_iter": 500,
+  "status": "iteration_limit_reached",
+  "reconstruction_error": 92.95405728690388
+}

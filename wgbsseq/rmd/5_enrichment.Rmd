@@ -8,6 +8,18 @@ enrichment_plot_dir <- "result/5_enrichment/plots/1"
 enrichment_table_dir <- "result/5_enrichment/tables/1"
 ensure_step_dirs(enrichment_plot_dir, enrichment_table_dir)
 
+# 清理已被统一长表取代的旧拆分表，避免重跑后新旧口径并存。
+legacy_enrichment_tables <- c(
+  Sys.glob(file.path(enrichment_table_dir, "kegg_enrichment_results*.csv")),
+  Sys.glob(file.path(enrichment_table_dir, "go_*_enrichment_results*.csv")),
+  Sys.glob(file.path(enrichment_table_dir, "methylation_*_GSEA.csv"))
+)
+if(length(legacy_enrichment_tables) > 0) unlink(legacy_enrichment_tables)
+enrichment_ora_file <- file.path(enrichment_table_dir, "enrichment_ora_long.csv")
+if(file.exists(enrichment_ora_file)) file.remove(enrichment_ora_file)
+enrichment_ora_status_file <- file.path(enrichment_table_dir, "enrichment_ora_status.csv")
+if(file.exists(enrichment_ora_status_file)) file.remove(enrichment_ora_status_file)
+
 ensure_dmr_outputs_loaded()
 
 # 1 富集输入数据准备
@@ -88,8 +100,8 @@ if(!is.null(wgbs_universe) && nrow(wgbs_universe) > 0 && "ENTREZID" %in% colname
 
 # 2 KEGG 功能富集分析
 # ------------------------------------------------------------------
-# 同时保留完整结果和 pvalue < 0.05 的结果，便于后面溯源和换图。
-# 当前继续沿用 pvalue < 0.05 的展示口径；最终投稿/严格筛选建议同时报告 p.adjust 或 qvalue < 0.05。
+# ORA 全量结果统一写入一张长表；实际展示口径由 WGBS_SIGNIFICANCE_MODE 控制。
+enrichment_ora_tables <- list()
 message("Running KEGG enrichment...")
 kegg_enrich <- enrichKEGG(gene = sig_genes,
                           organism = "mmu",
@@ -99,55 +111,62 @@ kegg_enrich <- enrichKEGG(gene = sig_genes,
 
 if(!is.null(kegg_enrich) && nrow(as.data.frame(kegg_enrich)) > 0) {
   kegg_enrich <- setReadable(kegg_enrich, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
-  write.csv(as.data.frame(kegg_enrich), "result/5_enrichment/tables/1/kegg_enrichment_results.csv", row.names = FALSE)
-  kegg_enrich@result <- kegg_enrich@result[kegg_enrich@result$pvalue < config$enrichment_p_threshold, ]
-  write.csv(as.data.frame(kegg_enrich), "result/5_enrichment/tables/1/kegg_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
+  enrichment_ora_tables$kegg <- standardize_enrichment_table(
+    as.data.frame(kegg_enrich), "ORA", "KEGG", NA_character_, "analysis", "DMR_genes"
+  )
+  kegg_enrich <- filter_enrichment_object(kegg_enrich)
   
   # KEGG 可视化 (统一配色)
-  save_ora_barplot(as.data.frame(kegg_enrich), "result/5_enrichment/plots/1/kegg_barplot.pdf",
-                   "KEGG Pathway Enrichment", top_n = 15)
-  save_ora_dotplot(as.data.frame(kegg_enrich), "result/5_enrichment/plots/1/kegg_dotplot.pdf",
-                   "KEGG Enrichment", top_n = 15)
-  save_enrichment_cnetplot(kegg_enrich, geneList,
-                           "result/5_enrichment/plots/1/kegg_cnetplot.pdf",
-                           "KEGG Cnetplot", showCategory = 5)
+  if(!is.null(kegg_enrich) && nrow(as.data.frame(kegg_enrich)) > 0) {
+    save_ora_barplot(as.data.frame(kegg_enrich), "result/5_enrichment/plots/1/kegg_barplot.pdf",
+                     "KEGG Pathway Enrichment", top_n = 15)
+    save_ora_dotplot(as.data.frame(kegg_enrich), "result/5_enrichment/plots/1/kegg_dotplot.pdf",
+                     "KEGG Enrichment", top_n = 15)
+    save_enrichment_cnetplot(kegg_enrich, geneList,
+                             "result/5_enrichment/plots/1/kegg_cnetplot.pdf",
+                             "KEGG Cnetplot", showCategory = 5)
+  }
 }
 ```
 
 ```{r}
 # 3 GO 功能富集分析
 # ------------------------------------------------------------------
-# GO 按 BP / MF / CC / ALL 分开运行，后面不同图型直接复用各自结果对象。
+# GO 仅保存互不重复的 BP / MF / CC；不再把三者的并集 ALL 重复写入长表。
 message("Running GO enrichment...")
 
-# 分别运行 BP, MF, CC, ALL
+# 分别运行 BP, MF, CC
 go_bp <- enrichGO(gene = sig_genes, universe = enrich_universe, OrgDb = org.Mm.eg.db, keyType = "ENTREZID", ont = "BP", pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
 go_mf <- enrichGO(gene = sig_genes, universe = enrich_universe, OrgDb = org.Mm.eg.db, keyType = "ENTREZID", ont = "MF", pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
 go_cc <- enrichGO(gene = sig_genes, universe = enrich_universe, OrgDb = org.Mm.eg.db, keyType = "ENTREZID", ont = "CC", pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
-go_all <- enrichGO(gene = sig_genes, universe = enrich_universe, OrgDb = org.Mm.eg.db, keyType = "ENTREZID", ont = "ALL", pvalueCutoff = 1, qvalueCutoff = 1, readable = TRUE)
+go_objects <- list(BP = go_bp, MF = go_mf, CC = go_cc)
+for(ont in names(go_objects)) {
+  obj <- go_objects[[ont]]
+  if(!is.null(obj) && nrow(as.data.frame(obj)) > 0) {
+    enrichment_ora_tables[[paste0("go_", tolower(ont))]] <- standardize_enrichment_table(
+      as.data.frame(obj), "ORA", "GO", ont, "analysis", "DMR_genes"
+    )
+    go_objects[[ont]] <- filter_enrichment_object(obj)
+  }
+}
+go_bp <- go_objects$BP
+go_mf <- go_objects$MF
+go_cc <- go_objects$CC
 
-# 保存未过滤结果
-if(!is.null(go_bp)) write.csv(as.data.frame(go_bp), "result/5_enrichment/tables/1/go_bp_enrichment_results.csv", row.names = FALSE)
-if(!is.null(go_mf)) write.csv(as.data.frame(go_mf), "result/5_enrichment/tables/1/go_mf_enrichment_results.csv", row.names = FALSE)
-if(!is.null(go_cc)) write.csv(as.data.frame(go_cc), "result/5_enrichment/tables/1/go_cc_enrichment_results.csv", row.names = FALSE)
-if(!is.null(go_all)) write.csv(as.data.frame(go_all), "result/5_enrichment/tables/1/go_all_enrichment_results.csv", row.names = FALSE)
-
-# 过滤pvalue<0.05并保存，用于后续绘图
-if(!is.null(go_bp)) go_bp@result <- go_bp@result[go_bp@result$pvalue < config$enrichment_p_threshold, ]
-if(!is.null(go_mf)) go_mf@result <- go_mf@result[go_mf@result$pvalue < config$enrichment_p_threshold, ]
-if(!is.null(go_cc)) go_cc@result <- go_cc@result[go_cc@result$pvalue < config$enrichment_p_threshold, ]
-if(!is.null(go_all)) go_all@result <- go_all@result[go_all@result$pvalue < config$enrichment_p_threshold, ]
-
-if(!is.null(go_bp)) write.csv(as.data.frame(go_bp), "result/5_enrichment/tables/1/go_bp_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
-if(!is.null(go_mf)) write.csv(as.data.frame(go_mf), "result/5_enrichment/tables/1/go_mf_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
-if(!is.null(go_cc)) write.csv(as.data.frame(go_cc), "result/5_enrichment/tables/1/go_cc_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
-if(!is.null(go_all)) write.csv(as.data.frame(go_all), "result/5_enrichment/tables/1/go_all_enrichment_results_p_lt_0_05.csv", row.names = FALSE)
+enrichment_ora_long <- bind_rows(enrichment_ora_tables)
+if(nrow(enrichment_ora_long) > 0) {
+  write_csv(enrichment_ora_long, enrichment_ora_file)
+} else {
+  write_csv(
+    tibble(step = "ORA", status = "empty", message = "no enrichment terms returned"),
+    enrichment_ora_status_file
+  )
+}
 
 # 计算相似度 (用于 treeplot)
 if(!is.null(go_bp) && nrow(go_bp) > 0) go_bp <- pairwise_termsim(go_bp)
 if(!is.null(go_mf) && nrow(go_mf) > 0) go_mf <- pairwise_termsim(go_mf)
 if(!is.null(go_cc) && nrow(go_cc) > 0) go_cc <- pairwise_termsim(go_cc)
-if(!is.null(go_all) && nrow(go_all) > 0) go_all <- pairwise_termsim(go_all)
 ```
 
 ```{r}
@@ -232,11 +251,16 @@ if(exists("gene_df_final") && nrow(gene_df_final) > 0) {
   meth_rank <- gene_df_final$diffMethy
   names(meth_rank) <- gene_df_final$ENTREZID
   meth_rank <- meth_rank[!is.na(names(meth_rank)) & !duplicated(names(meth_rank))]
-  build_gsea_plots(
+  methylation_gsea <- build_gsea_plots(
     rank_vec = meth_rank,
     prefix = "result/5_enrichment/tables/1/methylation",
     title_prefix = "Methylation Rank",
-    plot_prefix = "result/5_enrichment/plots/1/methylation"
+    plot_prefix = "result/5_enrichment/plots/1/methylation",
+    context_type = "analysis",
+    context = "DMR_gene_rank"
   )
+  if(!is.null(methylation_gsea) && !is.null(methylation_gsea$tables)) {
+    write_csv(methylation_gsea$tables, file.path(enrichment_table_dir, "methylation_gsea_long.csv"))
+  }
 }
 ```

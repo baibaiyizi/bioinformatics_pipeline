@@ -1,0 +1,19 @@
+```{r literature-rationale, include=FALSE}
+endo_literature_rationale <- tibble::tribble(
+  ~EvidenceTheme, ~AnalysisConsequence, ~Source,
+  "Mouse oocytes have a prominent endo-siRNA pathway; Dicer and AGO2 catalytic activity are linked to meiotic spindle/chromosome phenotypes and TE control.",
+  "Treat endo-siRNA as a biologically meaningful mouse MII object rather than an 'other' subclass; report sample burden, group shift, and length signature.",
+  "Stein et al. 2015 PLOS Genetics; https://journals.plos.org/plosgenetics/article?id=10.1371/journal.pgen.1005013",
+  "Oocyte endo-siRNAs are Dicer-sized small RNAs, commonly around 21-23/24 nt; aged mouse oocytes show altered endo-siRNA profiles.",
+  "Prioritize 21-24 nt mapped fractions and separate possible piRNA-like 26-31 nt signal.",
+  "Mihalas et al. 2019 Aging; https://pmc.ncbi.nlm.nih.gov/articles/PMC6555462/",
+  "Pseudogene-derived and transposon-associated sources are central to mouse oocyte endo-siRNA biology.",
+  "Keep exact sequence proxy, Bowtie reference mapping, reference-target tables, and conservative unannotated candidates as separate evidence layers.",
+  "Tam et al. 2008 Nature; https://pmc.ncbi.nlm.nih.gov/articles/PMC2981145/",
+  "Recent mammalian oocyte comparisons emphasize that abundant endo-siRNAs are mouse-specific and linked to TE silencing context.",
+  "Interpret the module as mouse-specific and avoid overgeneralizing to other mammals; compare with piRNA/TE context only as supporting evidence.",
+  "Hou et al. 2024 Genome Biology; https://pmc.ncbi.nlm.nih.gov/articles/PMC10964541/"
+)
+write_csv_safe(endo_literature_rationale, "01_literature_rationale/endo_siRNA_literature_rationale.csv")
+```
+

@@ -1,0 +1,35 @@
+{
+  "01_validate_inputs": {
+    "status": "completed"
+  },
+  "02_build_objects": {
+    "status": "completed"
+  },
+  "03_qc_filter": {
+    "status": "completed"
+  },
+  "04_normalize_features": {
+    "status": "completed"
+  },
+  "05_integrate_cluster": {
+    "status": "completed"
+  },
+  "07_spatial_domains": {
+    "status": "completed"
+  },
+  "08_cell_type_annotation": {
+    "status": "completed"
+  },
+  "09_deconvolution": {
+    "status": "completed"
+  },
+  "11_programs_descriptive": {
+    "status": "completed"
+  },
+  "13_multi_sample_summary": {
+    "status": "completed"
+  },
+  "14_report_index": {
+    "status": "completed"
+  }
+}

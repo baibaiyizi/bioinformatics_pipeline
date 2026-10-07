@@ -38,7 +38,7 @@ module_hub_tbl <- data.frame()
 
 if (coexp_enabled) {
   tryCatch({
-    allowWGCNAThreads()
+    allowWGCNAThreads(nThreads = 16L)
     cor <- WGCNA::cor
 
     network_expr <- if (coexp_is_log_scale) coexp_expr else log2(coexp_expr + 1)
@@ -71,7 +71,7 @@ if (coexp_enabled) {
       geom_hline(yintercept = 0.8, linetype = "dashed", color = viz_pal$neutral["dark"]) +
       scale_x_continuous(breaks = powers) +
       labs(title = "WGCNA: Soft Threshold Selection", y = "Scale-free fit (R^2)") +
-      theme_rnaseq_minimal()
+      theme_rnaseq_publication()
     save_plot_versions(
       soft_plot,
       primary = "result/12_wgcna/12_1_WGCNA_Soft_Threshold_Selection.pdf",
@@ -133,7 +133,7 @@ if (coexp_enabled) {
       scale_color_manual(values = module_palette) +
       scale_shape_manual(values = group_shape_values) +
       labs(title = "WGCNA: Module Eigengenes", y = "Scaled eigengene", x = NULL) +
-      theme_rnaseq_minimal() +
+      theme_rnaseq_publication() +
       theme(legend.position = "top", axis.text.x = element_text(angle = 45, hjust = 1))
     save_plot_versions(
       eigengene_plot,
@@ -160,10 +160,10 @@ if (coexp_enabled) {
              label = sprintf("%.2f\np=%.3g", correlation, pvalue)) %>%
       ggplot(aes(x = paste0(group2_label, "_vs_", group1_label), y = Module, fill = correlation)) +
       geom_tile(color = viz_pal$neutral["light"]) +
-      geom_text(aes(label = label), size = 3) +
+      geom_text(aes(label = label), size = rnaseq_figure_text_size) +
       scale_fill_heatmap_diverging(midpoint = 0) +
-      labs(title = "模块与分组的相关性", x = NULL, y = NULL, fill = "Correlation") +
-      theme_rnaseq_minimal()
+      labs(title = "Module-trait correlations", x = NULL, y = NULL, fill = "Correlation") +
+      theme_rnaseq_publication()
     save_plot_versions(
       module_trait_plot,
       primary = "result/12_wgcna/12_5_Module_Trait_Heatmap.pdf",
@@ -203,11 +203,13 @@ if (coexp_enabled) {
         ) %>%
         arrange(pvalue, desc(fold_enrichment))
       write.csv(module_de_enrichment, "result/12_wgcna/12_6_Module_DE_Enrichment.csv", row.names = FALSE)
-      module_de_plot <- ggplot(module_de_enrichment, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = sig_de_in_module, color = -log10(pvalue + 1e-300))) +
+      module_de_plot_tbl <- module_de_enrichment
+      module_de_plot_tbl$figure_significance <- figure_significance_values(module_de_plot_tbl)
+      module_de_plot <- ggplot(module_de_plot_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = sig_de_in_module, color = -log10(figure_significance + 1e-300))) +
         geom_point(alpha = 0.85) +
         scale_color_heatmap_sequential() +
-        labs(title = "模块-分组相关性与 DE 富集整合", x = "Module-trait correlation", y = NULL, size = "Sig DE genes", color = "-log10(pvalue)") +
-        theme_rnaseq_bw()
+        labs(title = "Module-trait correlation and DE enrichment", x = "Module-trait correlation", y = NULL, size = "Sig DE genes", color = figure_significance_axis_label()) +
+        theme_rnaseq_publication()
       save_plot_versions(
         module_de_plot,
         primary = "result/12_wgcna/12_7_Module_DE_Enrichment_Bubble.pdf",
@@ -249,8 +251,9 @@ if (coexp_enabled) {
         geom_col(width = 0.75) +
         coord_flip() +
         facet_wrap(~ Module, scales = "free_y") +
-        labs(title = "各模块 Top hub genes", x = NULL, y = "|kME|") +
-        theme_rnaseq_minimal() +
+        scale_fill_manual(values = module_palette) +
+        labs(title = "Top hub genes by module", x = NULL, y = "|kME|") +
+        theme_rnaseq_publication() +
         theme(legend.position = "none")
       save_plot_versions(
         hub_plot,
@@ -319,18 +322,20 @@ if (is.data.frame(module_df_annotated) && nrow(module_df_annotated) > 0 && "ENTR
 write.csv(module_pathway_ora, "result/12_wgcna/12_10_Module_Pathway_ORA.csv", row.names = FALSE)
 
 if (nrow(module_pathway_ora) > 0 && all(c("Module", "Description", "pvalue", "source") %in% colnames(module_pathway_ora))) {
-  module_pathway_plot_tbl <- module_pathway_ora %>%
+  module_pathway_plot_tbl <- module_pathway_ora
+  module_pathway_plot_tbl$figure_significance <- figure_significance_values(module_pathway_plot_tbl)
+  module_pathway_plot_tbl <- module_pathway_plot_tbl %>%
     group_by(Module, source) %>%
-    arrange(pvalue, .by_group = TRUE) %>%
+    arrange(figure_significance, .by_group = TRUE) %>%
     slice_head(n = 5) %>%
     ungroup() %>%
     mutate(pathway_label = factor(Description, levels = rev(unique(Description))))
-  module_pathway_plot <- ggplot(module_pathway_plot_tbl, aes(x = module_trait_correlation, y = pathway_label, size = Count, color = -log10(pvalue + 1e-300))) +
+  module_pathway_plot <- ggplot(module_pathway_plot_tbl, aes(x = module_trait_correlation, y = pathway_label, size = Count, color = -log10(figure_significance + 1e-300))) +
     geom_point(alpha = 0.85) +
     facet_grid(source ~ Module, scales = "free_y", space = "free_y") +
     scale_color_heatmap_sequential() +
-    labs(title = "WGCNA 模块通路富集", x = "Module-trait correlation", y = NULL, size = "Gene count", color = "-log10(pvalue)") +
-    theme_rnaseq_bw(base_size = viz_style$compact_size)
+    labs(title = "WGCNA module pathway enrichment", x = "Module-trait correlation", y = NULL, size = "Gene count", color = figure_significance_axis_label()) +
+    theme_rnaseq_publication(base_size = viz_style$compact_size)
   save_plot_versions(
     module_pathway_plot,
     primary = "result/12_wgcna/12_11_Module_Pathway_ORA_Bubble.pdf",

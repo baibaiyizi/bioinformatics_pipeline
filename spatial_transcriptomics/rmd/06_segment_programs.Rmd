@@ -10,7 +10,7 @@ module <- "06_segment_programs"
 
 ```{r}
 segments <- read_optional_tsv(file.path(result_dir, "10_segment_objects", "tables", "segment_summary.tsv"))
-programs <- read_optional_tsv(file.path(result_dir, "11_programs_differential", "tables", "nmf_program_top_genes.tsv"))
+programs <- read_optional_tsv(file.path(result_dir, "11_programs_descriptive", "tables", "nmf_program_top_genes.tsv"))
 if (nrow(segments) > 0) {
   write_review_table(segments, module, "segment_summary_review.csv")
   p <- segments |>

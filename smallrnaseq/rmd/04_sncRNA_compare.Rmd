@@ -1,0 +1,846 @@
+---
+title: "04 Small RNA Global sncRNA and Unannotated RNA"
+output: pdf_document
+---
+
+```{r init, include=FALSE}
+OUTPUT_FIG_DIR <- SNC_COMPARE_FIG
+OUTPUT_TAB_DIR <- SNC_COMPARE_TAB
+prepare_module_outputs(
+  OUTPUT_FIG_DIR,
+  OUTPUT_TAB_DIR,
+  c(
+    "01_sector_radar",
+"02_length_distribution",
+"03_bar_sncRNA",
+"04_alluvial_sncRNA",
+"05_mapping_statistics",
+"06_sequence_type",
+"07_company_landscape",
+"08_sample_composition",
+"09_host_unmapped/01_screen_status",
+    "09_host_unmapped/02_proxy",
+    "09_host_unmapped/03_candidate_sequences",
+    "12_mitochondrial_srna_burden",
+    "10_de/00_config",
+    "10_de/01_category",
+    "10_de/02_subtype"
+  )
+)
+remove_path_if_exists(file.path(SNC_COMPARE_FIG, "11_endo_siRNA_reference_proxy"))
+remove_path_if_exists(file.path(SNC_COMPARE_TAB, "11_endo_siRNA_reference_proxy"))
+activate_mii_context(environment())
+```
+
+```{r build-sncrna-trend-data, include=FALSE}
+trend_all_sample_df <- summary_top %>%
+  mutate(TrendCategory = length_category_from_class(Class)) %>%
+  filter(!is.na(TrendCategory)) %>%
+  group_by(Sample, Group, TrendCategory) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+trend_all_df <- trend_all_sample_df %>%
+  summarise_group_mean_percent("TrendCategory")
+
+trend_major_categories <- c("rsRNA", "tsRNA", "piRNA", "miRNA")
+trend_extra_categories <- trend_all_df %>%
+  filter(!TrendCategory %in% trend_major_categories) %>%
+  group_by(TrendCategory) %>%
+  summarise(TotalPercent = sum(Percent, na.rm = TRUE), .groups = "drop") %>%
+  filter(TotalPercent > 0) %>%
+  arrange(desc(TotalPercent)) %>%
+  pull(TrendCategory)
+
+trend_category_levels <- c(trend_major_categories, trend_extra_categories)
+trend_all_df <- trend_all_df %>%
+  mutate(TrendCategory = factor(TrendCategory, levels = trend_category_levels))
+
+trend_major_sample_df <- summary_top %>%
+  filter(as.character(MainCategory) %in% trend_major_categories) %>%
+  transmute(Sample, Group, TrendCategory = as.character(MainCategory), Reads) %>%
+  group_by(Sample, Group, TrendCategory) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+trend_major_df <- trend_major_sample_df %>%
+  summarise_group_mean_percent("TrendCategory") %>%
+  mutate(TrendCategory = factor(TrendCategory, levels = trend_major_categories))
+
+group_snc_total_tbl <- summary_top %>%
+  group_by(Group) %>%
+  summarise(TotalSncReads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+sample_snc_total_tbl <- sample_comp_view %>%
+  group_by(Sample, Group) %>%
+  summarise(TotalSncReads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+sample_comp_total_snc <- sample_comp_view %>%
+  left_join(sample_snc_total_tbl, by = c("Sample", "Group")) %>%
+  mutate(PercentTotalSnc = if_else(TotalSncReads > 0, 100 * Reads / TotalSncReads, 0))
+
+group_comp_total_snc <- sample_comp_total_snc %>%
+  summarise_group_mean_percent("MainCategory", percent_col = "PercentTotalSnc") %>%
+  rename(PercentTotalSnc = Percent)
+```
+
+```{r sncrna-mapping-statistics, include=FALSE}
+sample_mapping_components <- sample_comp_view %>%
+  mutate(MainCategory = as.character(MainCategory)) %>%
+  group_by(Sample, Group) %>%
+  summarise(
+    AnnotatedSncReads = sum(Reads[!MainCategory %in% c("unanno_MG", "unanno_UMG", "other")], na.rm = TRUE),
+    UnannotatedGenomeMatchReads = sum(Reads[MainCategory == "unanno_MG"], na.rm = TRUE),
+    UnannotatedGenomeUnmatchReads = sum(Reads[MainCategory == "unanno_UMG"], na.rm = TRUE),
+    OtherReads = sum(Reads[MainCategory == "other"], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+sample_mapping_statistics <- sample_qc_table %>%
+  transmute(
+    Sample = as.character(Sample),
+    Group = as.character(Group),
+    CleanReads,
+    MatchGenome,
+    UnmatchGenome = pmax(CleanReads - MatchGenome, 0),
+    GenomeRate
+  ) %>%
+  left_join(sample_mapping_components, by = c("Sample", "Group")) %>%
+  mutate(
+    across(c(AnnotatedSncReads, UnannotatedGenomeMatchReads, UnannotatedGenomeUnmatchReads, OtherReads), ~replace_na(.x, 0)),
+    AnnotatedSncPercent = if_else(CleanReads > 0, 100 * AnnotatedSncReads / CleanReads, 0),
+    UnannotatedGenomeMatchPercent = if_else(CleanReads > 0, 100 * UnannotatedGenomeMatchReads / CleanReads, 0),
+    UnannotatedGenomeUnmatchPercent = if_else(CleanReads > 0, 100 * UnannotatedGenomeUnmatchReads / CleanReads, 0),
+    OtherPercent = if_else(CleanReads > 0, 100 * OtherReads / CleanReads, 0),
+    UnmatchGenomePercent = if_else(CleanReads > 0, 100 * UnmatchGenome / CleanReads, 0)
+  )
+
+mapping_stack_df <- sample_mapping_statistics %>%
+  select(Sample, Group, AnnotatedSncPercent, UnannotatedGenomeMatchPercent, UnannotatedGenomeUnmatchPercent, OtherPercent) %>%
+  pivot_longer(
+    cols = ends_with("Percent"),
+    names_to = "MappingType",
+    values_to = "Percent"
+  ) %>%
+  mutate(
+    MappingType = recode(
+      MappingType,
+      AnnotatedSncPercent = "annotated_sncRNA",
+      UnannotatedGenomeMatchPercent = "unannotated_match_genome",
+      UnannotatedGenomeUnmatchPercent = "unannotated_unmatch_genome",
+      OtherPercent = "other"
+    ),
+    MappingType = factor(MappingType, levels = c("annotated_sncRNA", "unannotated_match_genome", "unannotated_unmatch_genome", "other")),
+    Sample = factor(Sample, levels = as.character(sample_info$Sample)),
+    Group = factor(Group, levels = group_levels)
+  )
+
+mapping_palette <- c(
+  annotated_sncRNA = mii_blue,
+  unannotated_match_genome = mii_green,
+  unannotated_unmatch_genome = mii_orange,
+  other = mii_neutral_line
+)
+
+mapping_stack_plot <- ggplot(mapping_stack_df, aes(x = Sample, y = Percent, fill = MappingType)) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+  scale_fill_manual(values = mapping_palette, drop = FALSE) +
+  labs(
+    x = NULL,
+    y = "Percent of clean reads",
+    title = "Reads mapping and annotation statistics",
+    fill = "Type"
+  ) +
+  mii_theme_bw() +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1), legend.position = "top")
+
+save_plot_nested(
+  mapping_stack_plot,
+  "05_mapping_statistics",
+  "reads_mapping_statistics.pdf",
+  width = 10,
+  height = 5.8,
+  view = REPORT_VIEW
+)
+```
+
+```{r sncrna-sequence-type, include=FALSE}
+sequence_type_sample <- output_all %>%
+  filter(!is.na(Sequence), Sequence != "") %>%
+  mutate(SequenceType = factor(as.character(FeatureCategory), levels = category_levels)) %>%
+  group_by(Sample, Group, SequenceType) %>%
+  summarise(
+    SequenceCount = n_distinct(Sequence),
+    Reads = sum(Reads, na.rm = TRUE),
+    RPM = sum(RPM, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(Sample, Group) %>%
+  mutate(SequencePercent = group_percent(SequenceCount), ReadPercent = group_percent(Reads)) %>%
+  ungroup()
+
+sequence_type_read_percent <- sequence_type_sample %>%
+  summarise_group_mean_percent("SequenceType", percent_col = "ReadPercent") %>%
+  select(Group, SequenceType, ReadPercent = Percent)
+
+sequence_type_unique_percent <- sequence_type_sample %>%
+  summarise_group_mean_percent("SequenceType", percent_col = "SequencePercent", reads_col = "SequenceCount") %>%
+  select(Group, SequenceType, SequencePercent = Percent)
+
+sequence_type_group <- sequence_type_sample %>%
+  summarise_group_mean_rpm("SequenceType") %>%
+  left_join(
+    sequence_type_sample %>%
+      mutate(Group = as.character(Group)) %>%
+      group_by(Group, SequenceType) %>%
+      summarise(SequenceCount = sum(SequenceCount, na.rm = TRUE), .groups = "drop"),
+    by = c("Group", "SequenceType")
+  ) %>%
+  left_join(sequence_type_read_percent, by = c("Group", "SequenceType")) %>%
+  left_join(sequence_type_unique_percent, by = c("Group", "SequenceType")) %>%
+  mutate(across(c(SequenceCount, ReadPercent, SequencePercent), ~replace_na(.x, 0))) %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+sequence_type_levels <- sequence_type_group %>%
+  filter(SequenceCount > 0) %>%
+  arrange(match(as.character(SequenceType), category_levels)) %>%
+  pull(SequenceType) %>%
+  as.character() %>%
+  unique()
+
+if (length(sequence_type_levels) > 0) {
+  sequence_count_plot <- ggplot(sequence_type_group %>% filter(SequenceType %in% sequence_type_levels), aes(x = Group, y = SequencePercent, fill = SequenceType)) +
+    geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+    scale_fill_manual(values = category_palette, drop = FALSE) +
+    labs(
+      x = "Group",
+      y = "Percent of unique sequences",
+      title = "sncRNA sequence type composition",
+      fill = "Sequence type"
+    ) +
+    mii_theme_bw() +
+    theme(legend.position = "top")
+
+  read_count_plot <- ggplot(sequence_type_group %>% filter(SequenceType %in% sequence_type_levels), aes(x = Group, y = ReadPercent, fill = SequenceType)) +
+    geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+    scale_fill_manual(values = category_palette, drop = FALSE) +
+    labs(
+      x = "Group",
+      y = "Percent of reads",
+      title = "Read-weighted sncRNA sequence type composition",
+      fill = "Sequence type"
+    ) +
+    mii_theme_bw() +
+    theme(legend.position = "top")
+
+  save_plot_nested(
+    sequence_count_plot,
+    "06_sequence_type",
+    "sncRNA_sequence_type_unique_sequence_percent.pdf",
+    width = 9,
+    height = 5.8,
+    view = REPORT_VIEW
+  )
+
+  save_plot_nested(
+    read_count_plot,
+    "06_sequence_type",
+    "sncRNA_sequence_type_read_percent.pdf",
+    width = 9,
+    height = 5.8,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r company-landscape-supplement, include=FALSE}
+company_sample_order <- as.character(sample_info$Sample)
+
+ensure_company_sample_columns <- function(df, leading_cols, sample_order = company_sample_order) {
+  for (sample_name in sample_order) {
+    if (!sample_name %in% names(df)) df[[sample_name]] <- 0
+  }
+  df %>% select(all_of(leading_cols), all_of(sample_order))
+}
+
+company_length_distribution_reads_wide <- length_detail_view %>%
+  mutate(Class = as.character(MainCategory), Sample = as.character(Sample)) %>%
+  group_by(Class, Length, Sample) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = Reads, values_fill = 0) %>%
+  ensure_company_sample_columns(c("Class", "Length")) %>%
+  arrange(Class, Length)
+
+company_length_distribution_rpm_wide <- length_detail_view %>%
+  mutate(Class = as.character(MainCategory), Sample = as.character(Sample)) %>%
+  group_by(Class, Length, Sample) %>%
+  summarise(RPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = RPM, values_fill = 0) %>%
+  ensure_company_sample_columns(c("Class", "Length")) %>%
+  arrange(Class, Length)
+
+company_sequence_type_reads_wide <- sequence_type_sample %>%
+  mutate(SequenceType = as.character(SequenceType), Sample = as.character(Sample)) %>%
+  group_by(SequenceType, Sample) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = Reads, values_fill = 0) %>%
+  ensure_company_sample_columns("SequenceType") %>%
+  arrange(SequenceType)
+
+company_sequence_type_unique_wide <- sequence_type_sample %>%
+  mutate(SequenceType = as.character(SequenceType), Sample = as.character(Sample)) %>%
+  group_by(SequenceType, Sample) %>%
+  summarise(SequenceCount = sum(SequenceCount, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = SequenceCount, values_fill = 0) %>%
+  ensure_company_sample_columns("SequenceType") %>%
+  arrange(SequenceType)
+
+company_reads_mapping_statistics_wide <- sample_mapping_statistics %>%
+  mutate(Sample = as.character(Sample)) %>%
+  select(
+    Sample,
+    CleanReads,
+    MatchGenome,
+    UnmatchGenome,
+    AnnotatedSncReads,
+    UnannotatedGenomeMatchReads,
+    UnannotatedGenomeUnmatchReads,
+    OtherReads
+  ) %>%
+  pivot_longer(-Sample, names_to = "type", values_to = "Reads") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = Reads, values_fill = 0) %>%
+  ensure_company_sample_columns("type") %>%
+  arrange(type)
+
+company_length_plot_df <- group_length_view %>%
+  mutate(MainCategory = factor(as.character(MainCategory), levels = category_levels), Group = factor(as.character(Group), levels = group_levels)) %>%
+  filter(RPM > 0, !is.na(MainCategory))
+
+company_length_all_plot <- if (nrow(company_length_plot_df) == 0) {
+  plot_note("sncRNA length distribution", "No length distribution data available.")
+} else {
+  ggplot(company_length_plot_df, aes(x = Length, y = RPM, color = Group, group = Group)) +
+    geom_line(linewidth = 0.75, alpha = 0.95) +
+    facet_wrap(~MainCategory, scales = "free_y", ncol = 4) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_x_continuous(expand = c(0.01, 0)) +
+    labs(x = "Length (nt)", y = "RPM", title = "sncRNA length distribution across all categories") +
+    mii_theme_bw() +
+    theme(
+      legend.position = "top",
+      legend.title = element_blank(),
+      strip.background = element_rect(fill = "white", color = mii_neutral_line),
+      panel.grid.minor = element_blank()
+    )
+}
+
+save_plot_nested(
+  company_length_all_plot,
+  "02_length_distribution",
+  "sncRNA_length_distribution_all_categories.pdf",
+  width = 12,
+  height = 9,
+  view = REPORT_VIEW
+)
+```
+
+```{r sncrna-sector-radar-compare, include=FALSE}
+compare_pie_df <- compute_pie_tables(summary_top) %>%
+  summarise_group_mean_percent("PieCategory")
+
+radar_max <- max(c(30, if (nrow(compare_pie_df) == 0) 0 else max(compare_pie_df$Percent, na.rm = TRUE)), na.rm = TRUE)
+radar_max <- max(ceiling(radar_max / 5) * 5, 30)
+radar_breaks <- unique(round(seq(0, radar_max, length.out = 5), 2))
+
+for (group_name in group_levels) {
+  group_df <- compare_pie_df %>% filter(Group == group_name)
+  if (nrow(group_df) == 0) next
+  group_plot <- plot_sector_radar_core(
+    plot_df = build_sector_radar_df(group_df %>% mutate(Sample = paste0("Group_", group_name)), radar_max = radar_max),
+    title_text = paste0("sncRNA Proportion of Group ", group_name, view_title_suffix(REPORT_VIEW)),
+    radar_max = radar_max,
+    radar_breaks = radar_breaks
+  )
+  save_plot_nested(
+    group_plot,
+    "01_sector_radar",
+    paste0("group_", safe_dir_name(group_name), ".pdf"),
+    width = 8,
+    height = 8,
+    view = REPORT_VIEW
+  )
+}
+
+shared_radar <- plot_group_sector_radar(
+  prepare_group_sector_radar(
+    compare_pie_df,
+    radar_max = radar_max,
+    sector_levels = radar_levels,
+    sector_labels = radar_labels,
+    bottom_anchor_category = "rsRNA",
+    sector_palette = radar_sector_palette
+  ),
+  title_text = paste0("sncRNA Proportion Across Groups", view_title_suffix(REPORT_VIEW)),
+  radar_max = radar_max,
+  radar_breaks = radar_breaks,
+  sector_palette = radar_sector_palette
+)
+save_plot_nested(shared_radar, "01_sector_radar", "group_compare.pdf", width = 9, height = 8.5, view = REPORT_VIEW)
+```
+
+```{r sncrna-bar-and-alluvial, include=FALSE}
+compare_trend_overview_plots <- list(
+  all_percent_alluvial = build_trend_alluvial_plot(trend_all_df, trend_category_levels, "Percent", "Alluvial plot of all classified RNA proportions across groups", "Proportion within classified RNA (%)", group_levels),
+  major_percent_alluvial = build_trend_alluvial_plot(trend_major_df, trend_major_categories, "Percent", "Alluvial plot of major sncRNA proportions across groups", "Proportion within major sncRNA (%)", group_levels)
+)
+
+save_plot_nested(compare_trend_overview_plots$all_percent_alluvial, "04_alluvial_sncRNA", "all_classified_rna_percent.pdf", width = 11, height = 6.5, view = REPORT_VIEW)
+save_plot_nested(compare_trend_overview_plots$major_percent_alluvial, "04_alluvial_sncRNA", "major_sncRNA_percent.pdf", width = 10, height = 5.8, view = REPORT_VIEW)
+
+for (category_name in intersect(c("miRNA", "piRNA", "tsRNA", "rsRNA", "ysRNA"), category_levels)) {
+  category_data <- sample_comp_total_snc %>% filter(as.character(MainCategory) == category_name)
+  if (nrow(category_data) == 0) next
+
+  percent_bar <- build_two_group_summary_bar(
+    category_data,
+    "PercentTotalSnc",
+    paste0(category_name, " abundance across groups"),
+    "Mean percent of total sncRNA per sample",
+    group_levels,
+    fill_palette = group_palette,
+    sample_info = sample_info,
+    label_digits = 1
+  )
+
+  reads_bar <- build_two_group_summary_bar(
+    category_data,
+    "Reads",
+    paste0(category_name, " reads across groups"),
+    "Mean reads per sample",
+    group_levels,
+    fill_palette = group_palette,
+    sample_info = sample_info,
+    comma_labels = TRUE,
+    label_digits = 0
+  )
+
+  save_plot_nested(percent_bar, "03_bar_sncRNA", paste0(safe_dir_name(category_name), "_percent_bar.pdf"), width = 7, height = 5, view = REPORT_VIEW)
+  save_plot_nested(reads_bar, "03_bar_sncRNA", paste0(safe_dir_name(category_name), "_reads_bar.pdf"), width = 7, height = 5, view = REPORT_VIEW)
+}
+```
+
+```{r sncrna-length-compare, include=FALSE}
+for (category_name in length_focus_categories) {
+  merged_df <- group_length_view %>%
+    filter(as.character(MainCategory) == category_name, RPM > 0) %>%
+    mutate(Group = factor(as.character(Group), levels = group_levels))
+
+  line_plot <- if (nrow(merged_df) == 0) {
+    plot_note(category_name, "No length distribution data available.")
+  } else {
+    ggplot(merged_df, aes(x = Length, y = RPM, color = Group, group = Group)) +
+      geom_line(linewidth = 0.9, alpha = 0.95) +
+      scale_color_manual(values = group_palette, drop = FALSE) +
+      scale_x_continuous(expand = c(0.01, 0)) +
+      labs(x = "Length (nt)", y = "RPM", title = NULL) +
+      mii_theme_bw() +
+      theme(legend.position = "top", legend.title = element_blank(), panel.grid.minor = element_blank())
+  }
+
+  bar_plot <- if (nrow(merged_df) == 0) {
+    plot_note(category_name, "No length bar-comparison data available.")
+  } else {
+    ggplot(merged_df, aes(x = factor(Length), y = RPM, fill = Group)) +
+      geom_col(position = position_dodge(width = 0.74), width = 0.68) +
+      scale_fill_manual(values = group_palette, drop = FALSE) +
+      labs(x = "Length (nt)", y = "RPM", title = NULL) +
+      mii_theme_bw() +
+      theme(legend.position = "none", legend.title = element_blank(), panel.grid.minor = element_blank())
+  }
+
+  combined_plot <- build_plot_collage(
+    list(line_plot, bar_plot),
+    title_text = paste(category_name, "length comparison across groups"),
+    cols = 1
+  )
+  save_plot_nested(
+    combined_plot,
+    "02_length_distribution",
+    paste0("length_compare_", safe_dir_name(category_name), ".pdf"),
+    width = 9,
+    height = 10,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r save-csv, include=FALSE}
+write_csv_safe(group_qc_table, "compare_group_qc_table.csv")
+write_csv_safe(group_comp_view, "compare_group_composition.csv")
+write_csv_safe(group_comp_direction_view, "compare_group_composition_by_direction.csv")
+write_csv_safe(trend_all_df, "compare_group_all_classified_rna_percentages.csv")
+write_csv_safe(trend_major_df, "compare_group_major_sncRNA_percentages.csv")
+write_csv_safe(group_length_view, "compare_group_length_distribution.csv")
+write_csv_safe(sample_mapping_statistics, "compare_sample_mapping_statistics.csv")
+write_csv_safe(sequence_type_sample, "compare_sample_sequence_type.csv")
+write_csv_safe(sequence_type_group, "compare_group_sequence_type.csv")
+write_csv_safe(company_length_distribution_reads_wide, "company_length_distribution_reads_wide.csv")
+write_csv_safe(company_length_distribution_rpm_wide, "company_length_distribution_rpm_wide.csv")
+write_csv_safe(company_sequence_type_reads_wide, "company_sequence_type_reads_wide.csv")
+write_csv_safe(company_sequence_type_unique_wide, "company_sequence_type_unique_wide.csv")
+write_csv_safe(company_reads_mapping_statistics_wide, "company_reads_mapping_statistics_wide.csv")
+```
+
+```{r global-composition, include=FALSE}
+composition_by_sample <- sample_comp_view %>%
+  mutate(MainCategory = as.character(MainCategory)) %>%
+  transmute(Sample = as.character(Sample), Group = as.character(Group), MainCategory, Reads, CleanReads, Percent) %>%
+  arrange(Sample, desc(Percent))
+
+composition_focus <- c("rsRNA", "tsRNA", "miRNA", "piRNA", "ysRNA", "unanno_MG", "unanno_UMG", "other")
+composition_plot_df <- composition_by_sample %>%
+  mutate(DisplayCategory = if_else(MainCategory %in% composition_focus, MainCategory, "other")) %>%
+  group_by(Sample, Group, DisplayCategory) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), Percent = sum(Percent, na.rm = TRUE), .groups = "drop") %>%
+  mutate(DisplayCategory = factor(DisplayCategory, levels = composition_focus))
+
+write_csv_safe(composition_by_sample, "08_sample_composition/sncRNA_composition_by_sample.csv")
+
+composition_plot <- ggplot(composition_plot_df, aes(x = Sample, y = Percent, fill = DisplayCategory)) +
+  geom_col(width = 0.78) +
+  scale_fill_manual(values = main_palette[composition_focus], drop = FALSE) +
+  labs(title = "Small RNA sncRNA composition by sample", x = NULL, y = "Percent of clean reads", fill = NULL) +
+  mii_theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+
+save_plot_nested(composition_plot, "08_sample_composition", "mii_sncRNA_composition_by_sample.pdf", width = 10.5, height = 6.3, view = REPORT_VIEW)
+```
+
+```{r global-mitochondrial-srna-burden, include=FALSE}
+mitochondrial_components_by_sample <- summary_top %>%
+  mutate(
+    MitoSignal = is_mito_label(paste(Class, SubClass)),
+    MitoCategory = case_when(
+      MainCategory == "tsRNA" ~ "mt_tsRNA",
+      MainCategory == "rsRNA" ~ "mt_rsRNA",
+      TRUE ~ paste0("mt_", as.character(MainCategory))
+    )
+  ) %>%
+  filter(MitoSignal) %>%
+  group_by(Sample, Group, MitoCategory) %>%
+  summarise(MitoReads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(
+    CleanReads = replace_na(CleanReads, 0),
+    MitoRPM = if_else(CleanReads > 0, 1e6 * MitoReads / CleanReads, 0),
+    MitoFraction = if_else(CleanReads > 0, MitoReads / CleanReads, 0)
+  ) %>%
+  arrange(Group, Sample, desc(MitoReads))
+
+mitochondrial_burden_by_sample <- mitochondrial_components_by_sample %>%
+  group_by(Sample, Group) %>%
+  summarise(
+    MitoReads = sum(MitoReads, na.rm = TRUE),
+    MitoRPM = sum(MitoRPM, na.rm = TRUE),
+    MitoFraction = sum(MitoFraction, na.rm = TRUE),
+    MitoCategories = paste(sort(unique(MitoCategory)), collapse = ";"),
+    .groups = "drop"
+  ) %>%
+  right_join(sample_info %>% transmute(Sample = as.character(Sample), Group = as.character(Group)), by = c("Sample", "Group")) %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(
+    across(c(MitoReads, MitoRPM, MitoFraction), ~replace_na(.x, 0)),
+    CleanReads = replace_na(CleanReads, 0),
+    MitoCategories = replace_na(MitoCategories, "")
+  ) %>%
+  arrange(Group, Sample)
+
+mitochondrial_burden_by_group <- mitochondrial_burden_by_sample %>%
+  group_by(Group) %>%
+  summarise(
+    SampleN = n(),
+    MeanMitoFraction = mean(MitoFraction, na.rm = TRUE),
+    SDMitoFraction = stats::sd(MitoFraction, na.rm = TRUE),
+    MeanMitoRPM = mean(MitoRPM, na.rm = TRUE),
+    MeanMitoReads = mean(MitoReads, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+mitochondrial_qc_context <- mitochondrial_burden_by_sample %>%
+  left_join(sample_qc_table %>% transmute(Sample = as.character(Sample), GenomeRate, DominantCategory, DominantPercent), by = "Sample") %>%
+  left_join(
+    sequence_complexity_by_sample %>%
+      transmute(
+        Sample = as.character(Sample),
+        Top1CleanFraction,
+        Top10CleanFraction,
+        ShannonEntropy,
+        EffectiveSequences,
+        GiniIndex
+      ),
+    by = "Sample"
+  )
+
+mitochondrial_qc_correlation <- mitochondrial_qc_context %>%
+  select(MitoFraction, GenomeRate, Top1CleanFraction, Top10CleanFraction, ShannonEntropy, EffectiveSequences, GiniIndex) %>%
+  pivot_longer(cols = -MitoFraction, names_to = "Metric", values_to = "Value") %>%
+  group_by(Metric) %>%
+  summarise(
+    SpearmanRho = if (sum(is.finite(MitoFraction) & is.finite(Value)) >= 3) {
+      suppressWarnings(stats::cor(MitoFraction, Value, method = "spearman", use = "pairwise.complete.obs"))
+    } else {
+      NA_real_
+    },
+    SampleN = sum(is.finite(MitoFraction) & is.finite(Value)),
+    .groups = "drop"
+  ) %>%
+  arrange(desc(abs(SpearmanRho)))
+
+write_csv_safe(mitochondrial_components_by_sample, "12_mitochondrial_srna_burden/mitochondrial_components_by_sample.csv")
+write_csv_safe(mitochondrial_burden_by_sample, "12_mitochondrial_srna_burden/mitochondrial_burden_by_sample.csv")
+write_csv_safe(mitochondrial_burden_by_group, "12_mitochondrial_srna_burden/mitochondrial_burden_by_group.csv")
+write_csv_safe(mitochondrial_qc_context, "12_mitochondrial_srna_burden/mitochondrial_qc_context.csv")
+write_csv_safe(mitochondrial_qc_correlation, "12_mitochondrial_srna_burden/mitochondrial_qc_correlation.csv")
+
+if (nrow(mitochondrial_components_by_sample) > 0) {
+  mito_component_plot <- mitochondrial_components_by_sample %>%
+    mutate(
+      Sample = factor(as.character(Sample), levels = as.character(sample_info$Sample)),
+      Group = factor(as.character(Group), levels = group_levels)
+    ) %>%
+    ggplot(aes(x = Sample, y = MitoFraction, fill = MitoCategory)) +
+    geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.01), expand = expansion(mult = c(0, 0.08))) +
+    scale_fill_manual(values = c(mt_tsRNA = mii_red, mt_rsRNA = mii_orange), drop = FALSE) +
+    labs(title = "Mitochondrial-derived small RNA burden", x = NULL, y = "Fraction of clean reads", fill = "Component") +
+    mii_theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+  save_plot_nested(mito_component_plot, "12_mitochondrial_srna_burden", "mitochondrial_component_fraction_by_sample.pdf", width = 10.5, height = 5.8, view = REPORT_VIEW)
+} else {
+  save_plot_nested(
+    plot_note("Mitochondrial small RNA burden", "No mitochondrial-derived components were detected from summary categories."),
+    "12_mitochondrial_srna_burden",
+    "mitochondrial_burden_note.pdf",
+    width = 8.5,
+    height = 5,
+    view = REPORT_VIEW
+  )
+}
+
+if (nrow(mitochondrial_burden_by_sample) > 0) {
+  mito_group_plot <- mitochondrial_burden_by_sample %>%
+    mutate(Group = factor(as.character(Group), levels = group_levels)) %>%
+    ggplot(aes(x = Group, y = MitoFraction, fill = Group)) +
+    geom_boxplot(width = 0.58, alpha = 0.72, outlier.shape = NA) +
+    geom_point(aes(color = Group), position = position_jitter(width = 0.08, height = 0), size = 2.4) +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.01), expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Mitochondrial small RNA burden by group", x = NULL, y = "Fraction of clean reads") +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+  save_plot_nested(mito_group_plot, "12_mitochondrial_srna_burden", "mitochondrial_burden_by_group.pdf", width = 7.5, height = 5.5, view = REPORT_VIEW)
+
+  mito_context_plot <- mitochondrial_qc_context %>%
+    select(Sample, Group, MitoFraction, Top1CleanFraction, Top10CleanFraction, ShannonEntropy, GiniIndex) %>%
+    pivot_longer(cols = c(Top1CleanFraction, Top10CleanFraction, ShannonEntropy, GiniIndex), names_to = "Metric", values_to = "Value") %>%
+    mutate(Group = factor(as.character(Group), levels = group_levels)) %>%
+    ggplot(aes(x = Value, y = MitoFraction, color = Group, label = Sample)) +
+    geom_point(size = 2.7) +
+    facet_wrap(~ Metric, scales = "free_x") +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.01)) +
+    labs(title = "Mitochondrial burden versus library complexity", x = NULL, y = "Mitochondrial fraction", color = "Group") +
+    mii_theme_bw() +
+    theme(legend.position = "top")
+  save_plot_nested(mito_context_plot, "12_mitochondrial_srna_burden", "mitochondrial_burden_vs_complexity.pdf", width = 11, height = 6.5, view = REPORT_VIEW)
+}
+```
+
+```{r global-host-screen-status, include=FALSE}
+exogenous_status <- tibble(
+  item = c("RUN_EXOGENOUS", "EXOGENOUS_DB_ROOT", "candidate_export", "external_alignment"),
+  value = c(RUN_EXOGENOUS, EXOGENOUS_DB_ROOT, "enabled", if_else(RUN_EXOGENOUS == "1" && nzchar(EXOGENOUS_DB_ROOT) && dir.exists(EXOGENOUS_DB_ROOT), "database_available", "skipped")),
+  status = c(
+    if_else(RUN_EXOGENOUS == "1", "enabled", "disabled"),
+    if_else(nzchar(EXOGENOUS_DB_ROOT) && dir.exists(EXOGENOUS_DB_ROOT), "available", "not_available"),
+    "completed",
+    if_else(RUN_EXOGENOUS == "1" && nzchar(EXOGENOUS_DB_ROOT) && dir.exists(EXOGENOUS_DB_ROOT), "ready_for_external_classifier", "skipped")
+  ),
+  reason = c(
+    if_else(RUN_EXOGENOUS == "1", "External screen requested.", paste0("External screen disabled; only ", PROJECT_HOST_LABEL, "-unmapped/unannotated candidate export is produced.")),
+    if_else(nzchar(EXOGENOUS_DB_ROOT) && dir.exists(EXOGENOUS_DB_ROOT), "Database root exists.", "No external database root configured."),
+    paste0("Candidate FASTA and tables are generated from SPORTS ", PROJECT_HOST_LABEL, "-unmapped/unannotated reads."),
+    "This Rmd does not assign taxonomy without a configured classifier/alignment database; avoid strong biological conclusions."
+  )
+)
+write_csv_safe(exogenous_status, "09_host_unmapped/01_screen_status/exogenous_screen_status.csv")
+```
+
+```{r global-host-host-unmapped-proxy, include=FALSE}
+unanno_by_sample <- sample_comp_view %>%
+  mutate(MainCategory = as.character(MainCategory)) %>%
+  filter(MainCategory %in% c("unanno_MG", "unanno_UMG")) %>%
+  group_by(Sample, Group, MainCategory) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), Percent = sum(Percent, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = MainCategory, values_from = c(Reads, Percent), values_fill = 0)
+for (required_col in c("Reads_unanno_MG", "Reads_unanno_UMG", "Percent_unanno_MG", "Percent_unanno_UMG")) {
+  if (!required_col %in% names(unanno_by_sample)) unanno_by_sample[[required_col]] <- 0
+}
+
+host_unmapped_proxy <- sample_qc_table %>%
+  transmute(Sample = as.character(Sample), Group = as.character(Group), CleanReads, MatchGenome, GenomeRate) %>%
+  left_join(unanno_by_sample, by = c("Sample", "Group")) %>%
+  mutate(across(starts_with("Reads_"), ~replace_na(.x, 0))) %>%
+  mutate(across(starts_with("Percent_"), ~replace_na(.x, 0))) %>%
+  mutate(
+    host_mapped_fraction = if_else(CleanReads > 0, MatchGenome / CleanReads, 0),
+    unannotated_host_mapped_fraction = Reads_unanno_MG / pmax(CleanReads, 1),
+    host_unmapped_unannotated_fraction = Reads_unanno_UMG / pmax(CleanReads, 1),
+    contamination_warning = host_unmapped_unannotated_fraction > 0.10
+  )
+
+write_csv_safe(host_unmapped_proxy, "09_host_unmapped/02_proxy/host_unmapped_proxy_by_sample.csv")
+
+proxy_long <- host_unmapped_proxy %>%
+  select(Sample, Group, host_mapped_fraction, unannotated_host_mapped_fraction, host_unmapped_unannotated_fraction) %>%
+  pivot_longer(cols = ends_with("_fraction"), names_to = "metric", values_to = "fraction")
+
+proxy_plot <- ggplot(proxy_long, aes(x = Sample, y = fraction, fill = metric)) +
+  geom_col(width = 0.75) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  scale_fill_manual(values = c(
+    host_mapped_fraction = mii_blue,
+    unannotated_host_mapped_fraction = mii_orange,
+    host_unmapped_unannotated_fraction = mii_red
+  )) +
+  labs(title = "Host mapped and unannotated proxy fractions", x = NULL, y = "Fraction of clean reads", fill = NULL) +
+  mii_theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+save_plot_nested(proxy_plot, "09_host_unmapped/02_proxy", "host_unmapped_proxy_fraction.pdf", width = 10, height = 6, view = REPORT_VIEW)
+```
+
+```{r global-host-candidate-sequences, include=FALSE}
+is_host_unmapped_vec <- str_detect(output_all$MatchGenome, regex("no|unmatch|false|0", ignore_case = TRUE))
+is_unannotated_vec <- output_all$PrimaryAnnotation == "NO_Annotation" | output_all$FeatureCategory == "other"
+
+if (pkg_has("data.table")) {
+  candidate_dt <- data.table::as.data.table(output_all)
+  candidate_dt <- data.table::copy(candidate_dt)
+  candidate_dt[, is_host_unmapped := is_host_unmapped_vec]
+  candidate_dt[, is_unannotated := is_unannotated_vec]
+  candidate_dt <- candidate_dt[is_host_unmapped == TRUE | is_unannotated == TRUE]
+  if (nrow(candidate_dt) == 0) {
+    exogenous_candidates <- tibble(
+      Sequence = character(),
+      Length = numeric(),
+      is_host_unmapped = logical(),
+      is_unannotated = logical(),
+      TotalReads = numeric(),
+      TotalRPM = numeric(),
+      SampleN = numeric(),
+      TopAnnotation = character()
+    )
+  } else {
+    candidate_summary_dt <- candidate_dt[, .(
+      TotalReads = sum(Reads, na.rm = TRUE),
+      TotalRPM = sum(RPM, na.rm = TRUE),
+      SampleN = data.table::uniqueN(Sample)
+    ), by = .(Sequence, Length, is_host_unmapped, is_unannotated)]
+    candidate_annotation_dt <- candidate_dt[, .(
+      AnnotationReads = sum(Reads, na.rm = TRUE)
+    ), by = .(Sequence, Length, is_host_unmapped, is_unannotated, PrimaryAnnotation)]
+    data.table::setorder(candidate_annotation_dt, Sequence, Length, is_host_unmapped, is_unannotated, -AnnotationReads, PrimaryAnnotation)
+    candidate_annotation_dt <- candidate_annotation_dt[, .(
+      TopAnnotation = PrimaryAnnotation[1L]
+    ), by = .(Sequence, Length, is_host_unmapped, is_unannotated)]
+    exogenous_candidates <- merge(
+      candidate_summary_dt,
+      candidate_annotation_dt,
+      by = c("Sequence", "Length", "is_host_unmapped", "is_unannotated"),
+      all.x = TRUE,
+      sort = FALSE
+    )
+    data.table::setorder(exogenous_candidates, -TotalReads, -SampleN)
+    exogenous_candidates <- as_tibble(head(exogenous_candidates, 1000))
+  }
+} else {
+  exogenous_candidates <- output_all %>%
+    mutate(is_host_unmapped = is_host_unmapped_vec, is_unannotated = is_unannotated_vec) %>%
+    filter(is_host_unmapped | is_unannotated) %>%
+    group_by(Sequence, Length, is_host_unmapped, is_unannotated) %>%
+    summarise(
+      TotalReads = sum(Reads, na.rm = TRUE),
+      TotalRPM = sum(RPM, na.rm = TRUE),
+      SampleN = n_distinct(Sample),
+      TopAnnotation = {
+        ann_counts <- sort(table(PrimaryAnnotation), decreasing = TRUE)
+        if (length(ann_counts) == 0) "NO_Annotation" else names(ann_counts)[[1]]
+      },
+      .groups = "drop"
+    ) %>%
+    arrange(desc(TotalReads), desc(SampleN)) %>%
+    slice_head(n = 1000)
+}
+
+write_csv_safe(exogenous_candidates, "09_host_unmapped/03_candidate_sequences/host_unmapped_unannotated_candidate_sequences.csv")
+
+candidate_fasta <- file.path(OUTPUT_TAB_DIR, "09_host_unmapped/03_candidate_sequences", "host_unmapped_unannotated_candidate_sequences.fasta")
+dir.create(dirname(candidate_fasta), recursive = TRUE, showWarnings = FALSE)
+if (nrow(exogenous_candidates) > 0) {
+  fasta_lines <- purrr::map2_chr(
+    seq_len(nrow(exogenous_candidates)),
+    exogenous_candidates$Sequence,
+    function(i, seq) paste0(">candidate_", i, "|reads=", exogenous_candidates$TotalReads[[i]], "|sample_n=", exogenous_candidates$SampleN[[i]], "\n", seq)
+  )
+  writeLines(fasta_lines, candidate_fasta)
+} else {
+  writeLines(character(0), candidate_fasta)
+}
+
+if (nrow(exogenous_candidates) > 0) {
+  length_plot <- ggplot(exogenous_candidates, aes(x = Length, weight = TotalReads)) +
+    geom_histogram(binwidth = 1, fill = mii_red, color = "white") +
+    scale_y_continuous(labels = scales::comma) +
+    labs(title = paste0(PROJECT_HOST_LABEL, "-unmapped/unannotated candidate length distribution"), x = "Length", y = "Read-weighted count") +
+    mii_theme_bw()
+  save_plot_nested(length_plot, "09_host_unmapped/03_candidate_sequences", "candidate_sequence_length_distribution.pdf", width = 8, height = 5.5, view = REPORT_VIEW)
+} else {
+  save_plot_nested(plot_note("Host-unmapped RNA screen", paste0("No ", PROJECT_HOST_LABEL, "-unmapped or unannotated candidate sequences were available.")), "09_host_unmapped/03_candidate_sequences", "candidate_sequence_note.pdf", width = 8.5, height = 5, view = REPORT_VIEW)
+}
+```
+
+Host-unmapped and unannotated RNA screen completed.
+
+```{r global-de, include=FALSE}
+contrast_specs <- resolve_mii_contrast_specs()
+write_de_run_config(contrast_specs, section = "10_de/00_config")
+global_de_inputs <- build_global_de_inputs()
+
+global_category_de <- run_layer_de(
+  layer_name = "10_de/01_category",
+  layer_title = "Global category-level DE",
+  layer_input = global_de_inputs$category_input,
+  feature_order = category_levels,
+  feature_meta = global_de_inputs$category_meta
+)
+
+global_subtype_de <- run_layer_de(
+  layer_name = "10_de/02_subtype",
+  layer_title = "Global subtype-level DE",
+  layer_input = global_de_inputs$subtype_input,
+  feature_order = NULL,
+  feature_meta = global_de_inputs$subtype_meta
+)
+
+global_de_results <- bind_rows(global_category_de$results, global_subtype_de$results)
+global_de_summary <- bind_rows(global_category_de$summary, global_subtype_de$summary)
+global_de_manifest <- bind_rows(global_category_de$manifest, global_subtype_de$manifest)
+write_csv_safe(global_de_results, "10_de/global_de_results.csv")
+write_csv_safe(global_de_summary, "10_de/global_de_summary.csv")
+write_csv_safe(global_de_manifest, "10_de/global_de_manifest.csv")
+```

@@ -1,0 +1,21 @@
+{
+  "execution_level": "synthetic_counts_to_DESeq2_to_report",
+  "project": "/tmp/final-bulkatacseq numeric's zhyui1c3/project",
+  "tested_peaks": 500,
+  "primary_raw_p_peaks": 72,
+  "biological_n": {
+    "control": 2,
+    "treated": 2
+  },
+  "retained_sample_ids": [
+    "01",
+    "02",
+    "03",
+    "04"
+  ],
+  "direction_assertion": "first30 Fold>1; next30 Fold<-1",
+  "counts_input_sha256": "23cf522a7b29313628fd73d9a728b95b79bacc1fc653f35b9449ac73fb1e8e94",
+  "upstream_fastq_bam": "not_run",
+  "native_DiffBind": "not_run",
+  "optional_modules": "not_run"
+}

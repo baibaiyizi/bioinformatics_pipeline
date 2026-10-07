@@ -1,0 +1,9 @@
+{
+  "shell_files_syntax_pass": 4,
+  "python_files_ast_pass": 1,
+  "R_and_Rmd_files_parse_pass": 20,
+  "shared_contract_checks_pass": 42,
+  "executed_source_hashes_match_current": 30,
+  "contract_evidence_dir": "/tmp/epigenomics-contract-final-3ww74c7y",
+  "real_data_reproduction": "not_run"
+}

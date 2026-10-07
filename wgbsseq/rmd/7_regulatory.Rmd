@@ -4,6 +4,8 @@
 # ==============================================================================
 # 这一节专门放更容易转成"生物学解释"的入口：差异 CGI、motif、印记基因、重复序列。
 
+suppressPackageStartupMessages(library(GenomeInfoDb))
+
 ensure_step_dirs("result/7_regulatory/plots/1", "result/7_regulatory/tables/1")
 
 ensure_dmr_outputs_loaded()
@@ -12,7 +14,53 @@ if(!exists("txdb", inherits = FALSE)) {
   txdb <- load_main_chr_txdb(config$gtf_file)
 }
 
-# 1 显著差异 CpG Island (Differential CGI)
+has_dmr_cgi_context <- isTRUE(ensure_dmr_cgi_context(required = FALSE, persist = TRUE))
+
+# 1 DMR 的 CpG density context 分布与效应
+if(has_dmr_cgi_context && "CGI_context" %in% colnames(dmr_anno_df) && nrow(dmr_anno_df) > 0) {
+  cgi_dmr <- dmr_anno_df %>%
+    filter(!is.na(CGI_context), CGI_context != "") %>%
+    mutate(CGI_context = factor(CGI_context, levels = c("Island", "N_Shore", "S_Shore", "N_Shelf", "S_Shelf", "Open_Sea")))
+
+  cgi_dmr_summary <- cgi_dmr %>%
+    group_by(CGI_context, DMR_type) %>%
+    summarise(
+      n = n(),
+      mean_diff = mean(diffMethy, na.rm = TRUE),
+      median_diff = median(diffMethy, na.rm = TRUE),
+      mean_abs_diff = mean(abs(diffMethy), na.rm = TRUE),
+      .groups = "drop"
+    )
+  write_csv(cgi_dmr_summary, "result/7_regulatory/tables/1/cgi_context_dmr_summary.csv")
+
+  p_cgi_dmr_count <- cgi_dmr %>%
+    count(CGI_context, DMR_type) %>%
+    ggplot(aes(x = CGI_context, y = n, fill = DMR_type)) +
+    geom_col(position = position_dodge(width = 0.8)) +
+    scale_fill_manual(values = viz_pal$dmr) +
+    labs(title = "DMR Count by CpG Density Context", x = "", y = "Count", fill = "") +
+    theme_wgbs_bw(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  p_cgi_dmr_effect <- ggplot(cgi_dmr, aes(x = CGI_context, y = diffMethy, fill = DMR_type)) +
+    geom_violin(alpha = 0.35, trim = FALSE, position = position_dodge(width = 0.8)) +
+    geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.55, position = position_dodge(width = 0.8)) +
+    scale_fill_manual(values = viz_pal$dmr) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.5)) +
+    labs(title = "DMR Effect Size by CpG Density Context", x = "", y = group_diff_axis_label, fill = "") +
+    theme_wgbs_bw(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  ggsave("result/7_regulatory/plots/1/cgi_context_dmr_count.pdf", p_cgi_dmr_count, width = 8, height = 5, device = cairo_pdf)
+  ggsave("result/7_regulatory/plots/1/cgi_context_dmr_effect.pdf", p_cgi_dmr_effect, width = 9, height = 6, device = cairo_pdf)
+} else {
+  write_csv(
+    tibble(step = "dmr_cgi_context", status = "skipped", message = "CpG Island reference unavailable"),
+    "result/7_regulatory/tables/1/cgi_context_dmr_status.csv"
+  )
+}
+
+# 2 显著差异 CpG Island (Differential CGI)
 # 和前面的 DMR-level CGI 视角不同，这里是在 Island 本身重新做差异检验。
 cgi_status_file <- "result/7_regulatory/tables/1/differential_cgi_status.csv"
 cgi_resources <- get_cgi_context_resources(config, target_gr = dmr_gr, required = FALSE)
@@ -56,7 +104,7 @@ if(!is.null(cgi_resources)) {
   write_csv(tibble(step = "reference", status = "skipped", message = "CpG Island reference file is missing"), cgi_status_file)
 }
 
-# 2 Motif 富集分析
+# 3 Motif 富集分析
 # motif 只取效应最大的 top DMR，目的是更聚焦地看潜在 TF 偏好而不是追求覆盖全部位点。
 if(all(vapply(
   c("motifmatchr", "BSgenome.Mmusculus.UCSC.mm39", "JASPAR2020", "TFBSTools", "GenomeInfoDb"),
@@ -216,7 +264,7 @@ if(all(vapply(
   write_csv(motif_df, "result/7_regulatory/tables/1/motif_top20.csv")
 }
 
-# 3 印记基因 (Imprinted Genes) 分析
+# 4 印记基因 (Imprinted Genes) 分析
 imprinted_genes_list <- c("H19", "Igf2", "Peg3", "Snrpn", "Kcnq1ot1", "Mest", "Plagl1", "Grb10", "Meg3", "Gnas")
 imprint_res <- dmr_anno_df %>% filter(SYMBOL %in% imprinted_genes_list)
 
@@ -231,8 +279,8 @@ if(nrow(imprint_res) > 0) {
   ggsave("result/7_regulatory/plots/1/imprinted_genes_diff.pdf", p_imprint, width = 6, height = 4, device = cairo_pdf)
 }
 
-# 4 RepeatMasker 精细重复序列分析
-# 这一块把 DMR 映射到 LINE / SINE / LTR / satellite 等重复序列类别，适合精子 WGBS 解释。
+# 5 RepeatMasker 精细重复序列分析
+# 这一块把 DMR 映射到 LINE / SINE / LTR / satellite 等重复序列类别，作为通用调控背景注释。
 repeatmasker_file <- resolve_repeatmasker_file(config, required = FALSE)
 
 if(!is.na(repeatmasker_file) && file.exists(repeatmasker_file)) {

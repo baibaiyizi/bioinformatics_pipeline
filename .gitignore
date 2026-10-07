@@ -1,0 +1,9 @@
+# 运行产物与环境；配置、样本表和小型输入示例仍纳入版本管理。
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+**/result/
+**/runs/
+**/.cache/

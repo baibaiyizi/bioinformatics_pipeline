@@ -1,0 +1,17 @@
+metric	value
+validation_date	2026-09-29
+evidence_type	synthetic_counts_smoke
+genes	500
+biological_samples	4
+groups	control=2;treatment=2
+sampleA_values	treatment
+sampleB_values	control
+pvalue_column	present
+padj_column	present
+core_modules_completed	1,2,3,4,5
+optional_modules	6-18 skipped
+png_count	17
+pdf_count	17
+report_sha256	782fdf092af47e8faf76517400fbc8bae2990edf784eda638d11b333d63b6806
+contract_cases_passed	22
+production_data_reproduction	not_run

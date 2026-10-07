@@ -1,0 +1,759 @@
+---
+title: "03 Small RNA Cohort QC and Hellinger-PCA"
+output: pdf_document
+---
+
+```{r init, include=FALSE}
+OUTPUT_FIG_DIR <- PCA_FIG
+OUTPUT_TAB_DIR <- PCA_TAB
+prepare_module_outputs(
+  OUTPUT_FIG_DIR,
+  OUTPUT_TAB_DIR,
+  c(
+    "01_pca",
+    "02_sample_correlation",
+    "03_unsupervised_clustering",
+    "04_input_audit",
+    "05_sample_design",
+    "06_normalization_sensitivity",
+    "07_complexity_qc",
+    "08_literature_marker_concordance",
+    "09_raw_fastq_audit"
+  )
+)
+activate_mii_context(environment())
+```
+
+```{r pca-plot-helpers, include=FALSE}
+build_pca_scatter_plot <- function(plot_df, variance_pct, title_text, color_values = group_palette) {
+  p <- ggplot(plot_df, aes(x = PC1, y = PC2, color = Group, label = Sample))
+  p +
+    geom_point(size = 4) +
+    geom_text(vjust = -0.8, size = 3.5, show.legend = FALSE) +
+    scale_color_manual(values = color_values, drop = FALSE) +
+    labs(
+      x = paste0("PC1 (", sprintf("%.1f%%", variance_pct[1]), ")"),
+      y = paste0("PC2 (", sprintf("%.1f%%", variance_pct[2]), ")"),
+      title = title_text
+    ) +
+    mii_theme_bw() +
+    theme(legend.title = element_blank(), legend.position = "top")
+}
+
+build_pca_loadings <- function(pca_result, pca_type, category) {
+  tibble(
+    Feature = rownames(pca_result$rotation),
+    PC1 = pca_result$rotation[, 1],
+    PC2 = pca_result$rotation[, 2],
+    PCAType = pca_type,
+    Category = category
+  )
+}
+```
+
+```{r pca-calculation, include=FALSE}
+pca_input_composition <- sample_comp_view %>%
+  transmute(
+    Sample = as.character(Sample), Group = as.character(Group),
+    Feature = as.character(MainCategory), Reads, Percent
+  ) %>%
+  complete(
+    Sample = as.character(sample_info$Sample),
+    Feature = category_levels,
+    fill = list(Reads = 0, Percent = 0)
+  ) %>%
+  left_join(
+    sample_info %>% transmute(Sample = as.character(Sample), GroupMeta = as.character(Group)),
+    by = "Sample"
+  ) %>%
+  mutate(Group = coalesce(Group, GroupMeta)) %>%
+  select(-GroupMeta)
+
+pca_wide <- pca_input_composition %>%
+  select(Sample, Group, Feature, Reads) %>%
+  pivot_wider(names_from = Feature, values_from = Reads, values_fill = 0) %>%
+  arrange(match(Sample, as.character(sample_info$Sample)))
+
+pca_sample_ids <- pca_wide$Sample
+pca_group_ids <- pca_wide$Group
+pca_count_matrix <- pca_wide %>% select(-Sample, -Group) %>% as.matrix()
+rownames(pca_count_matrix) <- pca_sample_ids
+pca_count_matrix <- pca_count_matrix[, colSums(pca_count_matrix, na.rm = TRUE) > 0, drop = FALSE]
+pca_matrix <- hellinger_transform(pca_count_matrix)
+pca_hellinger_long <- as.data.frame(pca_matrix) %>%
+  rownames_to_column("Sample") %>%
+  pivot_longer(-Sample, names_to = "Feature", values_to = "Hellinger")
+pca_input_composition <- pca_input_composition %>%
+  left_join(pca_hellinger_long, by = c("Sample", "Feature"))
+
+pca_result <- prcomp(pca_matrix, center = TRUE, scale. = FALSE)
+pca_df <- tibble(
+  Sample = pca_sample_ids,
+  Group = pca_group_ids,
+  PC1 = pca_result$x[, 1],
+  PC2 = pca_result$x[, 2]
+)
+pca_var <- summary(pca_result)$importance[2, 1:2] * 100
+
+pca_plot <- build_pca_scatter_plot(
+  pca_df,
+  pca_var,
+  "PCA of samples based on sncRNA composition"
+)
+
+save_plot_nested(pca_plot, "01_pca", "sncRNA_pca.pdf", width = 8, height = 6, view = REPORT_VIEW)
+
+pca_loading_plot_df <- build_pca_loadings(pca_result, "all_sncRNA", "all_sncRNA") %>%
+  select(Feature, PC1, PC2) %>%
+  pivot_longer(c(PC1, PC2), names_to = "Component", values_to = "Loading") %>%
+  group_by(Component) %>%
+  slice_max(abs(Loading), n = 8, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(FeaturePanel = paste(Feature, Component, sep = "___"))
+pca_loading_plot <- ggplot(
+  pca_loading_plot_df,
+  aes(x = reorder(FeaturePanel, abs(Loading)), y = Loading, fill = Loading > 0)
+) +
+  geom_col(width = 0.72) +
+  coord_flip() +
+  facet_wrap(~Component, scales = "free_y") +
+  scale_x_discrete(labels = function(x) sub("___.*$", "", x)) +
+  scale_fill_manual(values = c(`TRUE` = mii_orange, `FALSE` = mii_blue), guide = "none") +
+  labs(title = "Main loadings of Hellinger-PCA", x = NULL, y = "Loading") +
+  mii_theme_bw()
+save_plot_nested(pca_loading_plot, "01_pca", "sncRNA_pca_loadings.pdf", width = 9, height = 6, view = REPORT_VIEW)
+
+pca_coordinates_list <- list(
+  pca_df %>% mutate(PCAType = "all_sncRNA", Category = "all_sncRNA")
+)
+pca_variance_list <- list(
+  tibble(PCAType = "all_sncRNA", Category = "all_sncRNA", PC1 = pca_var[1], PC2 = pca_var[2])
+)
+pca_loadings_list <- list(build_pca_loadings(pca_result, "all_sncRNA", "all_sncRNA"))
+```
+
+```{r per-sncrna-pca, include=FALSE}
+for (category_name in intersect(c("miRNA", "piRNA", "tsRNA", "rsRNA", "ysRNA", "lncRNA", "snRNA", "snoRNA"), category_levels)) {
+  category_detail <- if (category_name == "tsRNA") {
+    tsrna_base_detail %>%
+      transmute(Sample = as.character(Sample), Group = as.character(Group), SubClass = BaseSubClass, Reads)
+  } else {
+    summary_all %>%
+      filter(as.character(MainCategory) == category_name, SubClass != "-") %>%
+      transmute(Sample = as.character(Sample), Group = as.character(Group), SubClass = as.character(SubClass), Reads)
+  }
+
+  if (nrow(category_detail) < 2) next
+
+  category_long <- category_detail %>%
+    group_by(Sample, Group, SubClass) %>%
+    summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+    left_join(clean_reads_tbl, by = "Sample") %>%
+    mutate(CPM = if_else(CleanReads > 0, 1e6 * Reads / CleanReads, 0))
+
+  keep_features <- category_long %>%
+    group_by(SubClass) %>%
+    summarise(DetectedN = sum(CPM >= 1), .groups = "drop") %>%
+    filter(DetectedN >= 2) %>%
+    pull(SubClass)
+  if (length(keep_features) < 2) next
+
+  category_wide <- category_long %>%
+    filter(SubClass %in% keep_features) %>%
+    select(Sample, SubClass, Reads) %>%
+    complete(Sample = as.character(sample_info$Sample), SubClass = keep_features, fill = list(Reads = 0)) %>%
+    pivot_wider(names_from = SubClass, values_from = Reads, values_fill = 0) %>%
+    arrange(match(Sample, as.character(sample_info$Sample)))
+
+  if (ncol(category_wide) - 1 < 2) next
+
+  category_matrix <- category_wide %>% select(-Sample) %>% as.matrix()
+  rownames(category_matrix) <- category_wide$Sample
+  if (any(is.na(category_matrix)) || any(!is.finite(category_matrix))) next
+  if (any(rowSums(category_matrix) <= 0)) next
+  category_matrix <- hellinger_transform(category_matrix)
+
+  category_pca <- tryCatch(
+    prcomp(category_matrix, center = TRUE, scale. = FALSE),
+    error = function(e) NULL
+  )
+  if (is.null(category_pca)) next
+
+  category_pca_df <- tibble(
+    Sample = category_wide$Sample,
+    PC1 = category_pca$x[, 1],
+    PC2 = category_pca$x[, 2]
+  ) %>%
+    left_join(sample_info %>% transmute(Sample = as.character(Sample), Group = as.character(Group)), by = "Sample")
+  category_pca_var <- summary(category_pca)$importance[2, 1:2] * 100
+
+  category_plot <- build_pca_scatter_plot(
+    category_pca_df,
+    category_pca_var,
+    paste0("PCA of samples based on ", category_name, " subtypes")
+  )
+
+  save_plot_nested(
+    category_plot,
+    "01_pca",
+    paste0(safe_dir_name(category_name), "_pca.pdf"),
+    width = 8,
+    height = 6,
+    view = REPORT_VIEW
+  )
+
+  pca_coordinates_list[[length(pca_coordinates_list) + 1]] <- category_pca_df %>%
+    mutate(PCAType = "subtype", Category = category_name)
+  pca_variance_list[[length(pca_variance_list) + 1]] <- tibble(
+    PCAType = "subtype",
+    Category = category_name,
+    PC1 = category_pca_var[1],
+    PC2 = category_pca_var[2]
+  )
+  pca_loadings_list[[length(pca_loadings_list) + 1]] <- build_pca_loadings(category_pca, "subtype", category_name)
+}
+```
+
+```{r unsupervised-clustering, include=FALSE}
+build_sample_distance_tbl <- function(distance_obj, sample_order = NULL) {
+  distance_mat <- as.matrix(distance_obj)
+  if (is.null(sample_order)) sample_order <- rownames(distance_mat)
+
+  as.data.frame(
+    as.table(distance_mat[sample_order, sample_order, drop = FALSE]),
+    stringsAsFactors = FALSE
+  ) %>%
+    as_tibble() %>%
+    transmute(
+      sample_x = as.character(Var1),
+      sample_y = as.character(Var2),
+      distance = as.numeric(Freq),
+      method = "euclidean_on_hellinger_composition"
+    )
+}
+
+plot_sample_distance <- function(distance_tbl, title_text) {
+  if (nrow(distance_tbl) == 0) {
+    return(plot_note(title_text, "No distance matrix could be calculated."))
+  }
+
+  ggplot(distance_tbl, aes(sample_x, sample_y, fill = distance)) +
+    geom_tile(color = "white", linewidth = 0.35) +
+    geom_text(aes(label = sprintf("%.2f", distance)), size = 3.1) +
+    scale_fill_gradientn(colours = mii_heatmap_gradient) +
+    labs(title = title_text, x = NULL, y = NULL, fill = "Distance") +
+    mii_theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+}
+
+clustering_feature_keep <- apply(pca_matrix, 2, function(x) stats::sd(x, na.rm = TRUE) > 0)
+clustering_input <- pca_matrix[, clustering_feature_keep, drop = FALSE]
+
+clustering_distance_tbl <- tibble()
+hierarchical_sample_order <- tibble()
+
+if (nrow(clustering_input) >= 2 && ncol(clustering_input) >= 1) {
+  hellinger_clustering_matrix <- clustering_input
+
+  sample_distance <- stats::dist(hellinger_clustering_matrix, method = "euclidean")
+  sample_hclust <- stats::hclust(sample_distance, method = "ward.D2")
+  ordered_samples <- sample_hclust$labels[sample_hclust$order]
+  clustering_distance_tbl <- build_sample_distance_tbl(sample_distance, ordered_samples)
+  hierarchical_sample_order <- tibble(Order = seq_along(ordered_samples), Sample = ordered_samples)
+
+  save_plot_nested(
+    plot_sample_distance(
+      clustering_distance_tbl,
+      "Hellinger distance between samples"
+    ),
+    "03_unsupervised_clustering",
+    "sample_hellinger_distance.pdf",
+    width = 7.5,
+    height = 6.5,
+    view = REPORT_VIEW
+  )
+
+  clustering_fig_dir <- build_nested_dir(
+    OUTPUT_FIG_DIR,
+    "03_unsupervised_clustering",
+    view = REPORT_VIEW
+  )
+  clustering_tree_path <- file.path(clustering_fig_dir, "hierarchical_clustering_ward_d2.pdf")
+  save_plot_device(
+    clustering_tree_path,
+    width = 8,
+    height = 5.5,
+    draw_fn = function() {
+      plot(
+        sample_hclust,
+        main = "Ward.D2 hierarchical clustering of Hellinger composition",
+        xlab = NULL,
+        sub = NULL
+      )
+    }
+  )
+
+  if (pkg_has("pheatmap")) {
+    heatmap_matrix <- t(hellinger_clustering_matrix)
+    annotation_col <- data.frame(
+      Group = factor(as.character(pca_group_ids), levels = group_levels)
+    )
+    rownames(annotation_col) <- rownames(hellinger_clustering_matrix)
+    save_pheatmap_file(
+      heatmap_matrix,
+      cluster_cols = sample_hclust,
+      cluster_rows = nrow(heatmap_matrix) > 1,
+      annotation_col = annotation_col,
+      annotation_colors = list(Group = group_palette[group_levels]),
+      color = grDevices::colorRampPalette(mii_heatmap_gradient)(80),
+      border_color = NA,
+      main = "Hellinger-transformed sncRNA composition",
+      filename = file.path(clustering_fig_dir, "sncRNA_unsupervised_feature_heatmap.pdf"),
+      width = 8.5,
+      height = max(5.5, 0.35 * nrow(heatmap_matrix) + 2.5)
+    )
+  } else {
+    save_plot_nested(
+      plot_note("Scaled sncRNA composition heatmap", "pheatmap package is not available."),
+      "03_unsupervised_clustering",
+      "sncRNA_unsupervised_feature_heatmap.pdf",
+      width = 7.5,
+      height = 5,
+      view = REPORT_VIEW
+    )
+  }
+} else {
+  save_plot_nested(
+    plot_note("Unsupervised sample clustering", "Not enough variable sncRNA features for clustering."),
+    "03_unsupervised_clustering",
+    "sncRNA_unsupervised_clustering_note.pdf",
+    width = 7.5,
+    height = 5,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r export-pca-tables, include=FALSE}
+write_csv_safe(bind_rows(pca_coordinates_list), "pca_coordinates.csv")
+write_csv_safe(bind_rows(pca_variance_list), "pca_variance_explained.csv")
+write_csv_safe(bind_rows(pca_loadings_list), "pca_loadings.csv")
+write_csv_safe(pca_input_composition, "pca_input_composition.csv")
+write_csv_safe(clustering_distance_tbl, "sample_hellinger_distance.csv")
+write_csv_safe(hierarchical_sample_order, "hierarchical_sample_order.csv")
+```
+
+Hellinger-PCA analysis completed. Plots are saved in `result/3_cohort_qc_pca/plots/01_pca/`.
+
+```{r cohort-qc-input-audit, include=FALSE}
+input_audit <- sample_info %>%
+  transmute(
+    Sample = as.character(Sample),
+    Group = as.character(Group),
+    Condition = Condition,
+    AgeGroup = AgeGroup,
+    Species = Species,
+    Stage = Stage,
+    Replicate = Replicate,
+    RawFastqOriginal = RawFastqOriginal,
+    RawFastq = RawFastq,
+    RawFastqExists = RawFastqExists,
+    SummaryFileExists = file.exists(SummaryFile),
+    LengthFileExists = file.exists(LengthFile),
+    OutputFileExists = file.exists(OutputFile)
+  )
+write_csv_safe(input_audit, "04_input_audit/input_path_audit.csv")
+
+save_plot_nested(
+  plot_note(
+    "Input path audit",
+    paste0(
+      sum(input_audit$RawFastqExists), "/", nrow(input_audit), " raw FASTQ paths exist; ",
+      sum(input_audit$SummaryFileExists & input_audit$LengthFileExists & input_audit$OutputFileExists), "/",
+      nrow(input_audit), " samples have complete SPORTS output."
+    )
+  ),
+  "04_input_audit",
+  "input_path_audit_note.pdf",
+  width = 8.5,
+  height = 5,
+  view = REPORT_VIEW
+)
+```
+
+```{r cohort-qc-sample-design, include=FALSE}
+sample_design <- sample_info %>%
+  transmute(
+    Sample = as.character(Sample),
+    Group = as.character(Group),
+    Condition = Condition,
+    AgeGroup = AgeGroup,
+    Species = Species,
+    Stage = Stage,
+    Replicate = Replicate
+  ) %>%
+  arrange(Group, Replicate, Sample)
+
+group_design <- sample_design %>%
+  group_by(Group, Condition, AgeGroup, Species, Stage) %>%
+  summarise(sample_n = n(), replicates = paste(Replicate, collapse = ";"), .groups = "drop")
+
+write_csv_safe(sample_design, "05_sample_design/sample_design.csv")
+write_csv_safe(group_design, "05_sample_design/group_design_summary.csv")
+
+design_plot <- ggplot(group_design, aes(x = Group, y = sample_n, fill = Group)) +
+  geom_col(width = 0.66, color = "white", linewidth = 0.25) +
+  geom_text(aes(label = sample_n), vjust = -0.35, size = 3.5) +
+  scale_fill_manual(values = group_palette, drop = FALSE) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.12)), breaks = scales::breaks_width(1)) +
+  labs(title = "Small RNA sample design", x = NULL, y = "Sample count") +
+  mii_theme_bw() +
+  theme(legend.position = "none")
+
+save_plot_nested(design_plot, "05_sample_design", "sample_count_by_group.pdf", width = 7.2, height = 5.1, view = REPORT_VIEW)
+```
+
+```{r cohort-qc-normalization-sensitivity, include=FALSE}
+sample_order <- as.character(sample_info$Sample)
+category_counts <- summary_top %>%
+  transmute(Sample = as.character(Sample), Feature = as.character(MainCategory), Reads = Reads)
+
+count_info <- build_feature_count_matrix(
+  category_counts,
+  feature_col = "Feature",
+  sample_order = sample_order,
+  feature_order = category_levels,
+  min_total = 0
+)
+count_mat <- count_info$matrix
+count_mat <- count_mat[rowSums(count_mat, na.rm = TRUE) > 0, , drop = FALSE]
+
+if (nrow(count_mat) == 0 || ncol(count_mat) == 0) {
+  write_csv_safe(tibble(method = character(), status = character(), reason = character()), "06_normalization_sensitivity/normalization_method_status.csv")
+  save_plot_nested(
+    plot_note("Normalization sensitivity", "No category count matrix was available."),
+    "06_normalization_sensitivity",
+    "normalization_sensitivity_note.pdf",
+    width = 8.5,
+    height = 5,
+    view = REPORT_VIEW
+  )
+} else {
+  clean_denom <- clean_reads_tbl %>%
+    mutate(Sample = as.character(Sample)) %>%
+    right_join(tibble(Sample = sample_order), by = "Sample") %>%
+    arrange(match(Sample, sample_order)) %>%
+    mutate(CleanReads = replace_na(CleanReads, 0)) %>%
+    pull(CleanReads)
+  match_denom <- match_reads_tbl %>%
+    mutate(Sample = as.character(Sample)) %>%
+    right_join(tibble(Sample = sample_order), by = "Sample") %>%
+    arrange(match(Sample, sample_order)) %>%
+    mutate(MatchGenome = replace_na(MatchGenome, 0)) %>%
+    pull(MatchGenome)
+
+  safe_rpm <- function(mat, denom) {
+    denom <- pmax(as.numeric(denom), 1)
+    sweep(mat, 2, denom, "/") * 1e6
+  }
+
+  normalization_mats <- list(
+    clean_RPM_log2 = log2(safe_rpm(count_mat, clean_denom) + 1),
+    mapped_RPM_log2 = log2(safe_rpm(count_mat, match_denom) + 1)
+  )
+
+  if (pkg_has("edgeR") && nrow(count_mat) > 0 && ncol(count_mat) > 1) {
+    dge <- edgeR::DGEList(counts = round(count_mat))
+    dge <- edgeR::calcNormFactors(dge, method = "TMM")
+    normalization_mats$TMM_logCPM <- edgeR::cpm(dge, log = TRUE, prior.count = 1)
+  }
+
+  geom_means <- apply(count_mat, 1, function(x) {
+    positive <- x[x > 0]
+    if (length(positive) == 0) NA_real_ else exp(mean(log(positive)))
+  })
+  valid_geom <- is.finite(geom_means) & geom_means > 0
+  if (sum(valid_geom) >= 2) {
+    ratio_mat <- sweep(count_mat[valid_geom, , drop = FALSE], 1, geom_means[valid_geom], "/")
+    size_factors <- apply(ratio_mat, 2, function(x) {
+      x <- x[is.finite(x) & x > 0]
+      if (length(x) == 0) 1 else median(x)
+    })
+    size_factors <- pmax(size_factors, .Machine$double.eps)
+    normalization_mats$median_ratio_log2 <- log2(sweep(count_mat, 2, size_factors, "/") + 1)
+  }
+
+  normalization_status <- tibble(
+    method = c("clean_RPM_log2", "mapped_RPM_log2", "TMM_logCPM", "median_ratio_log2"),
+    status = if_else(method %in% names(normalization_mats), "available", "not_available"),
+    reason = case_when(
+      method == "TMM_logCPM" & !pkg_has("edgeR") ~ "edgeR package is not available.",
+      method == "median_ratio_log2" & !method %in% names(normalization_mats) ~ "Too few positive category counts for median-ratio size factors.",
+      TRUE ~ ""
+    )
+  )
+  write_csv_safe(normalization_status, "06_normalization_sensitivity/normalization_method_status.csv")
+
+  normalization_long <- purrr::imap_dfr(normalization_mats, function(mat, method) {
+    long_tbl <- as_tibble(as.data.frame(as.table(mat), stringsAsFactors = FALSE))
+    names(long_tbl)[1:3] <- c("Feature", "Sample", "normalized_value")
+    long_tbl %>% mutate(method = method)
+  })
+  write_csv_safe(normalization_long, "06_normalization_sensitivity/normalization_sensitivity_long.csv")
+
+  pca_df <- purrr::imap_dfr(normalization_mats, function(mat, method) {
+    if (nrow(mat) < 2 || ncol(mat) < 3 || sum(apply(mat, 1, stats::var, na.rm = TRUE) > 0) < 2) return(tibble())
+    pca <- tryCatch(stats::prcomp(t(mat), center = TRUE, scale. = FALSE), error = function(e) NULL)
+    if (is.null(pca) || ncol(pca$x) < 2) return(tibble())
+    var_exp <- (pca$sdev^2) / sum(pca$sdev^2)
+    tibble(
+      Sample = rownames(pca$x),
+      PC1 = pca$x[, 1],
+      PC2 = pca$x[, 2],
+      PC1_var = var_exp[[1]],
+      PC2_var = var_exp[[2]],
+      method = method
+    )
+  }) %>%
+    left_join(sample_info %>% transmute(Sample = as.character(Sample), Group = as.character(Group)), by = "Sample")
+  write_csv_safe(pca_df, "06_normalization_sensitivity/normalization_pca_coordinates.csv")
+
+  cor_df <- purrr::imap_dfr(normalization_mats, function(mat, method) {
+    if (ncol(mat) < 2) return(tibble())
+    cor_mat <- stats::cor(mat, method = "spearman", use = "pairwise.complete.obs")
+    cor_tbl <- as_tibble(as.data.frame(as.table(cor_mat), stringsAsFactors = FALSE))
+    names(cor_tbl)[1:3] <- c("sample_x", "sample_y", "spearman_correlation")
+    cor_tbl %>% mutate(method = method)
+  })
+  write_csv_safe(cor_df, "06_normalization_sensitivity/normalization_sample_correlation.csv")
+
+  if (nrow(pca_df) > 0) {
+    pca_plot <- ggplot(pca_df, aes(x = PC1, y = PC2, color = Group, label = Sample)) +
+      geom_point(size = 2.8) +
+      facet_wrap(~ method, scales = "free") +
+      scale_color_manual(values = group_palette, drop = FALSE) +
+      labs(title = "Normalization sensitivity PCA", x = "PC1", y = "PC2", color = "Group") +
+      mii_theme_bw() +
+      theme(legend.position = "bottom")
+    save_plot_nested(pca_plot, "06_normalization_sensitivity", "normalization_sensitivity_pca.pdf", width = 11, height = 7, view = REPORT_VIEW)
+  }
+
+  if (nrow(cor_df) > 0) {
+    cor_plot <- ggplot(cor_df, aes(x = sample_x, y = sample_y, fill = spearman_correlation)) +
+      geom_tile(color = "white", linewidth = 0.25) +
+      facet_wrap(~ method) +
+      scale_fill_gradientn(colours = mii_heatmap_gradient, limits = c(-1, 1), oob = scales::squish) +
+      labs(title = "Normalization sensitivity sample correlation", x = NULL, y = NULL, fill = "Spearman") +
+      mii_theme_bw() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1))
+    save_plot_nested(cor_plot, "06_normalization_sensitivity", "normalization_sample_correlation_heatmap.pdf", width = 11, height = 7, view = REPORT_VIEW)
+  }
+}
+```
+
+Small RNA QC and normalization sensitivity analysis completed.
+
+```{r cohort-qc-complexity, include=FALSE}
+complexity_fraction_long <- sequence_complexity_by_sample %>%
+  select(Sample, Group, Top1CleanFraction, Top5CleanFraction, Top10CleanFraction) %>%
+  pivot_longer(
+    cols = c(Top1CleanFraction, Top5CleanFraction, Top10CleanFraction),
+    names_to = "Metric",
+    values_to = "Fraction"
+  ) %>%
+  mutate(
+    Metric = factor(
+      Metric,
+      levels = c("Top1CleanFraction", "Top5CleanFraction", "Top10CleanFraction"),
+      labels = c("Top 1", "Top 5", "Top 10")
+    ),
+    Group = factor(as.character(Group), levels = group_levels)
+  )
+
+complexity_metric_long <- sequence_complexity_by_sample %>%
+  select(Sample, Group, UniqueSequences, ShannonEntropy, EffectiveSequences, GiniIndex) %>%
+  pivot_longer(
+    cols = c(UniqueSequences, ShannonEntropy, EffectiveSequences, GiniIndex),
+    names_to = "Metric",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    Metric = factor(
+      Metric,
+      levels = c("UniqueSequences", "ShannonEntropy", "EffectiveSequences", "GiniIndex"),
+      labels = c("Unique sequences", "Shannon entropy", "Effective sequences", "Gini index")
+    ),
+    Group = factor(as.character(Group), levels = group_levels)
+  )
+
+if (nrow(complexity_fraction_long) > 0) {
+  dominance_plot <- ggplot(complexity_fraction_long, aes(x = Group, y = Fraction, fill = Group)) +
+    geom_boxplot(width = 0.56, alpha = 0.72, outlier.shape = NA) +
+    geom_point(aes(color = Group), position = position_jitter(width = 0.08, height = 0), size = 2.5) +
+    facet_wrap(~ Metric, nrow = 1) +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Dominant sequence burden by group", x = NULL, y = "Fraction of clean reads") +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+  save_plot_nested(dominance_plot, "07_complexity_qc", "dominant_sequence_fraction_by_group.pdf", width = 10, height = 5.5, view = REPORT_VIEW)
+}
+
+if (nrow(complexity_metric_long) > 0) {
+  complexity_metric_plot <- ggplot(complexity_metric_long, aes(x = Group, y = Value, fill = Group)) +
+    geom_boxplot(width = 0.56, alpha = 0.72, outlier.shape = NA) +
+    geom_point(aes(color = Group), position = position_jitter(width = 0.08, height = 0), size = 2.5) +
+    facet_wrap(~ Metric, scales = "free_y") +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, 0.1))) +
+    labs(title = "Sequence complexity metrics by group", x = NULL, y = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+  save_plot_nested(complexity_metric_plot, "07_complexity_qc", "sequence_complexity_metrics_by_group.pdf", width = 10, height = 7, view = REPORT_VIEW)
+}
+
+if (nrow(sequence_rank_by_sample) > 0) {
+  rank_curve_plot <- sequence_rank_by_sample %>%
+    mutate(Group = factor(as.character(Group), levels = group_levels)) %>%
+    ggplot(aes(x = Rank, y = CumulativeFractionOfClean, color = Group, group = Sample)) +
+    geom_line(linewidth = 0.75, alpha = 0.82) +
+    geom_point(size = 1.1, alpha = 0.65) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_x_continuous(breaks = unique(c(1, 5, 10, 20, 50)), minor_breaks = NULL) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.08))) +
+    labs(
+      title = "Top-sequence cumulative burden",
+      x = "Ranked unique sequence",
+      y = "Cumulative fraction of clean reads",
+      color = "Group"
+    ) +
+    mii_theme_bw() +
+    theme(legend.position = "top")
+  save_plot_nested(rank_curve_plot, "07_complexity_qc", "top_sequence_rank_curves.pdf", width = 9, height = 5.8, view = REPORT_VIEW)
+}
+
+write_csv_safe(sequence_complexity_by_sample, "07_complexity_qc/sequence_complexity_by_sample.csv")
+write_csv_safe(sequence_complexity_by_group, "07_complexity_qc/sequence_complexity_by_group.csv")
+write_csv_safe(sequence_rank_by_sample, "07_complexity_qc/top_sequence_rank_by_sample.csv")
+write_csv_safe(sequence_length_complexity, "07_complexity_qc/sequence_length_complexity.csv")
+```
+
+```{r cohort-qc-raw-fastq-audit, include=FALSE}
+raw_fastq_metric_long <- raw_fastq_audit_by_sample %>%
+  filter(Status == "completed") %>%
+  select(
+    Sample, Group,
+    FractionLt18, Fraction18to32, FractionGt32,
+    AdapterSeedDetectedFraction,
+    PolyA3pFraction, PolyT3pFraction, PolyG3pFraction, PolyC3pFraction
+  ) %>%
+  pivot_longer(
+    cols = -c(Sample, Group),
+    names_to = "Metric",
+    values_to = "Fraction"
+  ) %>%
+  mutate(
+    Metric = factor(
+      Metric,
+      levels = c(
+        "FractionLt18", "Fraction18to32", "FractionGt32",
+        "AdapterSeedDetectedFraction",
+        "PolyA3pFraction", "PolyT3pFraction", "PolyG3pFraction", "PolyC3pFraction"
+      ),
+      labels = c(
+        "<18 nt", "18-32 nt", ">32 nt",
+        "Adapter seed", "3' poly-A", "3' poly-T", "3' poly-G", "3' poly-C"
+      )
+    ),
+    Group = factor(as.character(Group), levels = group_levels)
+  )
+
+if (nrow(raw_fastq_audit_by_sample) > 0) {
+  raw_length_summary_plot <- raw_fastq_audit_by_sample %>%
+    filter(Status == "completed") %>%
+    mutate(Group = factor(as.character(Group), levels = group_levels)) %>%
+    ggplot(aes(x = Sample, y = MedianLength, fill = Group)) +
+    geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+    geom_errorbar(aes(ymin = Q1Length, ymax = Q3Length), width = 0.25, linewidth = 0.65, color = mii_neutral_text) +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    labs(title = "Raw FASTQ read length summary", x = NULL, y = "Median length with IQR") +
+    mii_theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
+  save_plot_nested(raw_length_summary_plot, "09_raw_fastq_audit", "raw_fastq_length_summary_by_sample.pdf", width = 9, height = 5.5, view = REPORT_VIEW)
+}
+
+if (nrow(raw_fastq_metric_long) > 0) {
+  raw_metric_plot <- ggplot(raw_fastq_metric_long, aes(x = Group, y = Fraction, fill = Group)) +
+    geom_boxplot(width = 0.56, alpha = 0.72, outlier.shape = NA) +
+    geom_point(aes(color = Group), position = position_jitter(width = 0.08, height = 0), size = 2.3) +
+    facet_wrap(~ Metric, scales = "free_y") +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.08))) +
+    labs(title = "Raw FASTQ adapter, length-window, and 3-prime homopolymer audit", x = NULL, y = "Read fraction") +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+  save_plot_nested(raw_metric_plot, "09_raw_fastq_audit", "raw_fastq_qc_metrics_by_group.pdf", width = 11, height = 7, view = REPORT_VIEW)
+}
+
+raw_fastq_end_base_by_group <- raw_fastq_end_base %>%
+  group_by(Group, End, Base) %>%
+  summarise(ReadN = sum(ReadN, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Group, End) %>%
+  mutate(Fraction = ReadN / pmax(sum(ReadN, na.rm = TRUE), 1)) %>%
+  ungroup()
+
+if (nrow(raw_fastq_end_base_by_group) > 0) {
+  raw_end_base_plot <- raw_fastq_end_base_by_group %>%
+    mutate(
+      Group = factor(as.character(Group), levels = group_levels),
+      Base = factor(Base, levels = c("A", "C", "G", "T", "N"))
+    ) %>%
+    ggplot(aes(x = Base, y = Fraction, fill = Base)) +
+    geom_col(width = 0.72) +
+    facet_grid(End ~ Group) +
+    scale_fill_manual(values = c(A = mii_green, C = mii_blue, G = mii_orange, T = mii_red, N = mii_neutral_line), drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.08))) +
+    labs(title = "Raw FASTQ terminal-base composition by group", x = NULL, y = "Read fraction", fill = "Base") +
+    mii_theme_bw() +
+    theme(legend.position = "top")
+  save_plot_nested(raw_end_base_plot, "09_raw_fastq_audit", "raw_fastq_terminal_base_by_group.pdf", width = 9, height = 6, view = REPORT_VIEW)
+}
+
+raw_fastq_kmer_by_group <- raw_fastq_kmer %>%
+  group_by(Group, KmerSide, Kmer) %>%
+  summarise(ReadN = sum(ReadN, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Group, KmerSide) %>%
+  mutate(Fraction = ReadN / pmax(sum(ReadN, na.rm = TRUE), 1)) %>%
+  arrange(Group, KmerSide, desc(ReadN), Kmer) %>%
+  slice_head(n = 15) %>%
+  ungroup()
+
+if (nrow(raw_fastq_kmer_by_group) > 0) {
+  raw_kmer_plot <- raw_fastq_kmer_by_group %>%
+    mutate(Kmer = factor(Kmer, levels = rev(unique(Kmer)))) %>%
+    ggplot(aes(x = Kmer, y = Fraction, fill = Group)) +
+    geom_col(width = 0.72) +
+    coord_flip() +
+    facet_grid(KmerSide ~ Group, scales = "free_y") +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1), expand = expansion(mult = c(0, 0.08))) +
+    labs(title = "Top raw FASTQ terminal k-mers by group", x = NULL, y = "Within-group terminal k-mer fraction") +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+  save_plot_nested(raw_kmer_plot, "09_raw_fastq_audit", "raw_fastq_terminal_kmer_by_group.pdf", width = 11, height = 7, view = REPORT_VIEW)
+}
+
+write_csv_safe(raw_fastq_audit_by_sample, "09_raw_fastq_audit/raw_fastq_audit_by_sample.csv")
+write_csv_safe(raw_fastq_audit_by_group, "09_raw_fastq_audit/raw_fastq_audit_by_group.csv")
+write_csv_safe(raw_fastq_length_distribution, "09_raw_fastq_audit/raw_fastq_length_distribution.csv")
+write_csv_safe(raw_fastq_end_base, "09_raw_fastq_audit/raw_fastq_end_base_by_sample.csv")
+write_csv_safe(raw_fastq_end_base_by_group, "09_raw_fastq_audit/raw_fastq_end_base_by_group.csv")
+write_csv_safe(raw_fastq_kmer, "09_raw_fastq_audit/raw_fastq_terminal_kmer_by_sample.csv")
+write_csv_safe(raw_fastq_kmer_by_group, "09_raw_fastq_audit/raw_fastq_terminal_kmer_by_group.csv")
+```
+
+Raw FASTQ audit completed. Adapter-seed detection, terminal k-mer dominance, and 3-prime homopolymer signals are library-level QC features from untrimmed reads; they should be used to interpret trimming and dominant-fragment behavior, not as evidence of biological small-RNA tailing.
+

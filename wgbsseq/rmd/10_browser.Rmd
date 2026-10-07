@@ -7,6 +7,9 @@ ensure_step_dirs("result/10_browser/plots/1", "result/10_browser/tables/1", "res
 
 message("⏳ 导出 BigWig 文件用于 IGV 可视化...")
 ensure_obj_cpg_loaded()
+ensure_dmr_outputs_loaded()
+ensure_dmr_cgi_context(required = FALSE, persist = TRUE)
+ensure_gene_centric_loaded(required = FALSE)
 
 for(i in seq_along(sample_ids)) {
   sample_obj <- obj.cpg[[i]]
@@ -245,20 +248,14 @@ if(requireNamespace("bsseq", quietly = TRUE) && exists("dmr_anno_df") && nrow(dm
     message("   构建 BSseq 对象用于平滑...")
     bs_data_list <- lapply(seq_along(obj.cpg), function(i) {
       raw_df <- methylKit::getData(obj.cpg[[i]])
-      GRanges(
-        seqnames = raw_df$chr,
-        ranges = IRanges(start = raw_df$start, width = 1),
-        M = raw_df$numCs,
-        Cov = raw_df$coverage
+      data.frame(
+        chr = as.character(raw_df$chr),
+        pos = raw_df$start,
+        N = raw_df$coverage,
+        X = raw_df$numCs
       )
     })
-    bsobj_for_smooth <- BSseq(
-      chr = as.character(seqnames(bs_data_list[[1]])),
-      pos = start(bs_data_list[[1]]),
-      M = do.call(cbind, lapply(bs_data_list, function(gr) mcols(gr)$M)),
-      Cov = do.call(cbind, lapply(bs_data_list, function(gr) mcols(gr)$Cov)),
-      sampleNames = sample_ids
-    )
+    bsobj_for_smooth <- DSS::makeBSseqData(bs_data_list, sample_ids)
   }
 
   # BSmooth 平滑 (只在数据量可管理时执行)
@@ -275,7 +272,7 @@ if(requireNamespace("bsseq", quietly = TRUE) && exists("dmr_anno_df") && nrow(dm
   if(!is.null(bsobj_smooth)) {
     # 选取 Top DMR 进行平滑可视化
     top_dmr_for_smooth <- dmr_anno_df %>%
-      arrange(abs(diffMethy) > 0) %>%
+      arrange(desc(abs(diffMethy))) %>%
       slice_head(n = 3)
 
     if(nrow(top_dmr_for_smooth) > 0) {

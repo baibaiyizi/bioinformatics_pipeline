@@ -1,0 +1,54 @@
+project:
+  root: ..
+  name: scrna_project
+  run_root: runs
+  seed: 42
+samples: config/samples.tsv
+markers: config/markers.yml
+inputs:
+  mode: h5ad # h5ad per-library raw counts, or fastq -> Cell Ranger
+  md5_manifest: inputs/MD5.txt
+  stability_seconds: 300
+  require_no_open_writer: true
+resources:
+  cellranger_cores: 8
+  cellranger_memory_gb: 32
+  inference_cpus: 2
+tools:
+  cellranger: cellranger
+reference:
+  transcriptome: reference/cellranger
+qc:
+  min_counts: 500
+  min_genes: 200
+  max_pct_mt: 20
+  mt_prefix: mt-
+  min_cells_per_gene: 3
+  doublets: false
+  expected_doublet_rate: 0.06 # Set based on assay/loading, never inferred from condition
+preprocessing:
+  target_sum: 10000
+  n_hvg: 2000
+  n_pcs: 30
+  n_neighbors: 15
+  preferred_resolution: 0.5
+  leiden_resolutions: [0.5]
+  exclude_hvg_genes: []
+annotation:
+  min_fraction: 0.5
+  min_margin: 0.2
+statistics:
+  design: independent_two_group
+  case: case
+  control: control
+  inference_enabled: false
+  min_independent_samples_per_group: 3
+  min_cells_per_sample_cell_type: 20
+  min_gene_total_count: 10
+  alpha: 0.05
+  min_log2fc: 0.58
+  marker_min_log2fc: 0.58
+  marker_pvalue: 0.05
+report:
+  figures: true
+  dpi: 150

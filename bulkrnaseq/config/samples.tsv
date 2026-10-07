@@ -1,0 +1,5 @@
+sample	group	biological_id	stage	eligible	raw_fq1	raw_fq2
+C1	control	animal1	tissue	true	rawdata/runA_R1.fastq.gz	rawdata/runA_R2.fastq.gz
+C2	control	animal2	tissue	true	rawdata/runB_R1.fastq.gz	rawdata/runB_R2.fastq.gz
+T1	treatment	animal3	tissue	true	rawdata/runC_R1.fastq.gz	rawdata/runC_R2.fastq.gz
+T2	treatment	animal4	tissue	true	rawdata/runD_R1.fastq.gz	rawdata/runD_R2.fastq.gz

@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "scrna-template"
+version = "1.0.0"
+description = "可审计的独立两组 scRNA-seq 模板"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = ["anndata>=0.12.6,<0.13", "h5py>=3.14,<4", "matplotlib>=3.10,<4", "numpy>=2.2,<2.4", "pandas>=2.3,<3", "pyyaml>=6,<7", "scanpy[leiden]>=1.12,<1.13", "scipy>=1.16,<2", "scrublet>=0.2.3,<0.3"]
+[project.optional-dependencies]
+replicated = ["pydeseq2>=0.5,<0.6"]
+test = ["pytest>=8.4,<10"]
+[project.scripts]
+scrna-template = "scrna_template.cli:main"
+[tool.setuptools]
+package-dir = {"" = "src"}
+[tool.setuptools.packages.find]
+where = ["src"]
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]

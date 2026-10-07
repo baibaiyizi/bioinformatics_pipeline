@@ -1,0 +1,1 @@
+{"root": "/tmp/model-lcms-validation-ww308d40", "passed": ["missing_prefill", "with_prefill", "reverse", "duplicate_unit_rejected", "per_stage_status_all_completed", "failed_producer_rejected", "incomplete_polarity_rejected"]}

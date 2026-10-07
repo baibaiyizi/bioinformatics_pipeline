@@ -1,0 +1,5 @@
+sample	biological_sample_id	group	stage
+01	animal1	control	tissue
+02	animal2	control	tissue
+03	animal3	treated	tissue
+04	animal4	treated	tissue

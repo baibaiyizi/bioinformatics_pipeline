@@ -10,6 +10,46 @@ if (!"gene_id" %in% colnames(de_raw)) {
   stop("4.DE_analysis/DE_results 缺少 gene_id 列")
 }
 
+required_contrast_cols <- c("sampleA", "sampleB", "baseMeanA", "baseMeanB", "log2FoldChange")
+missing_contrast_cols <- setdiff(required_contrast_cols, colnames(de_raw))
+if (length(missing_contrast_cols) > 0) {
+  stop("4.DE_analysis/DE_results 缺少方向标准化所需列: ", paste(missing_contrast_cols, collapse = ", "))
+}
+input_sample_a <- unique(as.character(de_raw$sampleA))
+input_sample_b <- unique(as.character(de_raw$sampleB))
+if (length(input_sample_a) != 1L || length(input_sample_b) != 1L) {
+  stop("4.DE_analysis/DE_results 包含多个不一致的比较方向")
+}
+expected_sample_a <- group2_label
+expected_sample_b <- group1_label
+de_contrast_inverted <- FALSE
+if (identical(input_sample_a, expected_sample_b) && identical(input_sample_b, expected_sample_a)) {
+  old_base_mean_a <- de_raw$baseMeanA
+  de_raw$baseMeanA <- de_raw$baseMeanB
+  de_raw$baseMeanB <- old_base_mean_a
+  de_raw$log2FoldChange <- -de_raw$log2FoldChange
+  if ("stat" %in% colnames(de_raw)) de_raw$stat <- -de_raw$stat
+  de_raw$sampleA <- expected_sample_a
+  de_raw$sampleB <- expected_sample_b
+  de_contrast_inverted <- TRUE
+} else if (!identical(input_sample_a, expected_sample_a) || !identical(input_sample_b, expected_sample_b)) {
+  stop(
+    "4.DE_analysis/DE_results 比较方向无法标准化: 输入 ", input_sample_a, "-", input_sample_b,
+    "，期望 ", expected_sample_a, "-", expected_sample_b
+  )
+}
+
+write_csv_safe(
+  data.frame(
+    input_contrast = paste0(input_sample_a, " - ", input_sample_b),
+    analysis_contrast = paste0(expected_sample_a, " - ", expected_sample_b),
+    sign_inverted = de_contrast_inverted,
+    stringsAsFactors = FALSE
+  ),
+  "result/05_de/5_0_contrast_manifest.csv",
+  row.names = FALSE
+)
+
 de_result <- de_raw %>%
   mutate(
     gene_id = as.character(gene_id),
@@ -85,14 +125,14 @@ de_summary_long <- bind_rows(
     dplyr::select(threshold, direction, gene_count, note)
 )
 write_csv_safe(de_summary_long, "result/05_de/5_2_DE_summary.csv", row.names = FALSE)
-write_csv_compat(de_summary, "result/05_de/5_2_DE_summary_counts.csv", row.names = FALSE)
-write_csv_compat(threshold_advisory, "result/05_de/5_2b_threshold_advisory_counts.csv", row.names = FALSE)
+
+
 
 de_barplot <- ggplot(de_summary, aes(x = direction, y = gene_count, fill = direction)) +
   geom_col(width = 0.7) +
   scale_fill_manual(values = viz_pal$de) +
-  labs(title = "差异表达基因统计", x = NULL, y = "Gene count") +
-  theme_rnaseq_minimal() +
+  labs(title = "Differentially expressed genes", x = NULL, y = "Gene count") +
+  theme_rnaseq_publication() +
   theme(legend.position = "none")
 
 save_plot_versions(
@@ -102,13 +142,26 @@ save_plot_versions(
   height = 4.5
 )
 
-volcano_tbl <- de_result %>%
+volcano_tbl <- de_result
+volcano_tbl$figure_significance <- figure_significance_values(
+  volcano_tbl,
+  pvalue_candidates = "pvalue",
+  fdr_candidates = "padj"
+)
+volcano_tbl <- volcano_tbl %>%
   mutate(
-    label_score = ifelse(is.na(significance_value) | is.na(log2FoldChange), 0, abs(log2FoldChange) * -log10(significance_value + 1e-300)),
-    label = ifelse(direction != "ns" & rank(-label_score, ties.method = "first") <= 20, gene_label, NA)
+    figure_direction = case_when(
+      !is.finite(figure_significance) | figure_significance >= de_pvalue_cutoff |
+        !is.finite(log2FoldChange) | abs(log2FoldChange) < de_log2fc_cutoff ~ "ns",
+      log2FoldChange >= de_log2fc_cutoff ~ "up",
+      TRUE ~ "down"
+    ),
+    label_score = ifelse(!is.finite(figure_significance) | !is.finite(log2FoldChange), 0, abs(log2FoldChange) * -log10(figure_significance + 1e-300)),
+    label = ifelse(figure_direction != "ns" & rank(-label_score, ties.method = "first") <= 20, gene_label, NA)
   )
 
-volcano_count_tbl <- de_summary %>%
+volcano_count_tbl <- volcano_tbl %>%
+  count(direction = figure_direction, name = "gene_count") %>%
   filter(direction %in% c("up", "down")) %>%
   mutate(
     x = ifelse(
@@ -116,26 +169,26 @@ volcano_count_tbl <- de_summary %>%
       max(volcano_tbl$log2FoldChange, na.rm = TRUE) * 0.98,
       min(volcano_tbl$log2FoldChange, na.rm = TRUE) * 0.98
     ),
-    y = max(-log10(volcano_tbl$significance_value + 1e-300), na.rm = TRUE) * 0.98,
+    y = max(-log10(volcano_tbl$figure_significance + 1e-300), na.rm = TRUE) * 0.98,
     hjust = ifelse(direction == "up", 1, 0),
     label = ifelse(direction == "up", paste0("Up: ", gene_count), paste0("Down: ", gene_count))
   )
 
-volcano_plot <- ggplot(volcano_tbl, aes(x = log2FoldChange, y = -log10(significance_value + 1e-300), color = direction)) +
+volcano_plot <- ggplot(volcano_tbl, aes(x = log2FoldChange, y = -log10(figure_significance + 1e-300), color = figure_direction)) +
   geom_point(alpha = 0.75, size = 1.5) +
   geom_hline(yintercept = -log10(de_pvalue_cutoff), linetype = "dashed") +
   geom_vline(xintercept = c(-de_log2fc_cutoff, de_log2fc_cutoff), linetype = "dashed") +
-  geom_text_repel(aes(label = label), size = 3, na.rm = TRUE, show.legend = FALSE) +
+  geom_text_repel(aes(label = label), size = rnaseq_figure_text_size, na.rm = TRUE, show.legend = FALSE) +
   geom_text(
     data = volcano_count_tbl,
     aes(x = x, y = y, label = label, color = direction, hjust = hjust),
     inherit.aes = FALSE,
-    size = 5,
+    size = rnaseq_figure_text_size,
     show.legend = FALSE
   ) +
-  scale_color_manual(values = viz_pal$de) +
-  labs(title = "差异表达火山图", x = "log2 Fold Change", y = paste0("-log10(", de_significance_column, ")")) +
-  theme_rnaseq_bw()
+  scale_color_manual(values = viz_pal$de, name = "Direction") +
+  labs(title = "Differential expression volcano plot", x = "log2 fold change", y = figure_significance_axis_label()) +
+  theme_rnaseq_publication()
 
 save_plot_versions(
   volcano_plot,
@@ -148,8 +201,8 @@ ma_plot <- ggplot(de_result, aes(x = log10(baseMean + 1), y = log2FoldChange, co
   geom_point(alpha = 0.7, size = 1.2) +
   geom_hline(yintercept = c(-de_log2fc_cutoff, de_log2fc_cutoff), linetype = "dashed") +
   scale_color_manual(values = viz_pal$de) +
-  labs(title = "差异表达 MA 图", x = "log10(baseMean + 1)", y = "log2 Fold Change") +
-  theme_rnaseq_bw()
+  labs(title = "Differential expression MA plot", x = "log10(baseMean + 1)", y = "log2 fold change") +
+  theme_rnaseq_publication()
 
 save_plot_versions(
   ma_plot,
@@ -188,9 +241,8 @@ if (nrow(sig_de) > 0) {
       labels_row = row_labels,
       cluster_rows = TRUE,
       cluster_cols = TRUE,
-      fontsize_row = 7,
-      fontsize_col = 10,
-      main = "Top 50 DE genes",
+      fontsize_row = rnaseq_figure_tick_size,
+      fontsize_col = rnaseq_figure_tick_size,
       silent = TRUE
     )
   )
@@ -202,8 +254,8 @@ if (nrow(sig_de) > 0) {
     filter(direction == "down") %>%
     arrange(pvalue, log2FoldChange)
 
-  write_csv_compat(top_up, "result/05_de/5_7_top_upregulated_genes.csv", row.names = FALSE)
-  write_csv_compat(top_down, "result/05_de/5_8_top_downregulated_genes.csv", row.names = FALSE)
+
+
 
   rank_tbl <- de_result %>%
     filter(!is.na(ENTREZID), !is.na(rank_score)) %>%
@@ -225,187 +277,8 @@ if (nrow(sig_de) > 0) {
 }
 ```
 
-## 5.4 全样本敏感性分析
+## 5.4 分析样本范围
 
 ```{r}
-full_sensitivity_summary <- data.frame()
-full_de_result <- data.frame()
-
-if (!is.null(gene_count_full) && !is.null(gene_count_mat) && !is.null(full_sample_info)) {
-  full_groups <- full_sample_info[colnames(gene_count_full), "group"]
-  names(full_groups) <- colnames(gene_count_full)
-  full_keep_samples <- names(full_groups)[full_groups %in% c(group1_label, group2_label)]
-  full_group_counts <- table(full_groups[full_keep_samples])
-
-  if (length(full_keep_samples) >= ncol(gene_count_mat) &&
-      all(c(group1_label, group2_label) %in% names(full_group_counts)) &&
-      all(full_group_counts[c(group1_label, group2_label)] >= 3)) {
-    full_counts <- round(gene_count_full[, full_keep_samples, drop = FALSE])
-    full_condition <- factor(full_sample_info[full_keep_samples, "group"], levels = c(group1_label, group2_label))
-    full_col_data <- data.frame(condition = full_condition, row.names = full_keep_samples, check.names = FALSE)
-
-    full_dds <- DESeq2::DESeqDataSetFromMatrix(countData = full_counts, colData = full_col_data, design = ~ condition)
-    full_dds <- DESeq2::DESeq(full_dds, quiet = TRUE)
-    # 敏感性分析也沿用当前项目口径：independentFiltering=FALSE 和 nominal pvalue。
-    # 可用 DESeq2 默认 independent filtering / padj 作为报告中的补充稳定性证据。
-    full_res <- DESeq2::results(full_dds, contrast = c("condition", group2_label, group1_label), independentFiltering = FALSE)
-    full_norm <- DESeq2::counts(full_dds, normalized = TRUE)
-
-    full_de_result <- data.frame(
-      gene_id = rownames(full_res),
-      sampleA = group2_label,
-      sampleB = group1_label,
-      baseMeanA = rowMeans(full_norm[, full_condition == group2_label, drop = FALSE]),
-      baseMeanB = rowMeans(full_norm[, full_condition == group1_label, drop = FALSE]),
-      baseMean = full_res$baseMean,
-      log2FoldChange = full_res$log2FoldChange,
-      lfcSE = full_res$lfcSE,
-      stat = full_res$stat,
-      pvalue = full_res$pvalue,
-      padj = full_res$padj,
-      stringsAsFactors = FALSE,
-      check.names = FALSE
-    ) %>%
-      mutate(ensembl_id = sub("\\.[0-9]+$", "", gene_id)) %>%
-      left_join(anno, by = c("ensembl_id" = "ENSEMBL")) %>%
-      mutate(
-        gene_label = dplyr::coalesce(SYMBOL, ensembl_id),
-        significance_value = .data[[de_significance_column]],
-        direction = case_when(
-          is.na(significance_value) | significance_value >= de_pvalue_cutoff |
-            is.na(log2FoldChange) | abs(log2FoldChange) < de_log2fc_cutoff ~ "ns",
-          log2FoldChange >= de_log2fc_cutoff ~ "up",
-          TRUE ~ "down"
-        )
-      ) %>%
-      arrange(pvalue, desc(abs(log2FoldChange)))
-
-    write.csv(full_de_result, "result/05_de/5_10_full_sample_sensitivity_DE_results.csv", row.names = FALSE)
-
-    main_sig_ids <- unique(de_result$ensembl_id[de_result$direction != "ns"])
-    full_sig_ids <- unique(full_de_result$ensembl_id[full_de_result$direction != "ns"])
-    compare_tbl <- de_result %>%
-      dplyr::select(ensembl_id, gene_label, main_log2FoldChange = log2FoldChange, main_pvalue = pvalue, main_padj = padj, main_direction = direction) %>%
-      inner_join(
-        full_de_result %>%
-          dplyr::select(ensembl_id, full_log2FoldChange = log2FoldChange, full_pvalue = pvalue, full_padj = padj, full_direction = direction),
-        by = "ensembl_id"
-      )
-
-    full_sensitivity_summary <- data.frame(
-      metric = c(
-        "main_selected_samples_n",
-        "full_snapshot_samples_n",
-        "main_de_genes_nominal",
-        "full_de_genes_nominal",
-        "overlap_de_genes_nominal",
-        "main_only_de_genes_nominal",
-        "full_only_de_genes_nominal",
-        "log2fc_pearson_all_genes",
-        "same_direction_overlap_genes"
-      ),
-      value = c(
-        ncol(gene_count_mat),
-        length(full_keep_samples),
-        length(main_sig_ids),
-        length(full_sig_ids),
-        length(intersect(main_sig_ids, full_sig_ids)),
-        length(setdiff(main_sig_ids, full_sig_ids)),
-        length(setdiff(full_sig_ids, main_sig_ids)),
-        safe_cor(compare_tbl$main_log2FoldChange, compare_tbl$full_log2FoldChange),
-        sum(compare_tbl$ensembl_id %in% intersect(main_sig_ids, full_sig_ids) &
-              compare_tbl$main_direction == compare_tbl$full_direction, na.rm = TRUE)
-      ),
-      stringsAsFactors = FALSE
-    )
-    write.csv(full_sensitivity_summary, "result/05_de/5_11_full_sample_sensitivity_summary.csv", row.names = FALSE)
-    write.csv(compare_tbl, "result/05_de/5_12_main_vs_full_de_concordance.csv", row.names = FALSE)
-
-    concordance_plot <- compare_tbl %>%
-      filter(is.finite(main_log2FoldChange), is.finite(full_log2FoldChange)) %>%
-      mutate(status = case_when(
-        ensembl_id %in% intersect(main_sig_ids, full_sig_ids) ~ "both_nominal_DE",
-        ensembl_id %in% main_sig_ids ~ "main_only",
-        ensembl_id %in% full_sig_ids ~ "full_only",
-        TRUE ~ "not_nominal_DE"
-      )) %>%
-      ggplot(aes(x = main_log2FoldChange, y = full_log2FoldChange, color = status)) +
-      geom_point(alpha = 0.55, size = 1) +
-      geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
-      geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
-      scale_color_manual(values = c(
-        both_nominal_DE = unname(viz_pal$sig_status["significant"]),
-        main_only = unname(viz_pal$accent["warm"]),
-        full_only = unname(viz_pal$accent["green"]),
-        not_nominal_DE = unname(viz_pal$neutral["mid"])
-      )) +
-      labs(title = "主分析 3v3 与全样本快照 DE log2FC 一致性", x = "Main selected-sample log2FC", y = "Full-snapshot log2FC") +
-      theme_rnaseq_bw()
-
-    save_plot_versions(
-      concordance_plot,
-      primary = "result/05_de/5_13_main_vs_full_log2fc_concordance.pdf",
-      width = 7.5,
-      height = 6
-    )
-  } else {
-    full_sensitivity_summary <- data.frame(
-      metric = "full_sample_sensitivity_status",
-      value = "skipped_insufficient_full_snapshot_or_group_replicates",
-      stringsAsFactors = FALSE
-    )
-    write.csv(full_sensitivity_summary, "result/05_de/5_11_full_sample_sensitivity_summary.csv", row.names = FALSE)
-  }
-}
-```
-
-## 5.5 全样本 DE 补充图
-
-```{r}
-if (exists("full_de_result") && is.data.frame(full_de_result) && nrow(full_de_result) > 0) {
-  full_de_plot_tbl <- full_de_result %>%
-    mutate(
-      significance_value = .data[[de_significance_column]],
-      neg_log10_p = -log10(dplyr::coalesce(significance_value, 1) + 1e-300),
-      direction = factor(direction, levels = c("up", "down", "ns"))
-    )
-
-  full_volcano_count_tbl <- full_de_plot_tbl %>%
-    count(direction, name = "gene_count") %>%
-    filter(direction %in% c("up", "down")) %>%
-    mutate(
-      x = ifelse(
-        direction == "up",
-        max(full_de_plot_tbl$log2FoldChange, na.rm = TRUE) * 0.98,
-        min(full_de_plot_tbl$log2FoldChange, na.rm = TRUE) * 0.98
-      ),
-      y = max(full_de_plot_tbl$neg_log10_p, na.rm = TRUE) * 0.98,
-      hjust = ifelse(direction == "up", 1, 0),
-      label = ifelse(direction == "up", paste0("Up: ", gene_count), paste0("Down: ", gene_count))
-    )
-
-  full_volcano <- ggplot(full_de_plot_tbl, aes(x = log2FoldChange, y = neg_log10_p, color = direction)) +
-    geom_point(alpha = 1, size = 1) +
-    geom_vline(xintercept = c(-de_log2fc_cutoff, de_log2fc_cutoff), linetype = "dashed", color = viz_pal$neutral["dark"]) +
-    geom_hline(yintercept = -log10(de_pvalue_cutoff), linetype = "dashed", color = viz_pal$neutral["dark"]) +
-    geom_text(
-      data = full_volcano_count_tbl,
-      aes(x = x, y = y, label = label, color = direction, hjust = hjust),
-      inherit.aes = FALSE,
-      size = 5,
-      show.legend = FALSE
-    ) +
-    scale_color_manual(values = viz_pal$de, drop = FALSE) +
-    labs(title = "全样本快照 DE 火山图", x = paste0(group2_label, " vs ", group1_label, " log2FC"), y = paste0("-log10(", de_significance_column, ")")) +
-    theme_rnaseq_bw()
-  save_plot_versions(full_volcano, "result/05_de/5_14_full_sample_sensitivity_volcano.pdf", width = 8.5, height = 6)
-
-  full_ma_plot <- ggplot(full_de_plot_tbl, aes(x = log10(baseMean + 1), y = log2FoldChange, color = direction)) +
-    geom_point(alpha = 1, size = 1) +
-    geom_hline(yintercept = c(-de_log2fc_cutoff, 0, de_log2fc_cutoff), linetype = c("dashed", "solid", "dashed"), color = viz_pal$neutral["dark"]) +
-    scale_color_manual(values = viz_pal$de, drop = FALSE) +
-    labs(title = "全样本快照 DE MA 图", x = "log10(baseMean + 1)", y = paste0(group2_label, " vs ", group1_label, " log2FC")) +
-    theme_rnaseq_bw()
-  save_plot_versions(full_ma_plot, "result/05_de/5_15_full_sample_sensitivity_MA.pdf", width = 8.5, height = 6)
-}
+write_csv_safe(data.frame(metric="analysis_sample_scope", value="all_prespecified_eligible_samples; PCA_diagnostic_only"), "result/05_de/5_11_analysis_sample_scope.csv", row.names=FALSE)
 ```

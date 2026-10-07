@@ -1,0 +1,3 @@
+PASS: rMATS forward/reverse b1, metadata order, NA position, raw fields, missing and invalid metadata
+NULL
+PASS: reverse DE standardization and contrast audit

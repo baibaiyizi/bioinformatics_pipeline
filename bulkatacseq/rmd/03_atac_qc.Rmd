@@ -1,0 +1,436 @@
+# Module 03. ATAC QC 与综合评级
+
+## Step3. 上游分析 QC 汇总
+
+整合上游 shell 脚本生成的 QC 结果，包括 FRiP 分数、插入片段分布等。
+
+```{r qc_summary, fig.width=12, fig.height=8}
+# --- 1.1 FRiP 分数汇总 ---
+frip_file <- file.path(work_dir, "04counts", "FRiP_scores.txt")
+if(file.exists(frip_file)) {
+  frip_data <- read.table(frip_file, header=TRUE, sep="\t", stringsAsFactors=FALSE)
+  frip_data$Group <- sample_group(frip_data$Sample)
+  
+  p_frip <- ggplot(frip_data, aes(x=Sample, y=FRiP, fill=Group)) +
+    geom_bar(stat="identity") +
+    scale_fill_manual(values = viz_pal$group) +
+    theme_atac_classic(base_size = 12) +
+    theme(axis.text.x = element_text(angle=45, hjust=1)) +
+    labs(title="Read-level FRiP (alignment overlaps)",
+         subtitle="Descriptive QC; no fragment-level acceptance threshold is applied",
+         y="Fraction of alignments overlapping peaks", x="Sample")
+  
+  save_gg_dual(
+    p_frip,
+    file = step_plot_file("Step3", "FRiP_Scores.pdf"),
+    width = 8,
+    height = 6
+  )
+  print(p_frip)
+  cat("平均 FRiP:", round(mean(frip_data$FRiP), 3), "\n")
+}
+
+# --- 1.2 插入片段长度分布 (ATAC 特异性 QC) ---
+insert_size_files <- file.path(work_dir, "02mapping/qc", paste0(samples, ".insert_sizes.txt"))
+names(insert_size_files) <- samples
+
+# Process every positive TLEN once in bounded chunks. Histogram plotting does not
+# select the beginning of a coordinate-sorted BAM; QC denominators include all sizes.
+insert_list <- list()
+insert_nfr_summary <- data.frame()
+for(s in samples) {
+  f <- insert_size_files[s]
+  if(!file.exists(f)) next
+  con <- file(f, open = "r")
+  size_counts <- numeric(1000L)
+  total_count <- nfr_count <- mono_count <- 0
+  tryCatch({
+    repeat {
+      sizes <- suppressWarnings(scan(con, what = numeric(), quiet = TRUE, nmax = 1000000L))
+      if(length(sizes) == 0L) break
+      sizes <- sizes[is.finite(sizes) & sizes > 0]
+      total_count <- total_count + length(sizes)
+      nfr_count <- nfr_count + sum(sizes < 100)
+      mono_count <- mono_count + sum(sizes >= 180 & sizes <= 247)
+      size_counts <- size_counts + tabulate(as.integer(sizes[sizes <= 1000]), nbins = 1000L)
+    }
+  }, finally = close(con))
+  insert_nfr_summary <- rbind(insert_nfr_summary, data.frame(
+    Sample = s,
+    NFR_Ratio = if(total_count > 0) nfr_count / total_count else NA_real_,
+    Mono_Ratio = if(total_count > 0) mono_count / total_count else NA_real_,
+    FragmentCount = total_count,
+    MetricSource = "all positive insert sizes; streaming exact counts; denominator has no upper size truncation",
+    stringsAsFactors = FALSE
+  ))
+  insert_list[[s]] <- data.frame(
+    Sample = s, Condition = sample_group(s), InsertSize = seq_len(1000L),
+    Fraction = if(total_count > 0) size_counts / total_count else NA_real_
+  )
+}
+if(length(insert_list) > 0) {
+  insert_df <- do.call(rbind, insert_list)
+  p_insert <- ggplot(insert_df, aes(x = InsertSize, y = Fraction, color = Condition,
+                                   linetype = Condition, group = Sample)) +
+    geom_line(linewidth = 0.6) +
+    geom_vline(xintercept = c(50, 200), linetype = "dashed", alpha = 0.5) +
+    coord_cartesian(xlim = c(0, 600)) +
+    scale_color_manual(values = viz_pal$group) +
+    theme_atac_classic(base_size = 12) +
+    labs(title = "ATAC-seq Insert Size Distribution",
+         subtitle = "All positive insert sizes; display limited to 0–600 bp",
+         x = "Insert Size (bp)", y = "Fraction of all fragments per bp")
+  save_gg_dual(p_insert, file = step_plot_file("Step3", "Insert_Size_Distribution.pdf"), width = 10, height = 6)
+  print(p_insert)
+  nfr_ratio <- stats::setNames(insert_nfr_summary$NFR_Ratio, insert_nfr_summary$Sample)
+  write.csv(insert_nfr_summary, step_table_file("Step3", "Insert_Size_NFR_Summary.csv"), row.names = FALSE)
+  cat("Nucleosome-free region (<100bp) ratios from all positive insert sizes:\n")
+  print(round(nfr_ratio, 3))
+}
+
+# --- 1.3 Peak 数量统计 ---
+peak_counts <- data.frame(
+  Sample = samples,
+  Condition = conditions,
+  RawPeaks = sapply(raw_peak_files, function(f) if(file.exists(f)) length(readPeakFile(f)) else NA),
+  CleanPeaks = sapply(peak_files, function(f) if(file.exists(f)) length(readPeakFile(f)) else NA)
+)
+
+# 绘制对比
+peak_counts_long <- tidyr::pivot_longer(peak_counts, 
+                                        cols=c(RawPeaks, CleanPeaks),
+                                        names_to="Type", values_to="Count")
+write.csv(peak_counts, step_table_file("Step3", "Peak_Counts.csv"), row.names = FALSE)
+
+p_peak_count <- ggplot(peak_counts_long, aes(x=Sample, y=Count, fill=Type)) +
+  geom_bar(stat="identity", position="dodge") +
+  scale_fill_manual(values = c("RawPeaks" = viz_pal$neutral_mid, "CleanPeaks" = viz_pal$burden_density)) +
+  theme_atac_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle=45, hjust=1)) +
+  labs(title="Peak Counts: Raw vs Blacklist-filtered",
+       y="Number of Peaks", x="Sample")
+
+save_gg_dual(
+  p_peak_count,
+  file = step_plot_file("Step3", "Peak_Counts_Comparison.pdf"),
+  width = 10,
+  height = 6
+)
+print(p_peak_count)
+
+cat("\nPeak 数量统计:\n")
+print(peak_counts)
+
+# --- 1.4 样本测序 QC 与比对有效 reads 汇总 ---
+percent_of <- function(num, den) {
+  num <- suppressWarnings(as.numeric(num))
+  den <- suppressWarnings(as.numeric(den))
+  ifelse(!is.na(num) & !is.na(den) & den > 0, 100 * num / den, NA_real_)
+}
+
+project_sample_qc <- build_sample_qc_summary(samples) %>%
+  mutate(Group = factor(Group, levels = group_levels))
+
+sequencing_qc_summary <- project_sample_qc %>%
+  transmute(
+    Sample,
+    Group,
+    RawReads = FastpRawReads,
+    CleanReads = FastpCleanReads,
+    CleanReadsPct = percent_of(FastpCleanReads, FastpRawReads),
+    RawBases = FastpRawBases,
+    CleanBases = FastpCleanBases,
+    CleanBasesPct = percent_of(FastpCleanBases, FastpRawBases),
+    Q30RatePct = FastpQ30RatePct,
+    GCContentPct = FastpGCContentPct
+  )
+
+alignment_effective_reads_summary <- project_sample_qc %>%
+  transmute(
+    Sample,
+    Group,
+    TotalCleanReads = FastpCleanReads,
+    Bowtie2InputPairs = Bowtie2InputPairs,
+    AlignmentRatePct = AlignmentRatePct,
+    UniqueMappedPairs = Bowtie2Concordant1Pairs,
+    UniqueMappingRatePct = percent_of(Bowtie2Concordant1Pairs, Bowtie2InputPairs),
+    MappedQ30Reads = MappedQ30Reads,
+    NonMitoProperPairReads = FilteredNonMitoProperPairReads,
+    EffectiveReads = FinalDedupReads,
+    EffectiveRatePct = percent_of(FinalDedupReads, FastpCleanReads),
+    DupRatePct = DupRatePct,
+    MitoPct = MitoPct,
+    FRiP = FRiP,
+    FRiPPct = 100 * FRiP
+  )
+
+write.csv(sequencing_qc_summary, step_table_file("Step3", "Sequencing_QC_Summary.csv"), row.names = FALSE)
+write.csv(alignment_effective_reads_summary, step_table_file("Step3", "Alignment_Effective_Reads_Summary.csv"), row.names = FALSE)
+
+sequencing_qc_plot_df <- sequencing_qc_summary %>%
+  pivot_longer(
+    cols = c(CleanReadsPct, CleanBasesPct, Q30RatePct, GCContentPct),
+    names_to = "Metric",
+    values_to = "Value"
+  )
+
+p_sequencing_qc <- ggplot(sequencing_qc_plot_df, aes(x = Sample, y = Value, fill = Group)) +
+  geom_col(width = 0.72) +
+  facet_wrap(~Metric, scales = "free_y", ncol = 2) +
+  scale_fill_manual(values = viz_pal$group, drop = FALSE) +
+  theme_atac_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Sequencing clean-data QC summary", x = NULL, y = "Percent")
+
+alignment_qc_plot_df <- alignment_effective_reads_summary %>%
+  pivot_longer(
+    cols = c(AlignmentRatePct, UniqueMappingRatePct, EffectiveRatePct, DupRatePct, MitoPct, FRiPPct),
+    names_to = "Metric",
+    values_to = "Value"
+  )
+
+p_alignment_qc <- ggplot(alignment_qc_plot_df, aes(x = Sample, y = Value, fill = Group)) +
+  geom_col(width = 0.72) +
+  facet_wrap(~Metric, scales = "free_y", ncol = 3) +
+  scale_fill_manual(values = viz_pal$group, drop = FALSE) +
+  theme_atac_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Alignment and effective-read summary", x = NULL, y = "Value")
+
+if(emit_light_plots) {
+  save_plot_pdf(p_sequencing_qc, step_plot_file("Step3", "Sequencing_QC_Metrics.pdf"), width = 12, height = 8)
+  save_plot_pdf(p_alignment_qc, step_plot_file("Step3", "Alignment_Effective_Reads_Metrics.pdf"), width = 14, height = 8)
+  print(p_sequencing_qc)
+  print(p_alignment_qc)
+}
+```
+
+
+---
+
+## Step3. 综合 QC 评估与证据分级
+
+将上游流程生成的对齐、线粒体比例、重复率、FRiP、peak 数量和 TSS enrichment 统一汇总，形成适合汇报的样本级 QC 结果。
+
+```{r integrated_qc_summary, fig.width=14, fig.height=8}
+read_upstream_tsv <- function(path) {
+  if(file.exists(path)) {
+    read.delim(path, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
+  } else {
+    data.frame()
+  }
+}
+
+library_complexity_tbl <- read_upstream_tsv(file.path(work_dir, "06qc_report", "Library_Complexity_Metrics.tsv"))
+fragment_class_tbl <- read_upstream_tsv(file.path(work_dir, "06qc_report", "Fragment_Size_Classes.tsv"))
+tss_method_tbl <- read_upstream_tsv(file.path(work_dir, "06qc_report", "TSS_Enrichment_Method.tsv"))
+optional_tool_tbl <- read_upstream_tsv(file.path(work_dir, "06qc_report", "Optional_Tool_Status.tsv"))
+software_versions_tbl <- read_upstream_tsv(file.path(work_dir, "06qc_report", "software_versions.tsv"))
+ataqv_status_tbl <- read_upstream_tsv(file.path(work_dir, "06qc_report", "ataqv", "Ataqv_QC_Status.tsv"))
+ataqv_metrics_long_tbl <- read_upstream_tsv(file.path(work_dir, "06qc_report", "Ataqv_QC_Metrics_Long.tsv"))
+if(!"Sample" %in% colnames(library_complexity_tbl)) library_complexity_tbl <- data.frame(Sample = character())
+
+fragment_summary_tbl <- if(nrow(fragment_class_tbl) > 0 && all(c("Sample", "Class", "Fraction", "FragmentCount") %in% colnames(fragment_class_tbl))) {
+  fragment_wide <- fragment_class_tbl %>%
+    dplyr::select(Sample, Class, Fraction, FragmentCount) %>%
+    pivot_wider(
+      names_from = Class,
+      values_from = c(Fraction, FragmentCount),
+      names_sep = "_"
+    )
+  if(!"Fraction_NFR_lt100bp" %in% colnames(fragment_wide)) fragment_wide$Fraction_NFR_lt100bp <- NA_real_
+  if(!"Fraction_Mononucleosome_180_247bp" %in% colnames(fragment_wide)) fragment_wide$Fraction_Mononucleosome_180_247bp <- NA_real_
+  colnames(fragment_wide)[colnames(fragment_wide) == "Fraction_NFR_lt100bp"] <- "NFRFraction"
+  colnames(fragment_wide)[colnames(fragment_wide) == "Fraction_Mononucleosome_180_247bp"] <- "MononucleosomeFraction"
+  fragment_wide
+} else {
+  data.frame(Sample = character())
+}
+
+sample_qc <- build_sample_qc_summary(samples) %>%
+  left_join(library_complexity_tbl, by = "Sample") %>%
+  left_join(fragment_summary_tbl, by = "Sample") %>%
+  mutate(Group = factor(Group, levels = group_levels))
+for(qc_col in c("NRF", "PBC1", "PBC2", "NFRFraction", "MononucleosomeFraction")) {
+  if(!qc_col %in% colnames(sample_qc)) sample_qc[[qc_col]] <- NA_real_
+}
+
+write.csv(sample_qc, step_table_file("Step3", "QC_Sample_Summary.csv"), row.names = FALSE)
+if(nrow(fragment_class_tbl) > 0) write.csv(fragment_class_tbl, step_table_file("Step3", "Fragment_Size_Classes.csv"), row.names = FALSE)
+if(nrow(library_complexity_tbl) > 0) write.csv(library_complexity_tbl, step_table_file("Step3", "Library_Complexity_Metrics.csv"), row.names = FALSE)
+if(nrow(tss_method_tbl) > 0) write.csv(tss_method_tbl, step_table_file("Step3", "TSS_Enrichment_Method.csv"), row.names = FALSE)
+if(nrow(optional_tool_tbl) > 0) write.csv(optional_tool_tbl, step_table_file("Step3", "Optional_Tool_Status.csv"), row.names = FALSE)
+if(nrow(software_versions_tbl) > 0) write.csv(software_versions_tbl, step_table_file("Step3", "Software_Versions.csv"), row.names = FALSE)
+if(nrow(ataqv_status_tbl) > 0) write.csv(ataqv_status_tbl, step_table_file("Step3", "Ataqv_QC_Status.csv"), row.names = FALSE)
+if(nrow(ataqv_metrics_long_tbl) > 0) write.csv(ataqv_metrics_long_tbl, step_table_file("Step3", "Ataqv_QC_Metrics_Long.csv"), row.names = FALSE)
+
+qc_metric_definitions <- data.frame(
+  Metric = c(
+    "FastpRawReads",
+    "FastpCleanReads",
+    "Bowtie2InputPairs",
+    "MappedQ30Reads",
+    "MitoPct",
+    "FilteredNonMitoProperPairReads",
+    "FinalDedupReads",
+    "DupRatePct",
+    "ReadsInPeaks",
+    "FRiP",
+    "NRF",
+    "PBC1",
+    "PBC2",
+    "NFRFraction",
+    "MononucleosomeFraction",
+    "ApproxTSSEnrichment"
+  ),
+  Definition = c(
+    "fastp before_filtering total paired-end reads",
+    "fastp after_filtering total paired-end reads",
+    "paired reads reported as bowtie2 input pairs",
+    "samtools-filtered mapped reads at MAPQ/Q30 stage before mitochondrial filtering",
+    "100 * MitoReads / MappedQ30Reads",
+    "proper-pair reads remaining after mitochondrial read removal",
+    "final deduplicated non-mitochondrial reads used downstream",
+    "100 * (FilteredNonMitoProperPairReads - FinalDedupReads) / FilteredNonMitoProperPairReads",
+    "final deduplicated reads overlapping the called peak set",
+    "Alignment-overlap FRiP = ReadsInPeaks / FRiPTotalReads; paired mates may each contribute one alignment; not fragment FRiP",
+    "Non-redundant fraction from pre-dedup filtered paired fragments: distinct fragment positions / total fragments",
+    "PCR bottlenecking coefficient 1: singleton fragment positions / distinct fragment positions",
+    "PCR bottlenecking coefficient 2: singleton fragment positions / duplicated-twice fragment positions",
+    "Fraction of fragments shorter than 100 bp, expected to capture nucleosome-free ATAC fragments",
+    "Fraction of fragments in the 180-247 bp mononucleosome-size class",
+    "deepTools TSS center signal over flank approximation; thresholds are method-specific and not directly interchangeable with ENCODE TSSE"
+  ),
+  Denominator = c(
+    "NA",
+    "FastpRawReads for survival rate",
+    "NA",
+    "NA",
+    "MappedQ30Reads",
+    "NA",
+    "FilteredNonMitoProperPairReads for duplicate rate",
+    "FilteredNonMitoProperPairReads",
+    "NA",
+    "FRiPTotalReads / FinalDedupReads",
+    "TotalFragments",
+    "DistinctFragments",
+    "TwoReadFragments",
+    "Total insert-size fragments",
+    "Total insert-size fragments",
+    "Flanking TSS signal"
+  ),
+  stringsAsFactors = FALSE
+)
+write.csv(qc_metric_definitions, step_table_file("Step3", "QC_Metric_Definitions.csv"), row.names = FALSE)
+
+parse_idr_log <- function(log_file) {
+  if(!file.exists(log_file)) {
+    return(data.frame(
+      IDRReportedPeaks = NA_real_,
+      IDRPassPeaks = NA_real_,
+      IDRPassRatePct = NA_real_
+    ))
+  }
+  lines <- readLines(log_file, warn = FALSE)
+  reported <- grep("Number of reported peaks", lines, value = TRUE)
+  passed <- grep("Number of peaks passing IDR cutoff", lines, value = TRUE)
+  data.frame(
+    IDRReportedPeaks = ifelse(length(reported) > 0, as.numeric(gsub(".*- ([0-9]+)\\/.*", "\\1", reported[1])), NA_real_),
+    IDRPassPeaks = ifelse(length(passed) > 0, as.numeric(gsub(".*- ([0-9]+)\\/.*", "\\1", passed[1])), NA_real_),
+    IDRPassRatePct = ifelse(length(passed) > 0, as.numeric(gsub(".*\\(([0-9.]+)%\\).*", "\\1", passed[1])), NA_real_)
+  )
+}
+
+group_qc <- sample_qc %>%
+  group_by(Group) %>%
+  summarise(
+    SampleCount = n(),
+    Mean_FastpRawReads = mean(FastpRawReads, na.rm = TRUE),
+    Mean_FastpCleanReads = mean(FastpCleanReads, na.rm = TRUE),
+    Mean_FastpSurvivalPct = mean(FastpSurvivalPct, na.rm = TRUE),
+    Mean_Bowtie2InputPairs = mean(Bowtie2InputPairs, na.rm = TRUE),
+    Mean_MappedQ30Reads = mean(MappedQ30Reads, na.rm = TRUE),
+    Mean_FilteredNonMitoProperPairReads = mean(FilteredNonMitoProperPairReads, na.rm = TRUE),
+    Mean_FinalDedupReads = mean(FinalDedupReads, na.rm = TRUE),
+    Mean_AlignmentRatePct = mean(AlignmentRatePct, na.rm = TRUE),
+    Mean_MitoPct = mean(MitoPct, na.rm = TRUE),
+    Mean_DupRatePct = mean(DupRatePct, na.rm = TRUE),
+    Mean_ReadsInPeaks = mean(ReadsInPeaks, na.rm = TRUE),
+    Mean_FRiP = mean(FRiP, na.rm = TRUE),
+    Mean_NRF = mean(NRF, na.rm = TRUE),
+    Mean_PBC1 = mean(PBC1, na.rm = TRUE),
+    Mean_PBC2 = mean(PBC2, na.rm = TRUE),
+    Mean_NFRFraction = mean(NFRFraction, na.rm = TRUE),
+    Mean_MononucleosomeFraction = mean(MononucleosomeFraction, na.rm = TRUE),
+    Mean_CleanPeakCount = mean(CleanPeakCount, na.rm = TRUE),
+    Mean_ApproxTSSEnrichment = mean(ApproxTSSEnrichment, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+idr_group_qc <- read_upstream_tsv(file.path(work_dir, "03peaks", "IDR_Reproducibility_Summary.tsv"))
+if(nrow(idr_group_qc) == 0) {
+  idr_group_qc <- bind_rows(lapply(group_levels, function(group_name) {
+    safe_group <- gsub("[^[:alnum:]_.-]", "_", group_name)
+    cbind(Group = group_name, parse_idr_log(file.path("03peaks", paste0(safe_group, "_true_replicates_IDR.log"))))
+  }))
+}
+
+group_qc <- left_join(group_qc, idr_group_qc, by = "Group")
+write.csv(group_qc, step_table_file("Step3", "QC_Group_Summary.csv"), row.names = FALSE)
+
+threshold_df <- bind_rows(
+  sample_qc %>% transmute(Sample, Group, Metric = "AlignmentRatePct", Value = AlignmentRatePct, Threshold = ">=90", Status = qc_status(AlignmentRatePct, 90, "ge")),
+  sample_qc %>% transmute(Sample, Group, Metric = "MitoPct", Value = MitoPct, Threshold = "<=20", Status = qc_status(MitoPct, 20, "le")),
+  sample_qc %>% transmute(Sample, Group, Metric = "DupRatePct", Value = DupRatePct, Threshold = "<=50", Status = qc_status(DupRatePct, 50, "le")),
+  sample_qc %>% transmute(Sample, Group, Metric = "NRF", Value = NRF, Threshold = ">=0.8 preferred", Status = qc_status(NRF, 0.8, "ge")),
+  sample_qc %>% transmute(Sample, Group, Metric = "PBC1", Value = PBC1, Threshold = ">=0.9 preferred", Status = qc_status(PBC1, 0.9, "ge")),
+  sample_qc %>% transmute(Sample, Group, Metric = "PBC2", Value = PBC2, Threshold = ">=1 acceptable; >3 ideal", Status = qc_status(PBC2, 1, "ge")),
+  sample_qc %>% transmute(Sample, Group, Metric = "CleanPeakCount", Value = CleanPeakCount, Threshold = ">=30000", Status = qc_status(CleanPeakCount, 30000, "ge"))
+)
+write.csv(threshold_df, step_table_file("Step3", "QC_Threshold_Assessment.csv"), row.names = FALSE)
+
+frip_informational_tbl <- sample_qc %>%
+  transmute(Sample, Group, Metric = "ReadLevel_FRiP", Value = FRiP,
+            CountingUnit = "alignment",
+            AssessmentRole = "INFORMATIONAL_ONLY; no validated acceptance threshold configured for this read-level metric")
+write.csv(frip_informational_tbl, step_table_file("Step3", "FRiP_Informational_Metrics.csv"), row.names = FALSE)
+
+tss_informational_tbl <- sample_qc %>%
+  transmute(Sample, Group, Metric = "deepTools_ApproxTSSEnrichment", Value = ApproxTSSEnrichment,
+            AssessmentRole = "INFORMATIONAL_ONLY; not included in hard QC assessment")
+write.csv(tss_informational_tbl, step_table_file("Step3", "TSS_Informational_Metrics.csv"), row.names = FALSE)
+
+p_qc_overview <- sample_qc %>%
+  dplyr::select(Sample, Group, FastpSurvivalPct, AlignmentRatePct, MitoPct, DupRatePct, FRiP, NRF, PBC1, PBC2, NFRFraction, MononucleosomeFraction, ApproxTSSEnrichment, CleanPeakCount) %>%
+  pivot_longer(cols = c(FastpSurvivalPct, AlignmentRatePct, MitoPct, DupRatePct, FRiP, NRF, PBC1, PBC2, NFRFraction, MononucleosomeFraction, ApproxTSSEnrichment, CleanPeakCount),
+               names_to = "Metric", values_to = "Value") %>%
+  ggplot(aes(x = Sample, y = Value, fill = Group)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~Metric, scales = "free_y", ncol = 3) +
+  scale_fill_manual(values = viz_pal$group, drop = FALSE) +
+  theme_atac_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Integrated ATAC-seq QC Overview", x = NULL, y = NULL)
+
+if(emit_light_plots) {
+  save_plot_pdf(p_qc_overview, step_plot_file("Step3", "QC_Overview.pdf"), width = 14, height = 8)
+  print(p_qc_overview)
+}
+
+p_qc_status <- threshold_df %>%
+  mutate(Status = factor(Status, levels = c("PASS", "WARN", "NA"))) %>%
+  ggplot(aes(x = Metric, y = Sample, fill = Status)) +
+  geom_tile(color = viz_pal$neutral["light"]) +
+  scale_fill_manual(values = viz_pal$status) +
+  theme_atac_classic(base_size = 12) +
+  labs(title = "QC Threshold Assessment", x = NULL, y = NULL)
+
+if(emit_light_plots) {
+  save_plot_pdf(p_qc_status, step_plot_file("Step3", "QC_Status_Heatmap.pdf"), width = 8, height = 4)
+  print(p_qc_status)
+}
+
+cat("Step3 综合 QC 已导出。\n")
+print(sample_qc)
+print(group_qc)
+```

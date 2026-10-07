@@ -2,15 +2,13 @@
 # ==============================================================================
 # WGBS 分析流程 - Step 9: DEG-focused 甲基化分析
 # ==============================================================================
-# 如果说第 7 节是"甲基化主视角"，这里更像"表达主视角"，专门反过来看 DEGs 的甲基化状态。
-# 当前继续保留既有 `pvalue < config$rna_p_threshold` 过滤口径，避免改变当前结果。
-# 最终严格解读时建议同步检查 RNA `padj < 0.05`，富集结果优先报告 `p.adjust/qvalue < 0.05`。
+# 这里从表达主视角反看 DEGs 的甲基化状态；显著性由 WGBS_SIGNIFICANCE_MODE 控制。
 message("⏳ 开始 DEGs 的深度甲基化模式分析...")
 
-rna_p_threshold <- config$rna_p_threshold
+rna_significance <- significance_spec("rna")
 rna_log2fc_threshold <- config$rna_log2fc_threshold
 multiomics_methyl_delta <- config$multiomics_methyl_delta
-enrichment_p_threshold <- config$enrichment_p_threshold
+enrichment_significance <- significance_spec("enrichment")
 enrich_top_n_kegg <- config$enrichment_top_n_kegg
 enrich_top_n_go <- config$enrichment_top_n_go
 enrich_goplot_top_n <- config$enrichment_goplot_top_n
@@ -23,6 +21,29 @@ ensure_step_dirs(
   "result/9_degfocused/tables/1"
 )
 
+legacy_deg_tables <- c(
+  "result/9_degfocused/tables/1/deg_gene_body_region_support.csv",
+  "result/9_degfocused/tables/1/deg_promoter_region_support.csv",
+  "result/9_degfocused/tables/1/go_cgi_combined.csv",
+  "result/9_degfocused/tables/1/kegg_cgi_combined.csv",
+  Sys.glob("result/9_degfocused/tables/1/go_*_Island.csv"),
+  Sys.glob("result/9_degfocused/tables/1/go_*_N_Shore.csv"),
+  Sys.glob("result/9_degfocused/tables/1/go_*_S_Shore.csv"),
+  Sys.glob("result/9_degfocused/tables/1/go_*_N_Shelf.csv"),
+  Sys.glob("result/9_degfocused/tables/1/go_*_S_Shelf.csv"),
+  Sys.glob("result/9_degfocused/tables/1/kegg_*.csv"),
+  Sys.glob("result/9_degfocused/tables/1/cgi_enrichment_status_*.csv")
+)
+legacy_deg_tables <- setdiff(
+  unique(legacy_deg_tables),
+  "result/9_degfocused/tables/1/kegg_cgi_heatmap_long.csv"
+)
+if(length(legacy_deg_tables) > 0) unlink(legacy_deg_tables)
+
+ensure_dmr_outputs_loaded()
+ensure_dmr_cgi_context(required = FALSE, persist = TRUE)
+ensure_expr_loaded(required = TRUE)
+
 # 重新加载 TxDb 以防止 bad_weak_ptr 错误
 txdb <- load_main_chr_txdb(config$gtf_file)
 
@@ -31,11 +52,13 @@ txdb <- load_main_chr_txdb(config$gtf_file)
 cgi_file <- config$cpg_island_file
 
 # 1 DEGs 区域甲基化水平 (Gene Body & Promoter)
-if(exists("expr_df") && "pvalue" %in% colnames(expr_df)) {
+if(exists("expr_df")) {
   ensure_obj_cpg_loaded()
   # 先限定到显著 DEGs，再分别看 gene body 和 promoter 两层区域，
   # 用来回答"表达变化的基因，是否也伴随局部甲基化模式变化"。
-  sig_deg_df <- expr_df %>% filter(pvalue <= rna_p_threshold)
+  sig_deg_df <- filter_selected_significance(
+    expr_df, domain = "rna", inclusive = TRUE, context = "DEG result"
+  )
   target_ids <- sig_deg_df$gene_id_clean
   
   if(nrow(sig_deg_df) > 0) {
@@ -50,7 +73,7 @@ if(exists("expr_df") && "pvalue" %in% colnames(expr_df)) {
       
       # 分别对 gene body 和 promoter 做区域 x 样本汇总。
       # 这里不再要求所有样本共同覆盖同一区域；描述性热图保留 NA，并把支持度写出。
-      build_deg_region_result <- function(region_gr, region_name, support_file) {
+      build_deg_region_result <- function(region_gr, region_name) {
         region_meth <- build_region_sample_methylation(
           obj.cpg,
           region_gr,
@@ -58,10 +81,10 @@ if(exists("expr_df") && "pvalue" %in% colnames(expr_df)) {
           config_arg = config,
           region_ids = names(region_gr)
         )
-        write_csv(region_meth$support, support_file)
+        support <- region_meth$support %>% mutate(Region = region_name)
         mat <- region_meth$matrix
         if(is.null(mat) || nrow(mat) == 0) {
-          return(list(mat = mat, df = data.frame()))
+          return(list(mat = mat, df = data.frame(), support = support))
         }
         group1_n <- rowSums(is.finite(mat[, config$group1_idx, drop = FALSE]))
         group2_n <- rowSums(is.finite(mat[, config$group2_idx, drop = FALSE]))
@@ -76,18 +99,20 @@ if(exists("expr_df") && "pvalue" %in% colnames(expr_df)) {
           n_group1_samples = group1_n,
           n_group2_samples = group2_n
         )
-        list(mat = mat, df = df_res)
+        list(mat = mat, df = df_res, support = support)
       }
       
       res_gene <- build_deg_region_result(
         deg_genes_gr,
-        "Gene Body",
-        "result/9_degfocused/tables/1/deg_gene_body_region_support.csv"
+        "Gene Body"
       )
       res_prom <- build_deg_region_result(
         deg_promoters_gr,
-        "Promoter",
-        "result/9_degfocused/tables/1/deg_promoter_region_support.csv"
+        "Promoter"
+      )
+      write_csv(
+        bind_rows(res_gene$support, res_prom$support),
+        "result/9_degfocused/tables/1/deg_region_support.csv"
       )
       
       # 热图用于看 DEGs 内部是否有相似甲基化轮廓，因此这里固定列顺序、不额外聚类样本列。
@@ -115,17 +140,17 @@ if(exists("expr_df") && "pvalue" %in% colnames(expr_df)) {
         rownames(mat_scaled) <- rownames(mat)
         colnames(mat_scaled) <- colnames(mat)
         
-        pheatmap::pheatmap(
-          mat_scaled,
-          scale = "none",
-          show_rownames = FALSE,
+        draw_pheatmap_pdf(
+          mat = mat_scaled,
+          out_pdf = paste0("result/9_degfocused/plots/1/heatmap_", gsub(" ", "", title_suffix), ".pdf"),
+          width = 6,
+          height = 8,
+          color = viz_pal$heat_meth,
+          title = "",
           cluster_rows = nrow(mat_scaled) > 1,
           cluster_cols = FALSE,
-          main = paste("Methylation Heatmap of DEGs -", title_suffix),
-          color = viz_pal$heat_meth,
-          filename = paste0("result/9_degfocused/plots/1/heatmap_", gsub(" ", "", title_suffix), ".pdf"),
-          width = 6,
-          height = 8
+          fontsize_row = 6,
+          fontsize_col = wgbs_figure_tick_size
         )
       }
       draw_heatmap(res_gene$mat, "Gene Body")
@@ -200,7 +225,9 @@ if (exists("expr_df") && exists("txdb")) {
       region_list_meth[[reg_name]] <- gr
     }
 
-    deg_df <- expr_df %>% filter(pvalue <= rna_p_threshold)
+    deg_df <- filter_selected_significance(
+      expr_df, domain = "rna", inclusive = TRUE, context = "DEG result"
+    )
   
     if (nrow(deg_df) > 0) {
     all_genes_gr <- genes(txdb)
@@ -273,8 +300,10 @@ if (exists("expr_df") && exists("txdb")) {
 
 # 3 CGI 区域 DEGs GO/KEGG 富集分析
 if (exists("deg_cgi_df") && nrow(deg_cgi_df) > 0) {
-  all_go_results <- list()
-  all_kegg_results <- list()
+  deg_cgi_enrichment_results <- list()
+  deg_cgi_enrichment_status <- list()
+  deg_cgi_enrichment_file <- "result/9_degfocused/tables/1/deg_cgi_enrichment_long.csv"
+  if(file.exists(deg_cgi_enrichment_file)) file.remove(deg_cgi_enrichment_file)
   cgi_context_levels <- c("Island", "N_Shore", "S_Shore", "N_Shelf", "S_Shelf")
 
   # 这里同时要求 RNA 和甲基化都有较明显变化，尽量聚焦真正耦合的候选基因。
@@ -285,15 +314,16 @@ if (exists("deg_cgi_df") && nrow(deg_cgi_df) > 0) {
     sub_deg_df <- deg_cgi_df %>%
       filter(
         CGI_Context == reg,
-        pvalue < rna_p_threshold,
+        .data[[rna_significance$column]] < rna_significance$threshold,
         abs(log2FoldChange) > rna_log2fc_threshold,
         abs(diffMethy) > multiomics_methyl_delta
       )
 
     if(nrow(sub_deg_df) == 0) {
-      write_csv(
-        tibble(CGI_Context = reg, status = "skipped", message = "no genes passed RNA and methylation filters"),
-        file.path("result/9_degfocused/tables/1", paste0("cgi_enrichment_status_", reg, ".csv"))
+      deg_cgi_enrichment_status[[reg]] <- tibble(
+        context = reg,
+        status = "skipped",
+        message = paste("no genes passed RNA", config$significance_mode, "and methylation filters")
       )
       next
     }
@@ -304,52 +334,69 @@ if (exists("deg_cgi_df") && nrow(deg_cgi_df) > 0) {
       plot_dir = reg_dir,
       table_dir = "result/9_degfocused/tables/1",
       file_prefix = "",
-      context_col = "CGI_Context",
-      p_threshold = enrichment_p_threshold
+      context_type = "CGI_Context"
     )
 
-    if(!is.null(enrich_res$go_bp)) {
-      all_go_results[[reg]] <- append_context_column(as.data.frame(enrich_res$go_bp), "CGI_Context", reg)
-    }
-    if(!is.null(enrich_res$kegg)) {
-      all_kegg_results[[reg]] <- append_context_column(as.data.frame(enrich_res$kegg), "CGI_Context", reg)
-    }
+    deg_cgi_enrichment_results[[reg]] <- enrich_res
+    n_terms <- sum(vapply(enrich_res[c("kegg", "go_bp", "go_mf", "go_cc")], function(x) {
+      if(is.null(x) || is.null(x$all)) return(0L)
+      nrow(x$all)
+    }, integer(1)))
+    deg_cgi_enrichment_status[[reg]] <- tibble(
+      context = reg,
+      status = if(n_terms > 0) "ok" else "skipped",
+      message = paste("ORA terms:", n_terms)
+    )
   }
 
+  deg_cgi_enrichment_long <- bind_rows(lapply(deg_cgi_enrichment_results, function(enrich_res) {
+    if(is.null(enrich_res)) return(NULL)
+    bind_rows(lapply(enrich_res[c("kegg", "go_bp", "go_mf", "go_cc")], function(x) {
+      if(is.null(x) || is.null(x$all)) return(NULL)
+      x$all
+    }))
+  }))
+  if(nrow(deg_cgi_enrichment_long) > 0) write_csv(deg_cgi_enrichment_long, deg_cgi_enrichment_file)
+  write_csv(bind_rows(deg_cgi_enrichment_status), "result/9_degfocused/tables/1/deg_cgi_enrichment_status.csv")
+
   # 合并热图
-  if (length(all_go_results) > 0) {
-    go_combined <- bind_rows(all_go_results)
-    write_csv(go_combined, "result/9_degfocused/tables/1/go_cgi_combined.csv")
+  go_combined <- if(nrow(deg_cgi_enrichment_long) > 0) {
+    deg_cgi_enrichment_long %>%
+      filter(analysis_method == "ORA", gene_set_source == "GO", ontology == "BP", is_selected_significant)
+  } else tibble()
+  if (nrow(go_combined) > 0) {
 
     # GO term 往往很多，这里只保留显著性最高的一批条目，保证热图可读。
     save_enrichment_compare_heatmap(
       df = go_combined,
-      context_col = "CGI_Context",
+      context_col = "context",
       out_pdf = "result/9_degfocused/plots/1/go_cgi_heatmap.pdf",
       out_csv = "result/9_degfocused/tables/1/go_cgi_heatmap_long.csv",
-      title = "GO Enrichment (pvalue-filtered, -log10 p.adjust) across CGI Context",
+      title = paste0("GO Enrichment (", config$significance_mode, ") across CGI Context"),
       top_n = 40,
       width = 12,
       height = 10,
-      value_col = "p.adjust"
+      value_col = enrichment_significance$column
     )
   }
   
   # KEGG 合并分析 (如果有多个区域)
-  if (length(all_kegg_results) > 0) {
-    kegg_combined <- bind_rows(all_kegg_results)
-    write_csv(kegg_combined, "result/9_degfocused/tables/1/kegg_cgi_combined.csv")
+  kegg_combined <- if(nrow(deg_cgi_enrichment_long) > 0) {
+    deg_cgi_enrichment_long %>%
+      filter(analysis_method == "ORA", gene_set_source == "KEGG", is_selected_significant)
+  } else tibble()
+  if (nrow(kegg_combined) > 0) {
 
     save_enrichment_compare_heatmap(
       df = kegg_combined,
-      context_col = "CGI_Context",
+      context_col = "context",
       out_pdf = "result/9_degfocused/plots/1/kegg_cgi_heatmap.pdf",
       out_csv = "result/9_degfocused/tables/1/kegg_cgi_heatmap_long.csv",
-      title = "KEGG Enrichment (pvalue-filtered, -log10 p.adjust) across CGI Context",
+      title = paste0("KEGG Enrichment (", config$significance_mode, ") across CGI Context"),
       top_n = 30,
       width = 10,
       height = 8,
-      value_col = "p.adjust"
+      value_col = enrichment_significance$column
     )
   }
 }

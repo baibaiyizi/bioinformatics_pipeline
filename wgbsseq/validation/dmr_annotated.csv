@@ -1,0 +1,2 @@
+seqnames,start,end,width,strand,DMR_id,diffMethy,meanMethy_group1,meanMethy_group2,group1_label,group2_label,DMR_type,annotation,geneChr,geneStart,geneEnd,geneLength,geneStrand,geneId,transcriptId,distanceToTSS,ENTREZID,SYMBOL,GENENAME,gene_id_clean,annotation_simple
+chr1,10010,13000,2991,*,DMR_1,0.6000000000000015,0.20499867843312614,0.8049986784331277,control,treated,Hyper,Promoter (1-2kb),1,9000,15000,6001,1,ENSMUSG00000000001,synthetic_transcript,1010,14679,Gnai3,G protein subunit alpha i3,ENSMUSG00000000001,Promoter

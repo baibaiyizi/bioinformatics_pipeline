@@ -3,7 +3,11 @@
 ## 17.1 pathway activity 矩阵与差异结果
 
 ```{r}
-ensure_module_result_layout("17_pathway_activity")
+mouse_activity_table_dir <- file.path(step14_dir, "tables")
+mouse_activity_plot_dir <- file.path(step14_dir, "plots")
+human_activity_table_dir <- file.path(step14_dir, "human_ortholog", "tables")
+human_activity_plot_dir <- file.path(step14_dir, "human_ortholog", "plots")
+ensure_dirs(mouse_activity_table_dir, mouse_activity_plot_dir, human_activity_table_dir, human_activity_plot_dir)
 
 if (!file.exists(cache_15_splicing_state_path)) {
   stop("缺少 splicing 状态缓存: ", cache_15_splicing_state_path, "。请先运行模块 15。")
@@ -13,6 +17,12 @@ if (!file.exists(cache_16_immune_state_path)) {
 }
 
 splicing_state <- readRDS(cache_15_splicing_state_path)
+source(file.path(Sys.getenv("RNASEQ_RMD_DIR", unset = "rmd"), "rmats_direction.R"))
+current_rmats_direction <- read_rmats_direction(rmats_dir, selected_samples_path, group1_label, group2_label)
+if (!identical(splicing_state$rmats_direction, current_rmats_direction)) {
+  stop("剪接缓存缺少当前 rMATS 方向契约或原始输入已变化；请先重跑模块 15，不能消费旧方向缓存。")
+}
+ensure_module_result_layout("17_pathway_activity")
 immune_state <- readRDS(cache_16_immune_state_path)
 
 required_splicing_fields <- c(
@@ -140,90 +150,117 @@ run_activity_diff <- function(activity_mat, family_label) {
     arrange(P.Value, desc(abs(logFC)))
 }
 
-build_msig_symbol_sets <- function(collection, subcollection = NULL) {
-  formals_now <- names(formals(msigdbr::msigdbr))
-  db_species <- "HS"
-  subcollection_options <- if (is.null(subcollection)) list(NULL) else as.list(subcollection)
-  last_error <- NULL
+mouse_activity_bundle <- get_pathway_gene_set_bundle("mouse_native")
+human_activity_bundle <- get_pathway_gene_set_bundle("human_ortholog")
 
-  for (one_subcollection in subcollection_options) {
-    msig_tbl <- tryCatch({
-      if ("collection" %in% formals_now) {
-        call_args <- list(db_species = db_species, species = msigdb_species, collection = collection)
-        if (!is.null(one_subcollection) && !is.na(one_subcollection)) {
-          call_args$subcollection <- one_subcollection
-        }
-        do.call(msigdbr::msigdbr, call_args)
-      } else {
-        call_args <- list(species = msigdb_species, category = collection)
-        if (!is.null(one_subcollection) && !is.na(one_subcollection)) {
-          call_args$subcategory <- one_subcollection
-        }
-        do.call(msigdbr::msigdbr, call_args)
-      }
-    }, error = function(e) {
-      last_error <<- conditionMessage(e)
-      data.frame()
-    })
+hallmark_activity <- run_ssgsea_matrix(pathway_expr_mat, mouse_activity_bundle$libraries$Mouse_MH, min_size = 5, max_size = 500)
+kegg_activity <- run_ssgsea_matrix(pathway_expr_mat, mouse_activity_bundle$libraries$Mouse_KEGG, min_size = 5, max_size = 500)
+reactome_activity <- run_ssgsea_matrix(pathway_expr_mat, mouse_activity_bundle$libraries$Mouse_Reactome, min_size = 5, max_size = 500)
 
-    if (nrow(msig_tbl) > 0 && all(c("gene_symbol", "gs_name") %in% colnames(msig_tbl))) {
-      return(split(msig_tbl$gene_symbol, msig_tbl$gs_name))
-    }
-  }
-
-  message(
-    "[17_pathway_activity] 未能获取 MSigDB collection=", collection,
-    if (!is.null(subcollection)) paste0(" subcollection=", paste(unlist(subcollection), collapse = "/")) else "",
-    if (!is.null(last_error)) paste0("；最后错误: ", last_error) else ""
-  )
-  list()
-}
-
-hallmark_sets <- build_msig_symbol_sets("H")
-kegg_sets_activity <- build_msig_symbol_sets("C2", c("CP:KEGG", "CP:KEGG_LEGACY", "CP:KEGG_MEDICUS"))
-reactome_sets_activity <- build_msig_symbol_sets("C2", "CP:REACTOME")
-
-hallmark_activity <- run_ssgsea_matrix(pathway_expr_mat, hallmark_sets, min_size = 5, max_size = 500)
-kegg_activity <- run_ssgsea_matrix(pathway_expr_mat, kegg_sets_activity, min_size = 5, max_size = 500)
-reactome_activity <- run_ssgsea_matrix(pathway_expr_mat, reactome_sets_activity, min_size = 5, max_size = 500)
+human_hallmark_activity <- run_ssgsea_matrix(pathway_expr_mat, human_activity_bundle$libraries$Human_Hallmark, min_size = 5, max_size = 500)
+human_kegg_activity <- run_ssgsea_matrix(pathway_expr_mat, human_activity_bundle$libraries$Human_KEGG_Legacy, min_size = 5, max_size = 500)
+human_reactome_activity <- run_ssgsea_matrix(pathway_expr_mat, human_activity_bundle$libraries$Human_Reactome, min_size = 5, max_size = 500)
 
 pathway_group_factor <- factor(sample_info[colnames(pathway_expr_mat), "group"], levels = c(group1_label, group2_label))
 
-hallmark_activity_diff <- run_activity_diff(hallmark_activity, "Hallmark")
-kegg_activity_diff <- run_activity_diff(kegg_activity, "KEGG")
-reactome_activity_diff <- run_activity_diff(reactome_activity, "Reactome")
+hallmark_activity_diff <- run_activity_diff(hallmark_activity, "Mouse_MH")
+kegg_activity_diff <- run_activity_diff(kegg_activity, "Mouse_KEGG")
+reactome_activity_diff <- run_activity_diff(reactome_activity, "Mouse_Reactome")
+human_hallmark_activity_diff <- run_activity_diff(human_hallmark_activity, "Human_Hallmark")
+human_kegg_activity_diff <- run_activity_diff(human_kegg_activity, "Human_KEGG_Legacy")
+human_reactome_activity_diff <- run_activity_diff(human_reactome_activity, "Human_Reactome")
 
-write_activity_matrix(hallmark_activity, file.path(step14_dir, "17_1_Hallmark_activity_matrix.tsv"))
-write_activity_matrix(kegg_activity, file.path(step14_dir, "17_2_KEGG_activity_matrix.tsv"))
-write_activity_matrix(reactome_activity, file.path(step14_dir, "17_3_Reactome_activity_matrix.tsv"))
+write_activity_matrix(hallmark_activity, file.path(mouse_activity_table_dir, "17_1_Mouse_MH_activity_matrix.tsv"))
+write_activity_matrix(kegg_activity, file.path(mouse_activity_table_dir, "17_2_Mouse_KEGG_activity_matrix.tsv"))
+write_activity_matrix(reactome_activity, file.path(mouse_activity_table_dir, "17_3_Mouse_Reactome_activity_matrix.tsv"))
+write_activity_matrix(human_hallmark_activity, file.path(human_activity_table_dir, "17_1_Human_Hallmark_activity_matrix.tsv"))
+write_activity_matrix(human_kegg_activity, file.path(human_activity_table_dir, "17_2_Human_KEGG_Legacy_activity_matrix.tsv"))
+write_activity_matrix(human_reactome_activity, file.path(human_activity_table_dir, "17_3_Human_Reactome_activity_matrix.tsv"))
 pathway_activity_differential <- bind_rows(
-  hallmark_activity_diff %>% mutate(collection = "Hallmark"),
-  kegg_activity_diff %>% mutate(collection = "KEGG"),
-  reactome_activity_diff %>% mutate(collection = "Reactome")
+  hallmark_activity_diff %>% mutate(collection = "Mouse_MH"),
+  kegg_activity_diff %>% mutate(collection = "Mouse_KEGG"),
+  reactome_activity_diff %>% mutate(collection = "Mouse_Reactome")
 ) %>%
-  dplyr::select(collection, everything())
-write_csv_safe(pathway_activity_differential, file.path(step14_dir, "17_pathway_activity_differential.csv"), row.names = FALSE)
-write_csv_compat(hallmark_activity_diff, file.path(step14_dir, "17_4_Hallmark_activity_differential.csv"), row.names = FALSE)
-write_csv_compat(kegg_activity_diff, file.path(step14_dir, "17_5_KEGG_activity_differential.csv"), row.names = FALSE)
-write_csv_compat(reactome_activity_diff, file.path(step14_dir, "17_6_Reactome_activity_differential.csv"), row.names = FALSE)
+  mutate(
+    origin = "mouse_native",
+    db_species = "MM",
+    analysis_species = "Mus musculus",
+    contrast = paste0(group2_label, " - ", group1_label),
+    .before = 1
+  ) %>%
+  dplyr::select(origin, db_species, analysis_species, contrast, collection, everything())
+human_pathway_activity_differential <- bind_rows(
+  human_hallmark_activity_diff %>% mutate(collection = "Human_Hallmark"),
+  human_kegg_activity_diff %>% mutate(collection = "Human_KEGG_Legacy"),
+  human_reactome_activity_diff %>% mutate(collection = "Human_Reactome")
+) %>%
+  mutate(
+    origin = "human_ortholog",
+    db_species = "HS",
+    analysis_species = "Mus musculus",
+    contrast = paste0(group2_label, " - ", group1_label),
+    .before = 1
+  ) %>%
+  dplyr::select(origin, db_species, analysis_species, contrast, collection, everything())
+write_csv_safe(pathway_activity_differential, file.path(mouse_activity_table_dir, "17_pathway_activity_differential.csv"), row.names = FALSE)
+write_csv_safe(human_pathway_activity_differential, file.path(human_activity_table_dir, "17_pathway_activity_differential.csv"), row.names = FALSE)
 
 pathway_leading_summary <- pathway_activity_differential %>%
   mutate(direction = ifelse(logFC > 0, paste0("higher_in_", group2_label), paste0("higher_in_", group1_label))) %>%
-  group_by(family) %>%
+  group_by(collection) %>%
   arrange(P.Value, desc(abs(logFC)), .by_group = TRUE) %>%
   slice_head(n = 15) %>%
   ungroup()
-write_csv_safe(pathway_leading_summary, file.path(step14_dir, "17_7_leading_pathway_activity_summary.csv"), row.names = FALSE)
+human_pathway_leading_summary <- human_pathway_activity_differential %>%
+  mutate(direction = ifelse(logFC > 0, paste0("higher_in_", group2_label), paste0("higher_in_", group1_label))) %>%
+  group_by(collection) %>%
+  arrange(P.Value, desc(abs(logFC)), .by_group = TRUE) %>%
+  slice_head(n = 15) %>%
+  ungroup()
+write_csv_safe(pathway_leading_summary, file.path(mouse_activity_table_dir, "17_7_leading_pathway_activity_summary.csv"), row.names = FALSE)
+write_csv_safe(human_pathway_leading_summary, file.path(human_activity_table_dir, "17_7_leading_pathway_activity_summary.csv"), row.names = FALSE)
+
+mouse_activity_manifest <- mouse_activity_bundle$manifest %>%
+  filter(library %in% c("Mouse_MH", "Mouse_KEGG", "Mouse_Reactome")) %>%
+  mutate(gene_sets_tested = c(nrow(hallmark_activity), nrow(kegg_activity), nrow(reactome_activity))[match(library, c("Mouse_MH", "Mouse_KEGG", "Mouse_Reactome"))])
+human_activity_manifest <- human_activity_bundle$manifest %>%
+  filter(library %in% c("Human_Hallmark", "Human_KEGG_Legacy", "Human_Reactome")) %>%
+  mutate(gene_sets_tested = c(nrow(human_hallmark_activity), nrow(human_kegg_activity), nrow(human_reactome_activity))[match(library, c("Human_Hallmark", "Human_KEGG_Legacy", "Human_Reactome"))])
+write_csv_safe(mouse_activity_manifest, file.path(mouse_activity_table_dir, "17_0_gene_set_source_manifest.csv"), row.names = FALSE)
+write_csv_safe(human_activity_manifest, file.path(human_activity_table_dir, "17_0_gene_set_source_manifest.csv"), row.names = FALSE)
 ```
 
 ## 17.2 pathway activity 图表
 
 ```{r}
+rank_activity_for_figure <- function(tbl) {
+  tbl$figure_significance <- figure_significance_values(
+    tbl,
+    pvalue_candidates = "P.Value",
+    fdr_candidates = "adj.P.Val"
+  )
+  tbl %>% arrange(figure_significance, desc(abs(logFC)))
+}
+
+hallmark_activity_plot_diff <- rank_activity_for_figure(hallmark_activity_diff)
+kegg_activity_plot_diff <- rank_activity_for_figure(kegg_activity_diff)
+reactome_activity_plot_diff <- rank_activity_for_figure(reactome_activity_diff)
+human_hallmark_activity_plot_diff <- rank_activity_for_figure(human_hallmark_activity_diff)
+human_kegg_activity_plot_diff <- rank_activity_for_figure(human_kegg_activity_diff)
+human_reactome_activity_plot_diff <- rank_activity_for_figure(human_reactome_activity_diff)
+
 top_pathway_names <- unique(c(
-  hallmark_activity_diff$pathway[seq_len(min(6, nrow(hallmark_activity_diff)))],
-  kegg_activity_diff$pathway[seq_len(min(6, nrow(kegg_activity_diff)))],
-  reactome_activity_diff$pathway[seq_len(min(6, nrow(reactome_activity_diff)))]
+  hallmark_activity_plot_diff$pathway[seq_len(min(6, nrow(hallmark_activity_plot_diff)))],
+  kegg_activity_plot_diff$pathway[seq_len(min(6, nrow(kegg_activity_plot_diff)))],
+  reactome_activity_plot_diff$pathway[seq_len(min(6, nrow(reactome_activity_plot_diff)))]
 ))
+compact_pathway_heatmap_labels <- function(pathways, max_chars = 38L) {
+  pathways %>%
+    as.character() %>%
+    stringr::str_replace_all("_", " ") %>%
+    stringr::str_squish() %>%
+    stringr::str_trunc(width = max_chars, ellipsis = "...")
+}
 activity_heatmap_mat <- rbind(
   hallmark_activity[rownames(hallmark_activity) %in% top_pathway_names, , drop = FALSE],
   kegg_activity[rownames(kegg_activity) %in% top_pathway_names, , drop = FALSE],
@@ -232,7 +269,7 @@ activity_heatmap_mat <- rbind(
 if (nrow(activity_heatmap_mat) >= 2) {
   activity_heatmap_scaled <- safe_scale_rows(activity_heatmap_mat)
   save_base_pdf_versions(
-    primary = file.path(step14_dir, "17_8_pathway_activity_heatmap.pdf"),
+    primary = file.path(mouse_activity_plot_dir, "17_8_Mouse_native_pathway_activity_heatmap.pdf"),
     width = 9,
     height = 10,
     expr = ComplexHeatmap::draw(
@@ -243,16 +280,23 @@ if (nrow(activity_heatmap_mat) >= 2) {
         top_annotation = heatmap_group_annotation(sample_info$group),
         cluster_rows = TRUE,
         cluster_columns = TRUE,
-        column_names_rot = 45
-      )
+        row_labels = compact_pathway_heatmap_labels(rownames(activity_heatmap_scaled)),
+        row_names_max_width = grid::unit(62, "mm"),
+        width = grid::unit(85, "mm"),
+        column_names_rot = 45,
+        column_title = "Mouse native"
+      ),
+      heatmap_legend_side = "bottom",
+      annotation_legend_side = "bottom",
+      merge_legend = TRUE
     )
   )
 }
 
-pathway_rank_plot_tbl <- bind_rows(hallmark_activity_diff, kegg_activity_diff, reactome_activity_diff) %>%
+pathway_rank_plot_tbl <- bind_rows(hallmark_activity_plot_diff, kegg_activity_plot_diff, reactome_activity_plot_diff) %>%
   mutate(direction = ifelse(logFC > 0, paste0("higher_in_", group2_label), paste0("higher_in_", group1_label))) %>%
   group_by(family, direction) %>%
-  arrange(P.Value, desc(abs(logFC)), .by_group = TRUE) %>%
+  arrange(figure_significance, desc(abs(logFC)), .by_group = TRUE) %>%
   slice_head(n = 5) %>%
   ungroup() %>%
   mutate(pathway_label = factor(paste(family, pathway, sep = " | "), levels = rev(unique(paste(family, pathway, sep = " | ")))))
@@ -260,9 +304,10 @@ pathway_rank_plot_tbl <- bind_rows(hallmark_activity_diff, kegg_activity_diff, r
 pathway_rank_plot <- ggplot(pathway_rank_plot_tbl, aes(x = pathway_label, y = logFC, fill = family)) +
   geom_col(width = 0.75) +
   coord_flip() +
-  labs(title = "Top activated / suppressed pathway activities", x = NULL, y = paste0(group2_label, " - ", group1_label, " logFC")) +
-  theme_rnaseq_minimal()
-save_plot_versions(pathway_rank_plot, file.path(step14_dir, "17_9_pathway_activity_barplot.pdf"), width = 10, height = 8)
+  scale_fill_manual(values = resolve_enrichment_category_colors(pathway_rank_plot_tbl$family, "GSEA")) +
+  labs(title = "Mouse native: top activated / suppressed pathway activities", x = NULL, y = paste0(group2_label, " - ", group1_label, " logFC")) +
+  theme_rnaseq_publication()
+save_plot_versions(pathway_rank_plot, file.path(mouse_activity_plot_dir, "17_9_Mouse_native_pathway_activity_barplot.pdf"), width = 10, height = 8)
 
 activity_to_long <- function(activity_mat, family_label) {
   if (is.null(activity_mat) || nrow(activity_mat) == 0) {
@@ -288,10 +333,85 @@ if (nrow(pathway_score_long) > 0) {
     geom_boxplot(width = 0.18, outlier.size = 0.3, fill = viz_pal$neutral["light"]) +
     facet_grid(family ~ pathway, scales = "free_y") +
     scale_fill_manual(values = group_colors) +
-    labs(title = "Top differential pathway activity scores", x = NULL, y = "Pathway activity score") +
-    theme_rnaseq_bw(base_size = viz_style$compact_size) +
+    labs(title = "Mouse native: top differential pathway activity scores", x = NULL, y = "Pathway activity score") +
+    theme_rnaseq_publication(base_size = viz_style$compact_size) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  save_plot_versions(pathway_boxplot, file.path(step14_dir, "17_10_pathway_activity_boxplots.pdf"), width = 13, height = 8.5)
+  save_plot_versions(pathway_boxplot, file.path(mouse_activity_plot_dir, "17_10_Mouse_native_pathway_activity_boxplots.pdf"), width = 13, height = 8.5)
+}
+
+human_top_pathway_names <- unique(c(
+  human_hallmark_activity_plot_diff$pathway[seq_len(min(6, nrow(human_hallmark_activity_plot_diff)))],
+  human_kegg_activity_plot_diff$pathway[seq_len(min(6, nrow(human_kegg_activity_plot_diff)))],
+  human_reactome_activity_plot_diff$pathway[seq_len(min(6, nrow(human_reactome_activity_plot_diff)))]
+))
+human_activity_heatmap_mat <- rbind(
+  human_hallmark_activity[rownames(human_hallmark_activity) %in% human_top_pathway_names, , drop = FALSE],
+  human_kegg_activity[rownames(human_kegg_activity) %in% human_top_pathway_names, , drop = FALSE],
+  human_reactome_activity[rownames(human_reactome_activity) %in% human_top_pathway_names, , drop = FALSE]
+)
+if (nrow(human_activity_heatmap_mat) >= 2) {
+  human_activity_heatmap_scaled <- safe_scale_rows(human_activity_heatmap_mat)
+  save_base_pdf_versions(
+    primary = file.path(human_activity_plot_dir, "17_8_Human_ortholog_pathway_activity_heatmap.pdf"),
+    width = 9,
+    height = 10,
+    expr = ComplexHeatmap::draw(
+      ComplexHeatmap::Heatmap(
+        human_activity_heatmap_scaled,
+        name = "z-score",
+        col = heatmap_diverging_col_fun(human_activity_heatmap_scaled),
+        top_annotation = heatmap_group_annotation(sample_info$group),
+        cluster_rows = TRUE,
+        cluster_columns = TRUE,
+        row_labels = compact_pathway_heatmap_labels(rownames(human_activity_heatmap_scaled)),
+        row_names_max_width = grid::unit(62, "mm"),
+        width = grid::unit(85, "mm"),
+        column_names_rot = 45,
+        column_title = "Human MSigDB HS->Mus musculus ortholog"
+      ),
+      heatmap_legend_side = "bottom",
+      annotation_legend_side = "bottom",
+      merge_legend = TRUE
+    )
+  )
+}
+
+human_pathway_rank_plot_tbl <- bind_rows(human_hallmark_activity_plot_diff, human_kegg_activity_plot_diff, human_reactome_activity_plot_diff) %>%
+  mutate(direction = ifelse(logFC > 0, paste0("higher_in_", group2_label), paste0("higher_in_", group1_label))) %>%
+  group_by(family, direction) %>%
+  arrange(figure_significance, desc(abs(logFC)), .by_group = TRUE) %>%
+  slice_head(n = 5) %>%
+  ungroup() %>%
+  mutate(pathway_label = factor(paste(family, pathway, sep = " | "), levels = rev(unique(paste(family, pathway, sep = " | ")))))
+
+if (nrow(human_pathway_rank_plot_tbl) > 0) {
+  human_pathway_rank_plot <- ggplot(human_pathway_rank_plot_tbl, aes(x = pathway_label, y = logFC, fill = family)) +
+    geom_col(width = 0.75) +
+    coord_flip() +
+    scale_fill_manual(values = resolve_enrichment_category_colors(human_pathway_rank_plot_tbl$family, "GSEA")) +
+    labs(title = "Human MSigDB HS->Mus musculus ortholog: pathway activities", x = NULL, y = paste0(group2_label, " - ", group1_label, " logFC")) +
+    theme_rnaseq_publication()
+  save_plot_versions(human_pathway_rank_plot, file.path(human_activity_plot_dir, "17_9_Human_ortholog_pathway_activity_barplot.pdf"), width = 10, height = 8)
+}
+
+human_pathway_score_long <- bind_rows(
+  activity_to_long(human_hallmark_activity, "Human_Hallmark"),
+  activity_to_long(human_kegg_activity, "Human_KEGG_Legacy"),
+  activity_to_long(human_reactome_activity, "Human_Reactome")
+) %>%
+  mutate(group = sample_info[sample, "group"]) %>%
+  semi_join(human_pathway_rank_plot_tbl %>% dplyr::select(family, pathway), by = c("family", "pathway"))
+
+if (nrow(human_pathway_score_long) > 0) {
+  human_pathway_boxplot <- ggplot(human_pathway_score_long, aes(x = group, y = score, fill = group)) +
+    geom_violin(trim = TRUE, alpha = 0.75) +
+    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = viz_pal$neutral["light"]) +
+    facet_grid(family ~ pathway, scales = "free_y") +
+    scale_fill_manual(values = group_colors) +
+    labs(title = "Human MSigDB HS->Mus musculus ortholog: activity scores", x = NULL, y = "Pathway activity score") +
+    theme_rnaseq_publication(base_size = viz_style$compact_size) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  save_plot_versions(human_pathway_boxplot, file.path(human_activity_plot_dir, "17_10_Human_ortholog_pathway_activity_boxplots.pdf"), width = 13, height = 8.5)
 }
 
 empty_gsea_activity_tbl <- function() {
@@ -323,20 +443,20 @@ make_gsea_activity_tbl <- function(gsea_tbl, family_label) {
 }
 
 gsea_consistency_tbl <- bind_rows(
-  hallmark_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Hallmark"),
-  kegg_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "KEGG"),
-  reactome_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Reactome")
+  hallmark_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Mouse_MH"),
+  kegg_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Mouse_KEGG"),
+  reactome_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Mouse_Reactome")
 ) %>%
   left_join(
     bind_rows(
-      make_gsea_activity_tbl(gsea_hallmark_df, "Hallmark"),
-      make_gsea_activity_tbl(gsea_kegg, "KEGG"),
-      make_gsea_activity_tbl(gsea_reactome_df, "Reactome")
+      make_gsea_activity_tbl(gsea_hallmark_df, "Mouse_MH"),
+      make_gsea_activity_tbl(gsea_kegg, "Mouse_KEGG"),
+      make_gsea_activity_tbl(gsea_reactome_df, "Mouse_Reactome")
     ),
     by = c("key", "family")
   ) %>%
   filter(is.finite(gsea_NES))
-write.csv(gsea_consistency_tbl, file.path(step14_dir, "17_11_activity_vs_GSEA_consistency.csv"), row.names = FALSE)
+write.csv(gsea_consistency_tbl, file.path(mouse_activity_table_dir, "17_11_activity_vs_GSEA_consistency.csv"), row.names = FALSE)
 
 if (nrow(gsea_consistency_tbl) > 0) {
   gsea_consistency_plot <- ggplot(gsea_consistency_tbl, aes(x = logFC, y = gsea_NES, color = family)) +
@@ -344,9 +464,41 @@ if (nrow(gsea_consistency_tbl) > 0) {
     geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
     geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
     scale_color_manual(values = resolve_enrichment_category_colors(gsea_consistency_tbl$family, "GSEA")) +
-    labs(title = "Pathway activity vs Step7 GSEA consistency", x = "Activity logFC", y = "GSEA NES") +
-    theme_rnaseq_bw()
-  save_plot_versions(gsea_consistency_plot, file.path(step14_dir, "17_12_activity_vs_GSEA_consistency_scatter.pdf"), width = 8, height = 6)
+    labs(title = "Mouse native: pathway activity vs Step 06 GSEA", x = "Activity logFC", y = "GSEA NES") +
+    theme_rnaseq_publication()
+  save_plot_versions(gsea_consistency_plot, file.path(mouse_activity_plot_dir, "17_12_activity_vs_GSEA_consistency_scatter.pdf"), width = 8, height = 6)
+}
+
+if (!file.exists(cache_06_human_tables_path)) {
+  stop("缺少人源同源富集缓存: ", cache_06_human_tables_path, "。请先运行模块 06。")
+}
+human_gsea_cache <- readRDS(cache_06_human_tables_path)
+human_gsea_consistency_tbl <- bind_rows(
+  human_hallmark_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Human_Hallmark"),
+  human_kegg_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Human_KEGG_Legacy"),
+  human_reactome_activity_diff %>% mutate(key = sanitize_pathway_key(pathway), family = "Human_Reactome")
+) %>%
+  left_join(
+    bind_rows(
+      make_gsea_activity_tbl(human_gsea_cache$gsea_human_hallmark_df, "Human_Hallmark"),
+      make_gsea_activity_tbl(human_gsea_cache$gsea_human_c2_df, "Human_KEGG_Legacy"),
+      make_gsea_activity_tbl(human_gsea_cache$gsea_human_c2_df, "Human_Reactome")
+    ),
+    by = c("key", "family")
+  ) %>%
+  filter(is.finite(gsea_NES)) %>%
+  mutate(origin = "human_ortholog", .before = 1)
+write_csv_safe(human_gsea_consistency_tbl, file.path(human_activity_table_dir, "17_11_activity_vs_GSEA_consistency.csv"), row.names = FALSE)
+
+if (nrow(human_gsea_consistency_tbl) > 0) {
+  human_gsea_consistency_plot <- ggplot(human_gsea_consistency_tbl, aes(x = logFC, y = gsea_NES, color = family)) +
+    geom_point(alpha = 0.8, size = 1.8) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+    scale_color_manual(values = resolve_enrichment_category_colors(human_gsea_consistency_tbl$family, "GSEA")) +
+    labs(title = "Human MSigDB HS->Mus musculus ortholog: activity vs GSEA", x = "Activity logFC", y = "GSEA NES") +
+    theme_rnaseq_publication()
+  save_plot_versions(human_gsea_consistency_plot, file.path(human_activity_plot_dir, "17_12_Human_ortholog_activity_vs_GSEA_consistency_scatter.pdf"), width = 8, height = 6)
 }
 ```
 
@@ -360,12 +512,12 @@ full_membership_tbl <- as_gene_membership %>%
     DER = dplyr::coalesce(DER, gene_id_clean %in% der_sig_ids, FALSE)
   ) %>%
   distinct(gene_id_clean, .keep_all = TRUE)
-write.csv(full_membership_tbl, file.path(step14_dir, "17_13_gene_level_membership_table.csv"), row.names = FALSE)
+write.csv(full_membership_tbl, file.path(mouse_activity_table_dir, "17_13_gene_level_membership_table.csv"), row.names = FALSE)
 
 build_membership_upset(
   full_membership_tbl,
   c("DE", "DAS", "DSFA", "APA", "DER"),
-  file.path(step14_dir, "17_14_DE_DAS_DSFA_APA_DER_upset.pdf"),
+  file.path(mouse_activity_plot_dir, "17_14_DE_DAS_DSFA_APA_DER_upset.pdf"),
   width = 10,
   height = 6
 )
@@ -399,7 +551,7 @@ effect_summary_long <- bind_rows(
     by = "gene_id_clean"
   ) %>%
   filter(is.finite(de_log2FoldChange), is.finite(effect_size))
-write.csv(effect_summary_long, file.path(step14_dir, "17_15_joint_effect_summary_table.csv"), row.names = FALSE)
+write.csv(effect_summary_long, file.path(mouse_activity_table_dir, "17_15_joint_effect_summary_table.csv"), row.names = FALSE)
 
 if (nrow(effect_summary_long) > 0) {
   joint_effect_plot <- ggplot(effect_summary_long, aes(x = de_log2FoldChange, y = effect_size, color = method)) +
@@ -407,8 +559,8 @@ if (nrow(effect_summary_long) > 0) {
     facet_wrap(~ method, scales = "free_y") +
     scale_color_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), effect_summary_long$method)) +
     labs(title = "DE log2FC vs RNA processing effect size", x = "Gene log2FC", y = "Effect size") +
-    theme_rnaseq_bw()
-  save_plot_versions(joint_effect_plot, file.path(step14_dir, "17_16_joint_effect_scatter.pdf"), width = 11, height = 6)
+    theme_rnaseq_publication()
+  save_plot_versions(joint_effect_plot, file.path(mouse_activity_plot_dir, "17_16_joint_effect_scatter.pdf"), width = 11, height = 6)
 }
 
 if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
@@ -417,8 +569,8 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
     module_trait_tbl,
     apa_sig_ids,
     "APA",
-    file.path(step14_dir, "17_17_Module_APA_Enrichment.csv"),
-    file.path(step14_dir, "17_18_Module_APA_Enrichment_Bubble.pdf"),
+    file.path(mouse_activity_table_dir, "17_17_Module_APA_Enrichment.csv"),
+    file.path(mouse_activity_plot_dir, "17_18_Module_APA_Enrichment_Bubble.pdf"),
     viz_pal$accent["green"]
   )
   module_der_enrichment <- save_module_target_enrichment(
@@ -426,8 +578,8 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
     module_trait_tbl,
     der_sig_ids,
     "DER",
-    file.path(step14_dir, "17_19_Module_DER_Enrichment.csv"),
-    file.path(step14_dir, "17_20_Module_DER_Enrichment_Bubble.pdf"),
+    file.path(mouse_activity_table_dir, "17_19_Module_DER_Enrichment.csv"),
+    file.path(mouse_activity_plot_dir, "17_20_Module_DER_Enrichment_Bubble.pdf"),
     viz_pal$accent["purple"]
   )
 
@@ -457,15 +609,16 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
     ) %>%
     left_join(module_trait_tbl %>% dplyr::select(Module, module_trait_correlation = correlation), by = c("module_label" = "Module")) %>%
     arrange(desc(multi_evidence_genes), desc(high_support_genes), desc(abs(module_trait_correlation)))
-  write.csv(module_evidence_summary_6way, file.path(step14_dir, "17_21_Module_MultiEvidence_Summary_6way.csv"), row.names = FALSE)
+  write.csv(module_evidence_summary_6way, file.path(mouse_activity_table_dir, "17_21_Module_MultiEvidence_Summary_6way.csv"), row.names = FALSE)
 
   module_evidence_long_6way <- module_evidence_summary_6way %>%
     pivot_longer(cols = c(de_genes, das_genes, deu_genes, is_genes, apa_genes, der_genes, multi_evidence_genes, high_support_genes), names_to = "evidence_type", values_to = "gene_count")
   module_evidence_bubble_6way <- ggplot(module_evidence_long_6way, aes(x = module_trait_correlation, y = reorder(module_label, module_trait_correlation), size = gene_count, color = evidence_type)) +
     geom_point(alpha = 0.85) +
+    scale_color_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), module_evidence_long_6way$evidence_type)) +
     labs(title = "Module multi-evidence summary (DE/DAS/DEU/IS/APA/DER)", x = "Module-trait correlation", y = NULL, size = "Gene count", color = "Evidence") +
-    theme_rnaseq_bw()
-  save_plot_versions(module_evidence_bubble_6way, file.path(step14_dir, "17_22_Module_MultiEvidence_Bubble_6way.pdf"), width = 9.5, height = max(5, 0.8 * nrow(module_evidence_summary_6way)))
+    theme_rnaseq_publication()
+  save_plot_versions(module_evidence_bubble_6way, file.path(mouse_activity_plot_dir, "17_22_Module_MultiEvidence_Bubble_6way.pdf"), width = 9.5, height = max(5, 0.8 * nrow(module_evidence_summary_6way)))
 
   module_evidence_heatmap_6way <- module_evidence_summary_6way %>%
     dplyr::select(de_genes, das_genes, deu_genes, is_genes, apa_genes, der_genes, multi_evidence_genes, high_support_genes, module_trait_correlation) %>%
@@ -474,7 +627,7 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
   module_evidence_heatmap_6way <- scale(module_evidence_heatmap_6way)
   module_evidence_heatmap_6way[!is.finite(module_evidence_heatmap_6way)] <- 0
   save_base_pdf_versions(
-    primary = file.path(step14_dir, "17_23_Module_MultiEvidence_Heatmap_6way.pdf"),
+    primary = file.path(mouse_activity_plot_dir, "17_23_Module_MultiEvidence_Heatmap_6way.pdf"),
     width = 8.5,
     height = max(5, 0.5 * nrow(module_evidence_summary_6way) + 2),
     expr = ComplexHeatmap::draw(
@@ -503,7 +656,7 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
       module_me_tbl <- me_df[match(colnames(immune_score_wide), me_df$sample), grepl("^Module_", names(me_df)), drop = FALSE]
       rownames(module_me_tbl) <- colnames(immune_score_wide)
       module_immune_cor <- cor(t(as.matrix(immune_score_wide)), as.matrix(module_me_tbl), use = "pairwise.complete.obs")
-      write.csv(module_immune_cor, file.path(step14_dir, "17_24_Module_Immune_Correlation.csv"))
+      write.csv(module_immune_cor, file.path(mouse_activity_table_dir, "17_24_Module_Immune_Correlation.csv"))
     }
 
     pathway_score_wide <- pathway_score_long %>%
@@ -518,7 +671,22 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
       module_me_tbl <- me_df[match(colnames(pathway_score_wide), me_df$sample), grepl("^Module_", names(me_df)), drop = FALSE]
       rownames(module_me_tbl) <- colnames(pathway_score_wide)
       module_pathway_cor <- cor(t(as.matrix(pathway_score_wide)), as.matrix(module_me_tbl), use = "pairwise.complete.obs")
-      write.csv(module_pathway_cor, file.path(step14_dir, "17_25_Module_Pathway_Correlation.csv"))
+      write.csv(module_pathway_cor, file.path(mouse_activity_table_dir, "17_25_Module_Pathway_Correlation.csv"))
+    }
+
+    human_pathway_score_wide <- human_pathway_score_long %>%
+      semi_join(human_pathway_rank_plot_tbl %>% dplyr::select(family, pathway), by = c("family", "pathway")) %>%
+      mutate(feature = paste(family, pathway, sep = " | ")) %>%
+      dplyr::select(feature, sample, score) %>%
+      pivot_wider(names_from = sample, values_from = score) %>%
+      as.data.frame()
+    if (nrow(human_pathway_score_wide) > 0) {
+      rownames(human_pathway_score_wide) <- human_pathway_score_wide$feature
+      human_pathway_score_wide$feature <- NULL
+      human_module_me_tbl <- me_df[match(colnames(human_pathway_score_wide), me_df$sample), grepl("^Module_", names(me_df)), drop = FALSE]
+      rownames(human_module_me_tbl) <- colnames(human_pathway_score_wide)
+      human_module_pathway_cor <- cor(t(as.matrix(human_pathway_score_wide)), as.matrix(human_module_me_tbl), use = "pairwise.complete.obs")
+      write.csv(human_module_pathway_cor, file.path(human_activity_table_dir, "17_25_Human_ortholog_Module_Pathway_Correlation.csv"))
     }
   }
 }

@@ -1,0 +1,2 @@
+chr,start,end,length,nCG,meanMethy1,meanMethy2,diff.Methy,areaStat,DMR_id,meanMethy_group1,meanMethy_group2,group1_label,group2_label,diffMethy,DMR_type
+chr1,10010,13000,2991,300,0.20499867843312614,0.8049986784331277,0.6000000000000015,-24449.077348247843,DMR_1,0.20499867843312614,0.8049986784331277,control,treated,0.6000000000000015,Hyper

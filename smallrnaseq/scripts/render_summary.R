@@ -1,0 +1,16 @@
+root <- Sys.getenv("SMALLRNA_ROOT_DIR")
+input_file <- "summary"
+source(file.path(root,"rmd/01_setup.R"))
+ctx <- load_mii_context()
+gate <- smallrna_inference_gate(ctx$sample_info)
+status <- data.frame(eligibility=if(gate$eligible) "GO" else "NO-GO", execution=if(Sys.getenv("RUN_INFERENCE")!="1") "disabled" else "see_module_status", reason=gate$reason, unit="biological_sample_id; a pool counts once")
+write.table(status,file.path(RESULT_DIR,"audit/inference_eligibility.tsv"),sep="\t",quote=FALSE,row.names=FALSE)
+write.csv(ctx$sample_comp_view,file.path(RESULT_DIR,"sample_composition.csv"),row.names=FALSE)
+write.csv(ctx$group_comp_total,file.path(RESULT_DIR,"group_composition_descriptive.csv"),row.names=FALSE)
+plot <- ctx$sample_comp_view %>% ggplot(aes(x=Sample,y=Percent,fill=MainCategory)) + geom_col() + labs(title="Captured small-RNA composition",y="Percent of clean reads",x="Library") + theme_bw() + theme(axis.text.x=element_text(angle=45,hjust=1))
+if (Sys.getenv("REPORT_FIGURES","1")=="1") save_ggplot_file(plot,file.path(RESULT_DIR,"composition.pdf"),width=8,height=5,dpi=150)
+escape <- function(x) { x<-gsub("&","&amp;",as.character(x),fixed=TRUE); x<-gsub("<","&lt;",x,fixed=TRUE); gsub(">","&gt;",x,fixed=TRUE) }
+html_table <- function(df) paste0("<table border='1'><tr>",paste0("<th>",escape(names(df)),"</th>",collapse=""),"</tr>",paste(apply(as.data.frame(df),1,function(row)paste0("<tr>",paste0("<td>",escape(row),"</td>",collapse=""),"</tr>")),collapse=""),"</table>")
+html <- c("<!doctype html><html lang='zh'><meta charset='UTF-8'><title>small RNA 报告</title><body>","<h1>small RNA 分析报告</h1>",paste0("<p>物种：",escape(PROJECT_SPECIES),"；组织/阶段：",escape(PROJECT_STAGE),"。方向：",escape(PROJECT_CONTRAST_CASE)," − ",escape(PROJECT_CONTRAST_BASELINE),"。</p>"),"<p>默认仅描述；细胞/技术文库/池内动物数不增加独立 n。raw P 阈值是探索性筛选，保留 FDR。SPORTS 加权非整数注释值只描述，不四舍五入后推断。</p>","<h2>样本与独立单位</h2>",html_table(ctx$sample_info[,c("Sample","Group","BiologicalSample","UnitType","Batch")]),"<h2>资格与执行</h2>",html_table(status),html_table(read.delim(file.path(RESULT_DIR,"audit/module_status.tsv"))),"<p>资格 GO 不代表已执行。具体可选 edgeR 检验的 completed/skipped 和失败原因保存在对应模块的 de_status_summary.csv；未选择模块为 not_run。</p>",if(Sys.getenv("REPORT_FIGURES","1")=="1") "<h2>文库组成</h2><img src='composition.png' style='max-width:900px'>" else "<h2>文库组成</h2><p>仅表报告；本次未生成汇总图。</p>",html_table(ctx$composition_integrity_check),"<h2>证据边界</h2><p>sncRNA 主分类保留 SPORTS 优先注释，不把多条重叠注释重复计入分母；endo-siRNA 为显式参考支持的候选证据。miRNA 靶标/富集默认关闭，serum 配对捕获和 spike-in 属于独立示例。本次表输入分析不能证明原始 SPORTS 上游已运行。</p></body></html>")
+writeLines(html,file.path(RESULT_DIR,"report.html"))
+writeLines(capture.output(sessionInfo()),file.path(RESULT_DIR,"audit/sessionInfo.txt"))

@@ -14,8 +14,9 @@ set -euo pipefail
 
 # ---------- A. 项目目录、输入与输出 ----------
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${ROOT_DIR}/scripts/config.sh"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
-READS_INFO="${ROOT_DIR}/rawdata/reads_info.txt"
+READS_INFO="${RNASEQ_SAMPLES_TSV}"
 FASTQC_DIR="${ROOT_DIR}/fastqc"
 MAPPING_DIR="${ROOT_DIR}/1.Mapping"
 QUANT_DIR="${ROOT_DIR}/2.Quantification"
@@ -29,11 +30,11 @@ UPSTREAM_QC_DIR="${AUDIT_DIR}/upstream_qc"
 MULTIQC_OUT_DIR="${AUDIT_DIR}/multiqc"
 
 # ---------- B. 参考文件与工具 ----------
-REFERENCE_DIR="${REFERENCE_DIR:-/home/h1028/workspace/reference/GRCm39}"
+REFERENCE_DIR="${REFERENCE_DIR:-${REFERENCE_DIR}}"
 HISAT2_INDEX="${HISAT2_INDEX:-}"
 GTF_FILE="${GTF_FILE:-}"
-FASTP_BIN="${FASTP_BIN:-/home/h1028/miniconda3/bin/fastp}"
-HISAT2_BIN="${HISAT2_BIN:-/home/h1028/miniconda3/bin/hisat2}"
+FASTP_BIN="${FASTP_BIN:-fastp}"
+HISAT2_BIN="${HISAT2_BIN:-hisat2}"
 SAMTOOLS_BIN="${SAMTOOLS_BIN:-/usr/bin/samtools}"
 RSCRIPT_BIN="${RSCRIPT_BIN:-Rscript}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -43,7 +44,7 @@ RSEQC_GENEBODY_BIN="${RSEQC_GENEBODY_BIN:-geneBody_coverage.py}"
 RSEQC_REF_BED="${RSEQC_REF_BED:-}"
 
 # ---------- C. 文库方向开关（上游/下游共用） ----------
-# liver 默认沿用原流程的 first-strand 链特异性设置。
+# 建库方向必须依据实验记录配置。
 # 可选值：unstranded、fr-firststrand、fr-secondstrand。
 RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS:-unstranded}"
 
@@ -55,7 +56,7 @@ RNASEQ_SAMPLES_FILE="${RNASEQ_SAMPLES_FILE:-${DE_DIR}/samples.txt}"  # 指定下
 
 # ---------- E. 步骤调度 ----------
 TOTAL_STEPS=7
-# 默认全流程按上游分析的科学顺序执行，并在自动选样后重建选中样本矩阵。
+# 默认全流程按上游分析的科学顺序执行，并在预先合格样本记录后重建选中样本矩阵。
 DEFAULT_STEPS=(1 2 3 4 5 6 7)
 
 declare -A STEP_NAMES=(
@@ -63,7 +64,7 @@ declare -A STEP_NAMES=(
     [2]="mapping"
     [3]="quant"
     [4]="merge_all"
-    [5]="auto_select"
+    [5]="eligible_samples"
     [6]="merge_selected"
     [7]="audit"
 )
@@ -73,7 +74,7 @@ declare -A STEP_TITLES=(
     [2]="HISAT2 mapping"
     [3]="featureCounts quantification"
     [4]="merge all-sample expression matrices"
-    [5]="PCA auto sample selection"
+    [5]="retain all prespecified eligible samples"
     [6]="merge selected-sample matrices"
     [7]="upstream QC/audit"
 )
@@ -184,6 +185,7 @@ Options:
   --steps LIST       Run selected steps. LIST can be comma- or space-separated.
   --list             Show available steps.
   --dry-run          Print planned commands without running heavy tools.
+  --preflight        只读检查配置、样本表与必要输入。
   --force            Re-run completed sample-level outputs.
   --threads N        Override THREADS for this run.
   -h, --help         Show this help.
@@ -232,7 +234,7 @@ step_id_from_token() {
         mapping) printf '2\n' ;;
         quant|featurecounts) printf '3\n' ;;
         merge_all) printf '4\n' ;;
-        auto_select) printf '5\n' ;;
+        eligible_samples) printf '5\n' ;;
         merge_selected) printf '6\n' ;;
         audit) printf '7\n' ;;
         *) return 1 ;;
@@ -310,25 +312,11 @@ discover_bin() {
         return 0
     fi
 
-    local candidate
-    for candidate in \
-        "/home/h1028/miniconda3/bin/${cmd_name}" \
-        /home/h1028/miniconda3/envs/*/bin/"${cmd_name}" \
-        /home/h1028/.conda/envs/*/bin/"${cmd_name}" \
-        "/usr/local/bin/${cmd_name}" \
-        "/usr/bin/${cmd_name}"
-    do
-        [[ -x "${candidate}" ]] || continue
-        printf '%s' "${candidate}"
-        return 0
-    done
 
     return 1
 }
 
-normalize_group() {
-    printf '%s' "$1" | sed -E 's/([._-]?[Ll]iver)$//'
-}
+normalize_group() { printf '%s' "$1"; }
 
 resolve_read_path() {
     local hint="$1"
@@ -355,28 +343,8 @@ ensure_output_dirs() {
 }
 
 discover_reference_assets() {
-    [[ -d "${REFERENCE_DIR}" ]] || die "未找到参考目录: ${REFERENCE_DIR}"
-
-    if [[ -z "${HISAT2_INDEX}" ]]; then
-        if compgen -G "${REFERENCE_DIR}/GRCm39.1.ht2*" >/dev/null; then
-            HISAT2_INDEX="${REFERENCE_DIR}/GRCm39"
-        else
-            local first_index=""
-            first_index="$(find "${REFERENCE_DIR}" -maxdepth 1 -type f \( -name '*.1.ht2' -o -name '*.1.ht2l' \) | sort | head -1)"
-            [[ -n "${first_index}" ]] || die "未在 ${REFERENCE_DIR} 中发现 hisat2 index"
-            first_index="${first_index%.1.ht2}"
-            first_index="${first_index%.1.ht2l}"
-            HISAT2_INDEX="${first_index}"
-        fi
-    fi
-
-    compgen -G "${HISAT2_INDEX}*.ht2*" >/dev/null || die "未找到 hisat2 索引前缀: ${HISAT2_INDEX}"
-
-    if [[ -z "${GTF_FILE}" ]]; then
-        GTF_FILE="$(find "${REFERENCE_DIR}" -maxdepth 1 -type f -name 'Mus_musculus.GRCm39*.gtf' | sort | head -1)"
-    fi
-
-    [[ -n "${GTF_FILE}" && -f "${GTF_FILE}" ]] || die "未找到 GTF 注释文件，请设置 GTF_FILE 或检查 ${REFERENCE_DIR}"
+    [[ -s "${GTF_FILE}" ]] || die "MISSING GTF_FILE: ${GTF_FILE}"
+    compgen -G "${HISAT2_INDEX}.1.ht2*" >/dev/null || die "MISSING HISAT2_INDEX: ${HISAT2_INDEX}"
 }
 
 ensure_prerequisites() {
@@ -406,49 +374,19 @@ ensure_prerequisites() {
     [[ -f "${READS_INFO}" ]] || die "未找到样本清单: ${READS_INFO}"
 
     discover_reference_assets
-    ensure_output_dirs
 }
 
 load_samples() {
     [[ "${SAMPLES_LOADED}" == "1" ]] && return
-
-    SAMPLE_NAMES=()
-    SAMPLE_GROUPS=()
-    RAW_R1S=()
-    RAW_R2S=()
-    CLEAN_R1S=()
-    CLEAN_R2S=()
-
-    while IFS=$'\t' read -r raw_group sample col3 col4 col5 col6 _; do
-        [[ -z "${raw_group// }" ]] && continue
-        [[ "${raw_group}" =~ ^# ]] && continue
-        [[ "${raw_group}" == "group_stage" && "${sample}" == "sample" ]] && continue
-
-        local raw_hint_r1="${col3:-}"
-        local raw_hint_r2="${col4:-}"
-        if [[ -n "${col5:-}" && -n "${col6:-}" ]]; then
-            raw_hint_r1="${col5}"
-            raw_hint_r2="${col6}"
-        fi
-
-        [[ -n "${sample:-}" && -n "${raw_hint_r1:-}" && -n "${raw_hint_r2:-}" ]] || die "reads_info.txt 存在格式不完整的行: ${raw_group} ${sample}"
-
-        local raw_r1
-        local raw_r2
-        raw_r1="$(resolve_read_path "${raw_hint_r1}")"
-        raw_r2="$(resolve_read_path "${raw_hint_r2}")"
-        local clean_r1="${FASTQC_DIR}/$(basename "${raw_hint_r1}")"
-        local clean_r2="${FASTQC_DIR}/$(basename "${raw_hint_r2}")"
-
-        SAMPLE_NAMES+=("${sample}")
-        SAMPLE_GROUPS+=("$(normalize_group "${raw_group}")")
-        RAW_R1S+=("${raw_r1}")
-        RAW_R2S+=("${raw_r2}")
-        CLEAN_R1S+=("${clean_r1}")
-        CLEAN_R2S+=("${clean_r2}")
-    done < "${READS_INFO}"
-
-    [[ ${#SAMPLE_NAMES[@]} -gt 0 ]] || die "reads_info.txt 中没有可用样本"
+    local sample group r1 r2
+    local rows
+    rows="$("${PYTHON_BIN}" "${ROOT_DIR}/scripts/input_contract.py" rows)" || die "样本表验证失败"
+    while IFS='|' read -r sample group r1 r2; do
+        SAMPLE_NAMES+=("${sample}"); SAMPLE_GROUPS+=("${group}")
+        RAW_R1S+=("${r1}"); RAW_R2S+=("${r2}")
+        CLEAN_R1S+=("${FASTQC_DIR}/${sample}_1.fastq.gz")
+        CLEAN_R2S+=("${FASTQC_DIR}/${sample}_2.fastq.gz")
+    done <<< "${rows}"
     SAMPLES_LOADED=1
 }
 
@@ -577,7 +515,7 @@ run_step() {
         2) run_mapping_stage ;;
         3) run_quant_stage ;;
         4) run_merge_all_stage ;;
-        5) run_auto_select_stage ;;
+        5) run_eligible_samples_stage ;;
         6) run_merge_selected_stage ;;
         7) run_audit_stage ;;
         *) die "内部错误: 不支持的步骤 ID ${step}" ;;
@@ -967,303 +905,10 @@ refresh_full_sample_snapshot() {
     [[ -f "${MERGE_DIR}/genes.counts.logCPM.matrix" ]] && cp -f "${MERGE_DIR}/genes.counts.logCPM.matrix" "${RESULT_PCA_SNAPSHOT_DIR}/genes.counts.logCPM.matrix"
 }
 
-run_auto_select_stage() {
-    local matrix_input="${RESULT_PCA_SNAPSHOT_DIR}/genes.counts.logCPM.matrix"
-    local summary_output="${RESULT_PCA_DIR}/auto_selection_summary.tsv"
-    local selected_samples="${DE_DIR}/samples.txt"
-
-    if [[ ! -f "${matrix_input}" ]]; then
-        matrix_input="${RESULT_PCA_SNAPSHOT_DIR}/genes.DESeq2.normalized_counts.matrix"
-    fi
-
-    log "Step 5/7: PCA 自动选样"
-    log "  matrix  : ${matrix_input}"
-    log "  samples : ${selected_samples}"
-    log "  summary : ${summary_output}"
-
-    if [[ "${DRY_RUN}" == "1" ]]; then
-        log "+ inline PCA auto-selection -> ${selected_samples}, ${summary_output}"
-        return
-    fi
-
-    "${RSCRIPT_BIN}" --vanilla - "${matrix_input}" "${READS_INFO}" "${selected_samples}" "${summary_output}" <<'EOF'
-parse_args <- function(args) {
-  if (length(args) != 4) {
-    stop("Expected arguments: matrix reads_info output_samples summary", call. = FALSE)
-  }
-
-  list(
-    matrix = args[[1]],
-    reads_info = args[[2]],
-    output_samples = args[[3]],
-    summary = args[[4]]
-  )
-}
-
-normalize_group <- function(x) {
-  sub("([._-]?[Ll]iver)$", "", x, perl = TRUE)
-}
-
-safe_zscore <- function(x) {
-  if (length(x) <= 1 || isTRUE(all.equal(stats::sd(x), 0))) {
-    return(rep(0, length(x)))
-  }
-
-  as.numeric(scale(x))
-}
-
-compute_combo_metrics <- function(expr_matrix, combo_samples, sample_info) {
-  expr_sub <- expr_matrix[, combo_samples, drop = FALSE]
-  gene_var <- apply(expr_sub, 1, stats::var, na.rm = TRUE)
-  keep <- !is.na(gene_var) & gene_var > 0
-  expr_sub <- expr_sub[keep, , drop = FALSE]
-
-  if (nrow(expr_sub) < 2) {
-    stop("Too few variable genes remain after filtering")
-  }
-
-  pca_res <- stats::prcomp(t(expr_sub), scale. = TRUE)
-  variance_explained <- summary(pca_res)$importance[2, 1:2]
-  coords <- as.data.frame(pca_res$x[, 1:2, drop = FALSE])
-  coords$sample <- rownames(coords)
-  coords$group <- sample_info[coords$sample, "group"]
-
-  groups <- unique(coords$group)
-  centers <- do.call(
-    rbind,
-    lapply(groups, function(group_name) {
-      subset_coords <- coords[coords$group == group_name, c("PC1", "PC2"), drop = FALSE]
-      data.frame(
-        group = group_name,
-        PC1 = mean(subset_coords$PC1),
-        PC2 = mean(subset_coords$PC2),
-        stringsAsFactors = FALSE
-      )
-    })
-  )
-
-  coords$distance_to_center <- vapply(seq_len(nrow(coords)), function(i) {
-    center <- centers[centers$group == coords$group[i], c("PC1", "PC2"), drop = FALSE]
-    sqrt(sum((as.numeric(coords[i, c("PC1", "PC2")]) - as.numeric(center[1, ]))^2))
-  }, numeric(1))
-
-  between_group_distance <- sqrt(sum((as.numeric(centers[1, c("PC1", "PC2")]) - as.numeric(centers[2, c("PC1", "PC2")]))^2))
-  within_group_dispersion <- mean(coords$distance_to_center)
-  max_outlier_distance <- max(coords$distance_to_center)
-  cumulative_variance <- sum(variance_explained)
-
-  list(
-    between_group_distance = between_group_distance,
-    within_group_dispersion = within_group_dispersion,
-    max_outlier_distance = max_outlier_distance,
-    cumulative_variance = cumulative_variance
-  )
-}
-
-args <- parse_args(commandArgs(trailingOnly = TRUE))
-dir.create(dirname(args$output_samples), recursive = TRUE, showWarnings = FALSE)
-dir.create(dirname(args$summary), recursive = TRUE, showWarnings = FALSE)
-
-expr_matrix <- read.table(
-  args$matrix,
-  header = TRUE,
-  row.names = 1,
-  check.names = FALSE,
-  sep = "\t",
-  quote = "",
-  comment.char = ""
-)
-expr_matrix <- data.matrix(expr_matrix)
-
-read_reads_info <- function(path) {
-  first_line <- readLines(path, n = 1, warn = FALSE)
-  has_header <- grepl("^group_stage\tsample\t", first_line) || grepl("^sample\tgroup\t", first_line)
-
-  if (has_header) {
-    reads_info <- read.delim(
-      path,
-      header = TRUE,
-      sep = "\t",
-      stringsAsFactors = FALSE,
-      quote = "",
-      comment.char = "",
-      check.names = FALSE
-    )
-    if (!"sample" %in% colnames(reads_info)) {
-      stop("reads_info header format requires a 'sample' column", call. = FALSE)
-    }
-    if (!"group_stage" %in% colnames(reads_info)) {
-      if (all(c("group", "stage") %in% colnames(reads_info))) {
-        reads_info$group_stage <- paste0(reads_info$group, reads_info$stage)
-      } else if ("group" %in% colnames(reads_info)) {
-        reads_info$group_stage <- reads_info$group
-      } else {
-        stop("reads_info header format requires 'group_stage' or 'group' columns", call. = FALSE)
-      }
-    }
-  } else {
-    reads_info <- read.delim(
-      path,
-      header = FALSE,
-      sep = "\t",
-      stringsAsFactors = FALSE,
-      quote = "",
-      comment.char = "",
-      check.names = FALSE
-    )
-    if (ncol(reads_info) < 2) {
-      stop("reads_info.txt must contain at least group and sample columns", call. = FALSE)
-    }
-    colnames(reads_info)[1:2] <- c("group_stage", "sample")
-  }
-
-  if (!"group" %in% colnames(reads_info)) {
-    reads_info$group <- normalize_group(reads_info$group_stage)
-  }
-  reads_info
-}
-
-reads_info <- read_reads_info(args$reads_info)
-
-sample_info <- data.frame(
-  sample = reads_info$sample,
-  group = reads_info$group,
-  stringsAsFactors = FALSE
-)
-sample_info <- sample_info[!duplicated(sample_info$sample), , drop = FALSE]
-sample_info <- sample_info[sample_info$sample %in% colnames(expr_matrix), , drop = FALSE]
-rownames(sample_info) <- sample_info$sample
-
-groups <- unique(sample_info$group)
-if (length(groups) != 2) {
-  stop(sprintf("Auto selection requires exactly 2 groups, found: %s", paste(groups, collapse = ", ")), call. = FALSE)
-}
-
-group_samples <- lapply(groups, function(group_name) sample_info$sample[sample_info$group == group_name])
-names(group_samples) <- groups
-
-group_sizes <- vapply(group_samples, length, integer(1))
-min_group_size <- min(group_sizes)
-if (min_group_size < 3) {
-  stop("Balanced selection requires at least 3 samples in each group", call. = FALSE)
-}
-
-results <- list()
-
-if (all(group_sizes == 3)) {
-  combo_samples <- c(group_samples[[groups[1]]], group_samples[[groups[2]]])
-  metrics <- compute_combo_metrics(expr_matrix, combo_samples, sample_info)
-  results[[1]] <- data.frame(
-    combination_type = "3v3",
-    group1 = groups[1],
-    group2 = groups[2],
-    group1_samples = paste(group_samples[[groups[1]]], collapse = ","),
-    group2_samples = paste(group_samples[[groups[2]]], collapse = ","),
-    sample_key = paste(sort(combo_samples), collapse = ","),
-    between_group_distance = metrics$between_group_distance,
-    within_group_dispersion = metrics$within_group_dispersion,
-    max_outlier_distance = metrics$max_outlier_distance,
-    cumulative_variance = metrics$cumulative_variance,
-    stringsAsFactors = FALSE
-  )
-  message("Detected exact 3v3 design; using all samples directly.")
-} else {
-  candidate_sizes <- seq.int(3, min_group_size)
-  combo_counter <- 0L
-  total_combos <- sum(vapply(candidate_sizes, function(size) {
-    choose(length(group_samples[[groups[1]]]), size) * choose(length(group_samples[[groups[2]]]), size)
-  }, numeric(1)))
-
-  for (size in candidate_sizes) {
-    group1_combos <- combn(group_samples[[groups[1]]], size, simplify = FALSE)
-    group2_combos <- combn(group_samples[[groups[2]]], size, simplify = FALSE)
-
-    for (group1_selected in group1_combos) {
-      for (group2_selected in group2_combos) {
-        combo_counter <- combo_counter + 1L
-        if (combo_counter %% 25L == 0L || combo_counter == total_combos) {
-          message(sprintf("Auto-select progress: %d/%d", combo_counter, total_combos))
-        }
-
-        combo_samples <- c(group1_selected, group2_selected)
-        metrics <- compute_combo_metrics(expr_matrix, combo_samples, sample_info)
-        sample_key <- paste(sort(combo_samples), collapse = ",")
-
-        results[[length(results) + 1L]] <- data.frame(
-          combination_type = sprintf("%sv%s", size, size),
-          group1 = groups[1],
-          group2 = groups[2],
-          group1_samples = paste(group1_selected, collapse = ","),
-          group2_samples = paste(group2_selected, collapse = ","),
-          sample_key = sample_key,
-          between_group_distance = metrics$between_group_distance,
-          within_group_dispersion = metrics$within_group_dispersion,
-          max_outlier_distance = metrics$max_outlier_distance,
-          cumulative_variance = metrics$cumulative_variance,
-          stringsAsFactors = FALSE
-        )
-      }
-    }
-  }
-}
-
-results_df <- do.call(rbind, results)
-results_df$z_between <- safe_zscore(results_df$between_group_distance)
-results_df$z_within <- safe_zscore(results_df$within_group_dispersion)
-results_df$z_outlier <- safe_zscore(results_df$max_outlier_distance)
-results_df$z_variance <- safe_zscore(results_df$cumulative_variance)
-results_df$score <- results_df$z_between - results_df$z_within - results_df$z_outlier + results_df$z_variance
-
-ordering <- order(
-  -results_df$score,
-  results_df$max_outlier_distance,
-  -results_df$between_group_distance,
-  results_df$sample_key
-)
-results_df <- results_df[ordering, , drop = FALSE]
-results_df$selected <- "no"
-results_df$selected[1] <- "yes"
-
-selected_row <- results_df[1, , drop = FALSE]
-selected_samples_df <- rbind(
-  data.frame(group = selected_row$group1, sample = unlist(strsplit(selected_row$group1_samples, ",", fixed = TRUE)), stringsAsFactors = FALSE),
-  data.frame(group = selected_row$group2, sample = unlist(strsplit(selected_row$group2_samples, ",", fixed = TRUE)), stringsAsFactors = FALSE)
-)
-
-write.table(
-  results_df[, c(
-    "combination_type",
-    "group1",
-    "group2",
-    "group1_samples",
-    "group2_samples",
-    "sample_key",
-    "between_group_distance",
-    "within_group_dispersion",
-    "max_outlier_distance",
-    "cumulative_variance",
-    "score",
-    "selected"
-  )],
-  file = args$summary,
-  sep = "\t",
-  quote = FALSE,
-  row.names = FALSE
-)
-
-write.table(
-  selected_samples_df,
-  file = args$output_samples,
-  sep = "\t",
-  quote = FALSE,
-  row.names = FALSE,
-  col.names = FALSE
-)
-
-message(sprintf("Selected %s combination with score %.4f", selected_row$combination_type, selected_row$score))
-message(sprintf("Samples written to %s", args$output_samples))
-message(sprintf("Summary written to %s", args$summary))
-EOF
+run_eligible_samples_stage() {
+    log "Step 5/7: 保留样本表全部预先合格样本；PCA 仅用于诊断"
+    [[ "${DRY_RUN}" == "1" ]] && return 0
+    "${PYTHON_BIN}" "${ROOT_DIR}/scripts/input_contract.py" prepare
 }
 
 run_merge_all_stage() {
@@ -1501,7 +1146,7 @@ with out_path.open("w", newline="") as handle:
     writer.writeheader()
     for row in rows:
         sample = row["sample"]
-        group = row.get("group") or re.sub(r"([._-]?[Ll]iver)$", "", row.get("group_stage", ""))
+        group = row["group"]
         out = {
             "sample": sample,
             "group": group,
@@ -1626,9 +1271,12 @@ main() {
         mapfile -t REQUESTED_STEPS <<< "${parsed_steps}"
     fi
 
+    "${PYTHON_BIN:-python3}" "${ROOT_DIR}/scripts/input_contract.py" validate
     configure_library_strandedness
     ensure_prerequisites
     load_samples
+    [[ "${DRY_RUN}" == 1 ]] || "${PYTHON_BIN}" "${ROOT_DIR}/scripts/input_contract.py" prepare
+    ensure_output_dirs
     resolve_run_order "${REQUESTED_STEPS[@]}"
 
     REQUESTED_STEPS_LABEL="$(format_steps "${REQUESTED_STEPS[@]}")"

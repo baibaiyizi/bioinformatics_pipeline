@@ -1,0 +1,4 @@
+check	status	detail
+inference:type_A	PASS	eligibility=GO; execution=completed
+inference:type_B	PASS	eligibility=GO; execution=completed
+descriptive_has_no_condition_pvalues	PASS	sample/library-level descriptive CPM only

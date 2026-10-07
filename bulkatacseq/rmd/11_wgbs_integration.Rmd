@@ -1,0 +1,465 @@
+## Module 11. WGBS 联合分析
+
+这一节把甲基化证据放到 ATAC 主线的最后，是为了保证解读顺序先从开放性本身出发，再看 RNA，最后再看是否有 WGBS 支持。
+
+```{r recompute_wgbs_integration, fig.width=9, fig.height=7}
+step11_table_dir <- step_table_dir("Step11")
+step11_plot_dir <- step_plot_dir("Step11")
+step11_plot_files <- c("atac_wgbs_correlation.pdf", "atac_wgbs_gene_centric_scatter.pdf")
+min_wgbs_overlap_n <- suppressWarnings(as.integer(Sys.getenv("ATAC_WGBS_MIN_COR_N", unset = "10")))
+if(is.na(min_wgbs_overlap_n) || min_wgbs_overlap_n < 3) min_wgbs_overlap_n <- 10
+
+wgbs_candidates <- data.frame()
+wgbs_gene_centric_support <- data.frame()
+wgbs_rep_loci <- data.frame()
+
+wgbs_step14_input_audit <- audit_external_input_specs("WGBS", get_wgbs_input_specs())
+save_step_table(wgbs_step14_input_audit, "Step11", "WGBS_Input_Audit.csv")
+
+wgbs_metric_definitions <- data.frame(
+  Metric = c(
+    "diffMethy",
+    "delta_methylation",
+    "hypomethylation_score",
+    "WGBS_PrimaryMethDiff",
+    "WGBS_PrimaryHypomethylationScore",
+    "WGBSEvidenceScore",
+    "WGBSJoinMode"
+  ),
+  Definition = c(
+    "WGBS methylation difference defined as Comparison - Reference in the explicit upstream WGBS result",
+    "numeric copy of diffMethy used for ATAC overlap calculations",
+    "-diffMethy; positive values indicate Comparison hypomethylation relative to Reference",
+    "promoter diffMethy when available, otherwise the strongest available gene-centric WGBS layer",
+    "-WGBS_PrimaryMethDiff",
+    "0-10 score from WGBS_MaxAbsMethy, capped at absolute methylation difference 0.25",
+    "gene_id_clean/Ensembl join when possible; geneSymbol_fallback only when ID join is unavailable"
+  ),
+  Direction = c(
+    "positive = Comparison hypermethylated; negative = Comparison hypomethylated",
+    "positive = Comparison hypermethylated; negative = Comparison hypomethylated",
+    "positive = Comparison hypomethylated",
+    "same as diffMethy",
+    "positive = Comparison hypomethylated",
+    "larger = stronger WGBS support, independent of direction",
+    "join provenance"
+  ),
+  stringsAsFactors = FALSE
+)
+save_step_table(wgbs_metric_definitions, "Step11", "WGBS_Metric_Definitions.csv")
+
+wgbs_dmr_file <- get_wgbs_input_path("WGBS_DMR_Annotated")
+wgbs_gene_centric_file <- get_wgbs_input_path("WGBS_Gene_Centric_Wide")
+wgbs_kegg_compare_file <- get_wgbs_input_path("WGBS_RNA_KEGG_Comparison")
+wgbs_rep_loci_file <- get_wgbs_input_path("WGBS_Representative_Loci")
+has_any_wgbs_input <- any(!is.na(c(
+  wgbs_dmr_file,
+  wgbs_gene_centric_file,
+  wgbs_kegg_compare_file,
+  wgbs_rep_loci_file
+)))
+
+if(!has_any_wgbs_input) {
+  write_skipped_state(
+    "Step11",
+    "WGBS_Integration",
+    "No WGBS input tables detected; skip WGBS integration.",
+    clear_plot_files = step11_plot_files,
+    extra = list(wgbs_dir = wgbs_dir)
+  )
+}
+
+if(!is.na(wgbs_dmr_file) && nrow(res_df) > 0) {
+  wgbs_dmr <- read.csv(wgbs_dmr_file, stringsAsFactors = FALSE)
+  if(!all(c("group1_label", "group2_label") %in% names(wgbs_dmr)) ||
+     anyNA(wgbs_dmr$group1_label) || anyNA(wgbs_dmr$group2_label) ||
+     !identical(unique(as.character(wgbs_dmr$group1_label)), reference_group) ||
+     !identical(unique(as.character(wgbs_dmr$group2_label)), comparison_group)) {
+    stop("WGBS DMR 缺少或不匹配当前 comparison-reference 的方向标签")
+  }
+
+  if(!"diffMethy" %in% colnames(wgbs_dmr) && "diff.Methy" %in% colnames(wgbs_dmr)) {
+    wgbs_dmr$diffMethy <- wgbs_dmr$diff.Methy
+  }
+  wgbs_dmr <- ensure_columns(wgbs_dmr, list(
+    seqnames = NA_character_,
+    start = NA_real_,
+    end = NA_real_,
+    diffMethy = NA_real_,
+    annotation = NA_character_,
+    annotation_simple = NA_character_,
+    group1_label = NA_character_,
+    group2_label = NA_character_,
+    SYMBOL = NA_character_
+  ))
+  wgbs_dmr$seqnames <- ensure_ucsc_seqnames(wgbs_dmr$seqnames)
+  wgbs_dmr$delta_methylation <- suppressWarnings(as.numeric(wgbs_dmr$diffMethy))
+  wgbs_dmr$hypomethylation_score <- -wgbs_dmr$delta_methylation
+  wgbs_dmr$WGBS_Direction <- case_when(
+    wgbs_dmr$delta_methylation > 0 ~ "Comparison-hyper",
+    wgbs_dmr$delta_methylation < 0 ~ "Comparison-hypo",
+    TRUE ~ "Neutral"
+  )
+  wgbs_dmr$WGBS_FeatureGroup <- ifelse(
+    !is.na(wgbs_dmr$annotation_simple) & wgbs_dmr$annotation_simple != "",
+    wgbs_dmr$annotation_simple,
+    normalize_feature_label(wgbs_dmr$annotation)
+  )
+
+  atac_diff <- res_df %>%
+    mutate(
+      seqnames = ensure_ucsc_seqnames(seqnames),
+      peak_id = paste(seqnames, start, end, sep = ":")
+    )
+
+  gr_atac <- GRanges(seqnames = atac_diff$seqnames, ranges = IRanges(start = atac_diff$start, end = atac_diff$end))
+  gr_wgbs <- GRanges(seqnames = wgbs_dmr$seqnames, ranges = IRanges(start = wgbs_dmr$start, end = wgbs_dmr$end))
+  overlaps <- findOverlaps(gr_atac, gr_wgbs, minoverlap = 100)
+
+  atac_wgbs_overlap <- data.frame(
+    peak_id = atac_diff$peak_id[queryHits(overlaps)],
+    atac_log2FC = atac_diff$Fold[queryHits(overlaps)],
+    delta_methylation = wgbs_dmr$delta_methylation[subjectHits(overlaps)],
+    hypomethylation_score = wgbs_dmr$hypomethylation_score[subjectHits(overlaps)],
+    wgbs_diffMethy = wgbs_dmr$delta_methylation[subjectHits(overlaps)],
+    wgbs_direction = wgbs_dmr$WGBS_Direction[subjectHits(overlaps)],
+    wgbs_feature_group = wgbs_dmr$WGBS_FeatureGroup[subjectHits(overlaps)],
+    wgbs_gene = wgbs_dmr$SYMBOL[subjectHits(overlaps)],
+    wgbs_group1 = wgbs_dmr$group1_label[subjectHits(overlaps)],
+    wgbs_group2 = wgbs_dmr$group2_label[subjectHits(overlaps)],
+    stringsAsFactors = FALSE
+  ) %>%
+    filter(!is.na(atac_log2FC) & !is.na(delta_methylation)) %>%
+    mutate(
+      ATAC_WGBS_Pattern = case_when(
+        atac_log2FC > 0 & delta_methylation < 0 ~ "Open-Hypo",
+        atac_log2FC < 0 & delta_methylation > 0 ~ "Close-Hyper",
+        atac_log2FC > 0 & delta_methylation > 0 ~ "Open-Hyper",
+        atac_log2FC < 0 & delta_methylation < 0 ~ "Close-Hypo",
+        TRUE ~ "Mixed"
+      )
+    )
+  write.csv(atac_wgbs_overlap, file.path(step11_table_dir, "atac_wgbs_overlap_all.csv"), row.names = FALSE)
+
+  if(nrow(atac_wgbs_overlap) >= min_wgbs_overlap_n) {
+    safe_wgbs_cor <- function(df, scope, method) {
+      keep <- complete.cases(df$atac_log2FC, df$hypomethylation_score)
+      if(sum(keep) < min_wgbs_overlap_n) {
+        return(data.frame(
+          Scope = scope,
+          Method = method,
+          Estimate = NA_real_,
+          PValue = NA_real_,
+          N = sum(keep),
+          Interpretation = "too_few_overlaps_for_correlation",
+          stringsAsFactors = FALSE
+        ))
+      }
+      test <- suppressWarnings(cor.test(df$atac_log2FC[keep], df$hypomethylation_score[keep], method = method))
+      data.frame(
+        Scope = scope,
+        Method = method,
+        Estimate = unname(test$estimate),
+        PValue = test$p.value,
+        N = sum(keep),
+        Interpretation = "estimated",
+        stringsAsFactors = FALSE
+      )
+    }
+    atac_wgbs_correlation_stats <- bind_rows(
+      safe_wgbs_cor(atac_wgbs_overlap, "All", "pearson"),
+      safe_wgbs_cor(atac_wgbs_overlap, "All", "spearman"),
+      atac_wgbs_overlap %>%
+        filter(!is.na(wgbs_feature_group), wgbs_feature_group != "") %>%
+        group_by(wgbs_feature_group) %>%
+        group_modify(~bind_rows(
+          safe_wgbs_cor(.x, .y$wgbs_feature_group, "pearson"),
+          safe_wgbs_cor(.x, .y$wgbs_feature_group, "spearman")
+        )) %>%
+        ungroup()
+    )
+    save_step_table(atac_wgbs_correlation_stats, "Step11", "ATAC_WGBS_Correlation_Stats.csv")
+
+    overall_pearson <- atac_wgbs_correlation_stats %>% filter(Scope == "All", Method == "pearson") %>% slice_head(n = 1)
+    overall_spearman <- atac_wgbs_correlation_stats %>% filter(Scope == "All", Method == "spearman") %>% slice_head(n = 1)
+    p_joint <- ggplot(atac_wgbs_overlap, aes(x = hypomethylation_score, y = atac_log2FC, color = ATAC_WGBS_Pattern)) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
+      geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
+      geom_point(alpha = 0.78, size = 2) +
+      geom_smooth(method = "lm", se = TRUE, color = viz_pal$group[comparison_group]) +
+      scale_color_manual(values = pal_named(
+        `Open-Hypo` = viz_pal$group[comparison_group],
+        `Close-Hyper` = viz_pal$group[reference_group],
+        `Open-Hyper` = viz_pal$accent["warm"],
+        `Close-Hypo` = viz_pal$accent["purple"],
+        Mixed = viz_pal$neutral_mid
+      )) +
+      theme_atac_classic(base_size = 12) +
+      labs(
+        title = "ATAC accessibility vs WGBS methylation change",
+        subtitle = paste0(
+          "Pearson r = ", round(overall_pearson$Estimate[1], 3),
+          "; Spearman rho = ", round(overall_spearman$Estimate[1], 3),
+          "; WGBS delta = Comparison - Reference"
+        ),
+        x = "Hypomethylation score (Reference - Comparison)",
+        y = paste("ATAC log2FC (", contrast_label, ")"),
+        color = "ATAC-WGBS pattern"
+    )
+    save_plot_pdf(p_joint, file.path(step11_plot_dir, "atac_wgbs_correlation.pdf"), width = 8, height = 6)
+  } else {
+    atac_wgbs_correlation_stats <- data.frame(
+      Scope = "All",
+      Method = c("pearson", "spearman"),
+      Estimate = NA_real_,
+      PValue = NA_real_,
+      N = nrow(atac_wgbs_overlap),
+      Interpretation = "too_few_overlaps_for_correlation",
+      stringsAsFactors = FALSE
+    )
+    save_step_table(atac_wgbs_correlation_stats, "Step11", "ATAC_WGBS_Correlation_Stats.csv")
+    write_skipped_state(
+      "Step11",
+      "WGBS_DMR_Correlation",
+      paste0("Only ", nrow(atac_wgbs_overlap), " ATAC-DMR overlaps were available; at least ", min_wgbs_overlap_n, " are required for correlation."),
+      clear_plot_files = c("atac_wgbs_correlation.pdf")
+    )
+  }
+} else {
+  write_skipped_state(
+    "Step11",
+    "WGBS_DMR_Overlap",
+    "Missing WGBS DMR annotation table or differential ATAC peaks.",
+    clear_plot_files = c("atac_wgbs_correlation.pdf")
+  )
+}
+
+if(!is.na(wgbs_gene_centric_file)) {
+  wgbs_gene_centric <- read.csv(wgbs_gene_centric_file, stringsAsFactors = FALSE)
+  if("SYMBOL" %in% colnames(wgbs_gene_centric) && !"geneSymbol" %in% colnames(wgbs_gene_centric)) {
+    colnames(wgbs_gene_centric)[colnames(wgbs_gene_centric) == "SYMBOL"] <- "geneSymbol"
+  }
+  if(!"geneSymbol" %in% colnames(wgbs_gene_centric) && "GeneSymbol" %in% colnames(wgbs_gene_centric)) {
+    colnames(wgbs_gene_centric)[colnames(wgbs_gene_centric) == "GeneSymbol"] <- "geneSymbol"
+  }
+  if(!"geneSymbol" %in% colnames(wgbs_gene_centric)) {
+    wgbs_gene_centric$geneSymbol <- NA_character_
+  }
+  wgbs_gene_centric <- ensure_columns(wgbs_gene_centric, list(gene_id_clean = NA_character_))
+
+  promoter_col <- detect_first_column(colnames(wgbs_gene_centric), "^diffMethy_Promoter$")
+  genebody_col <- detect_first_column(colnames(wgbs_gene_centric), "^diffMethy_Gene(\\.| )?Body$")
+  cgi_col <- detect_first_column(colnames(wgbs_gene_centric), "^diffMethy_CGI$")
+  distal_col <- detect_first_column(colnames(wgbs_gene_centric), "^diffMethy_Distal$")
+  meth_col_map <- c(Promoter = promoter_col, GeneBody = genebody_col, CGI = cgi_col, Distal = distal_col)
+  meth_col_map <- meth_col_map[!is.na(meth_col_map)]
+
+  if(length(meth_col_map) > 0) {
+    wgbs_gene_centric_support <- wgbs_gene_centric %>%
+      mutate(geneSymbol = ifelse(is.na(geneSymbol) | geneSymbol == "", gene_id_clean, geneSymbol))
+
+    meth_mat <- as.matrix(wgbs_gene_centric_support[, unname(meth_col_map), drop = FALSE])
+    mode(meth_mat) <- "numeric"
+    colnames(meth_mat) <- names(meth_col_map)
+
+    strongest_idx <- apply(meth_mat, 1, function(v) {
+      if(all(is.na(v))) return(NA_integer_)
+      which.max(abs(v))[1]
+    })
+    strongest_layer <- ifelse(is.na(strongest_idx), NA_character_, colnames(meth_mat)[strongest_idx])
+    strongest_meth <- vapply(seq_len(nrow(meth_mat)), function(i) {
+      idx <- strongest_idx[i]
+      if(is.na(idx)) return(NA_real_)
+      meth_mat[i, idx]
+    }, numeric(1))
+    primary_meth <- if("Promoter" %in% colnames(meth_mat)) {
+      promoter_vals <- meth_mat[, "Promoter"]
+      ifelse(is.na(promoter_vals), strongest_meth, promoter_vals)
+    } else {
+      strongest_meth
+    }
+    max_abs_meth <- apply(meth_mat, 1, function(v) {
+      if(all(is.na(v))) return(NA_real_)
+      max(abs(v), na.rm = TRUE)
+    })
+
+	    wgbs_gene_centric_support <- wgbs_gene_centric_support %>%
+	      mutate(
+	        WGBSPreferredJoinKey = ifelse(!is.na(gene_id_clean) & gene_id_clean != "", "gene_id_clean", "geneSymbol"),
+	        WGBS_StrongestLayer = strongest_layer,
+	        WGBS_PrimaryMethDiff = primary_meth,
+	        WGBS_PrimaryHypomethylationScore = -primary_meth,
+	        WGBS_MaxAbsMethy = max_abs_meth,
+	        WGBSEvidenceScore = round(10 * pmin(1, abs(replace_na(WGBS_MaxAbsMethy, 0)) / 0.25), 2),
+	        WGBS_LayerCount = rowSums(!is.na(meth_mat)),
+	        WGBS_PromoterMethDiff = if("Promoter" %in% colnames(meth_mat)) meth_mat[, "Promoter"] else NA_real_,
+	        WGBS_GeneBodyMethDiff = if("GeneBody" %in% colnames(meth_mat)) meth_mat[, "GeneBody"] else NA_real_,
+        WGBS_CGIMethDiff = if("CGI" %in% colnames(meth_mat)) meth_mat[, "CGI"] else NA_real_,
+        WGBS_DistalMethDiff = if("Distal" %in% colnames(meth_mat)) meth_mat[, "Distal"] else NA_real_
+      ) %>%
+	      dplyr::select(
+	        any_of(c("gene_id_clean", "geneSymbol", "WGBSPreferredJoinKey")),
+	        WGBS_StrongestLayer, WGBS_PrimaryMethDiff, WGBS_PrimaryHypomethylationScore,
+	        WGBS_MaxAbsMethy, WGBSEvidenceScore, WGBS_LayerCount,
+	        WGBS_PromoterMethDiff, WGBS_GeneBodyMethDiff, WGBS_CGIMethDiff, WGBS_DistalMethDiff
+	      ) %>%
+      distinct()
+    write.csv(wgbs_gene_centric_support, file.path(step11_table_dir, "wgbs_gene_centric_support.csv"), row.names = FALSE)
+
+    if(nrow(multiomics_candidates) > 0) {
+      wgbs_support_cols <- c(
+        "WGBS_gene_id_clean", "WGBS_StrongestLayer", "WGBS_PrimaryMethDiff",
+        "WGBS_PrimaryHypomethylationScore", "WGBS_MaxAbsMethy", "WGBS_LayerCount",
+        "WGBS_PromoterMethDiff", "WGBS_GeneBodyMethDiff", "WGBS_CGIMethDiff", "WGBS_DistalMethDiff"
+      )
+      wgbs_support_for_join <- wgbs_gene_centric_support %>%
+        mutate(WGBS_gene_id_clean = gene_id_clean)
+      wgbs_support_by_id <- wgbs_support_for_join %>%
+        filter(!is.na(gene_id_clean), gene_id_clean != "") %>%
+        distinct(gene_id_clean, .keep_all = TRUE) %>%
+        dplyr::select(gene_id_clean, any_of(wgbs_support_cols))
+      wgbs_support_by_symbol <- wgbs_support_for_join %>%
+        filter(!is.na(geneSymbol), geneSymbol != "") %>%
+        distinct(geneSymbol, .keep_all = TRUE) %>%
+        dplyr::select(geneSymbol, any_of(wgbs_support_cols)) %>%
+        rename_with(~paste0(.x, "_symbol"), -geneSymbol)
+
+      wgbs_joined <- multiomics_candidates %>%
+        left_join(wgbs_support_by_id, by = c("ensembl_id" = "gene_id_clean")) %>%
+        left_join(wgbs_support_by_symbol, by = "geneSymbol")
+
+      for(join_col in wgbs_support_cols) {
+        symbol_col <- paste0(join_col, "_symbol")
+        if(join_col %in% colnames(wgbs_joined) && symbol_col %in% colnames(wgbs_joined)) {
+          wgbs_joined[[join_col]] <- dplyr::coalesce(wgbs_joined[[join_col]], wgbs_joined[[symbol_col]])
+        } else if(!join_col %in% colnames(wgbs_joined) && symbol_col %in% colnames(wgbs_joined)) {
+          wgbs_joined[[join_col]] <- wgbs_joined[[symbol_col]]
+        }
+      }
+
+      wgbs_candidates <- wgbs_joined %>%
+        mutate(
+          WGBSJoinMode = case_when(
+            !is.na(ensembl_id) & ensembl_id != "" & ensembl_id == WGBS_gene_id_clean ~ "gene_id_clean",
+            !is.na(WGBS_MaxAbsMethy) ~ "geneSymbol_fallback",
+            TRUE ~ NA_character_
+          )
+        ) %>%
+        filter(!is.na(WGBS_PrimaryMethDiff) | !is.na(WGBS_MaxAbsMethy)) %>%
+        mutate(
+          WGBSEvidenceScore = round(10 * pmin(1, abs(replace_na(WGBS_MaxAbsMethy, 0)) / 0.25), 2),
+          ATAC_RNA_WGBS_PriorityScore = round(pmin(90, replace_na(IntegratedPriorityScore, 0) + WGBSEvidenceScore), 2),
+          ATAC_WGBS_Pattern = case_when(
+            MaxATACFold > 0 & WGBS_PrimaryMethDiff < 0 ~ "Open-Hypo",
+            MaxATACFold < 0 & WGBS_PrimaryMethDiff > 0 ~ "Close-Hyper",
+            MaxATACFold > 0 & WGBS_PrimaryMethDiff > 0 ~ "Open-Hyper",
+            MaxATACFold < 0 & WGBS_PrimaryMethDiff < 0 ~ "Close-Hypo",
+            TRUE ~ "Mixed"
+          ),
+          ATAC_RNA_WGBS_Pattern = case_when(
+            MaxATACFold > 0.58 & RNA_log2FC > 0.58 & WGBS_PrimaryMethDiff < -0.05 ~ "Open-Up-Hypo",
+            MaxATACFold < -0.58 & RNA_log2FC < -0.58 & WGBS_PrimaryMethDiff > 0.05 ~ "Close-Down-Hyper",
+            MaxATACFold > 0.58 & RNA_log2FC > 0.58 & WGBS_PrimaryMethDiff > 0.05 ~ "Open-Up-Hyper",
+            MaxATACFold < -0.58 & RNA_log2FC < -0.58 & WGBS_PrimaryMethDiff < -0.05 ~ "Close-Down-Hypo",
+            MaxATACFold > 0.58 & RNA_log2FC < -0.58 & WGBS_PrimaryMethDiff < -0.05 ~ "Open-Down-Hypo",
+            MaxATACFold < -0.58 & RNA_log2FC > 0.58 & WGBS_PrimaryMethDiff > 0.05 ~ "Close-Up-Hyper",
+            TRUE ~ "Mixed/Weak"
+          )
+        ) %>%
+        dplyr::select(-ends_with("_symbol")) %>%
+        arrange(desc(ATAC_RNA_WGBS_PriorityScore), desc(IntegratedPriorityScore), desc(WGBS_MaxAbsMethy), RNA_pvalue)
+      write.csv(wgbs_candidates, file.path(step11_table_dir, "atac_wgbs_gene_centric_candidates.csv"), row.names = FALSE)
+
+      wgbs_gene_centric_long <- wgbs_candidates %>%
+        dplyr::select(
+          geneSymbol,
+          ensembl_id,
+          WGBSJoinMode,
+          IntegratedPriorityScore,
+          ATAC_RNA_WGBS_PriorityScore,
+          WGBSEvidenceScore,
+          ATAC = MaxATACFold,
+          RNA = RNA_log2FC,
+          WGBS_Primary = WGBS_PrimaryMethDiff,
+          WGBS_Hypomethylation = WGBS_PrimaryHypomethylationScore,
+          WGBS_MaxAbs = WGBS_MaxAbsMethy,
+          WGBS_Promoter = WGBS_PromoterMethDiff,
+          WGBS_GeneBody = WGBS_GeneBodyMethDiff,
+          WGBS_CGI = WGBS_CGIMethDiff,
+          WGBS_Distal = WGBS_DistalMethDiff
+        ) %>%
+        pivot_longer(
+          cols = -c(geneSymbol, ensembl_id, WGBSJoinMode, IntegratedPriorityScore, ATAC_RNA_WGBS_PriorityScore),
+          names_to = "EvidenceType",
+          values_to = "EvidenceValue"
+        )
+      save_step_table(wgbs_gene_centric_long, "Step11", "ATAC_WGBS_Gene_Centric_Long.csv")
+
+      if(nrow(wgbs_candidates) > 2) {
+        top_wgbs_gene_labels <- wgbs_candidates %>%
+          filter(!is.na(MaxATACFold), !is.na(WGBS_PrimaryMethDiff)) %>%
+          slice_max(order_by = ATAC_RNA_WGBS_PriorityScore, n = 20, with_ties = FALSE)
+        p_wgbs_gene_full <- ggplot(
+          wgbs_candidates %>% filter(!is.na(MaxATACFold), !is.na(WGBS_PrimaryMethDiff)),
+          aes(x = WGBS_PrimaryMethDiff, y = MaxATACFold,
+              size = pmax(abs(replace_na(RNA_log2FC, 0)), 0.25),
+              color = ATAC_RNA_WGBS_PriorityScore)
+        ) +
+          geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
+          geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
+          geom_point(alpha = 0.78) +
+          geom_text_repel(data = top_wgbs_gene_labels, aes(label = geneSymbol), size = 3, max.overlaps = 40) +
+          scale_color_gradientn(colors = viz_pal$heat_meth) +
+          theme_atac_classic(base_size = 12) +
+          labs(
+            title = "ATAC-WGBS gene-centric concordance",
+            subtitle = paste0("Source: ", basename(wgbs_gene_centric_file)),
+            x = "WGBS primary methylation difference (Comparison - Reference)",
+            y = paste("Max ATAC log2FC (", contrast_label, ")"),
+            size = "|RNA log2FC|",
+            color = "ATAC-RNA-WGBS score"
+          )
+        save_plot_pdf(p_wgbs_gene_full, file.path(step11_plot_dir, "atac_wgbs_gene_centric_scatter.pdf"), width = 9, height = 7)
+      }
+    }
+  } else {
+    write_skipped_state(
+      "Step11",
+      "WGBS_Gene_Centric_Module",
+      "WGBS gene-centric table exists but lacks recognized methylation columns.",
+      clear_plot_files = c("atac_wgbs_gene_centric_scatter.pdf"),
+      extra = list(source_file = basename(wgbs_gene_centric_file))
+    )
+  }
+} else {
+  write_skipped_state(
+    "Step11",
+    "WGBS_Gene_Centric_Module",
+    "Missing WGBS gene-centric integration table.",
+    clear_plot_files = c("atac_wgbs_gene_centric_scatter.pdf")
+  )
+}
+
+if(!is.na(wgbs_kegg_compare_file)) {
+  wgbs_kegg_compare <- read.csv(wgbs_kegg_compare_file, stringsAsFactors = FALSE)
+  write.csv(wgbs_kegg_compare, file.path(step11_table_dir, "wgbs_rna_kegg_comparison_from_wgbs.csv"), row.names = FALSE)
+}
+
+if(!is.na(wgbs_rep_loci_file)) {
+  wgbs_rep_loci <- read.csv(wgbs_rep_loci_file, stringsAsFactors = FALSE)
+  if("SYMBOL" %in% colnames(wgbs_rep_loci) && !"geneSymbol" %in% colnames(wgbs_rep_loci)) {
+    colnames(wgbs_rep_loci)[colnames(wgbs_rep_loci) == "SYMBOL"] <- "geneSymbol"
+  }
+  write.csv(wgbs_rep_loci, file.path(step11_table_dir, "wgbs_representative_loci.csv"), row.names = FALSE)
+}
+```
+
+```{r save_wgbs_state, include=FALSE}
+save_state(
+  "11_wgbs_state.rds",
+  c(
+    "wgbs_candidates", "wgbs_gene_centric_support",
+    "wgbs_rep_loci", "atac_wgbs_overlap"
+  )
+)
+```

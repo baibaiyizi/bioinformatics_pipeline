@@ -48,14 +48,8 @@ coalesce_num_columns <- function(tbl, cols, default = NA_real_) {
 }
 
 discover_der_gtf <- function() {
-  candidates <- c(
-    Sys.getenv("GTF_FILE", unset = ""),
-    file.path(Sys.getenv("REFERENCE_DIR", unset = "/home/h1028/workspace/reference/GRCm39"), "Mus_musculus.GRCm39.115.gtf"),
-    list.files("/home/h1028/workspace/reference/GRCm39", pattern = "Mus_musculus\\.GRCm39.*\\.gtf$", full.names = TRUE)[1]
-  )
-  candidates <- candidates[!is.na(candidates) & nzchar(candidates)]
-  hit <- candidates[file.exists(candidates)]
-  if (length(hit) == 0) NA_character_ else hit[[1]]
+  value <- Sys.getenv("GTF_FILE", unset="")
+  if (nzchar(value) && file.exists(value)) value else NA_character_
 }
 
 annotate_der_nearest_genes <- function(der_tbl) {
@@ -68,7 +62,7 @@ annotate_der_nearest_genes <- function(der_tbl) {
   if (is.na(gtf_file) || !file.exists(gtf_file)) {
     return(data.frame(status = "skipped_missing_gtf"))
   }
-  pkg_state <- try_install_and_load(c("GenomicRanges", "IRanges", "rtracklayer"), bioc = TRUE)
+  pkg_state <- try_require_and_load(c("GenomicRanges", "IRanges", "rtracklayer"), bioc = TRUE)
   if (!isTRUE(pkg_state$ok)) {
     return(data.frame(status = paste0("skipped_missing_packages:", paste(pkg_state$missing, collapse = ","))))
   }
@@ -222,9 +216,9 @@ der_summary <- prepend_metadata_columns(der_overlap_summary, list(summary_type =
 write_csv_safe(der_all_regions, file.path(step13_dir, "14_1_all_DERs.csv"), row.names = FALSE)
 write_csv_safe(der_gene_summary_tbl, file.path(step13_dir, "14_DER_gene_evidence.csv"), row.names = FALSE)
 write_csv_safe(der_summary, file.path(step13_dir, "14_DER_summary.csv"), row.names = FALSE)
-write_csv_compat(der_sig_regions, file.path(step13_dir, "14_2_significant_DERs.csv"), row.names = FALSE)
-write_csv_compat(der_gene_summary_tbl, file.path(step13_dir, "14_3_DER_gene_summary.csv"), row.names = FALSE)
-write_csv_compat(der_overlap_summary, file.path(step13_dir, "14_4_DE_DER_overlap_summary.csv"), row.names = FALSE)
+
+
+
 ```
 
 ## 14.2 DER 图表
@@ -239,14 +233,14 @@ if (nrow(der_all_regions) > 0) {
     prepend_metadata_columns(der_class_tbl, list(summary_type = "region_class"))
   )
   write_csv_safe(der_summary, file.path(step13_dir, "14_DER_summary.csv"), row.names = FALSE)
-  write_csv_compat(der_class_tbl, file.path(step13_dir, "14_5_DER_region_class_summary.csv"), row.names = FALSE)
+
 
   der_class_plot <- ggplot(der_class_tbl, aes(x = reorder(region_class, region_count), y = region_count, fill = region_class)) +
     geom_col(width = 0.75) +
     coord_flip() +
     scale_fill_manual(values = resolve_named_colors(viz_pal$accent, der_class_tbl$region_class)) +
     labs(title = "DER genomic class distribution", x = NULL, y = "Region count") +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(legend.position = "none")
   save_plot_versions(der_class_plot, file.path(step13_dir, "14_6_DER_region_class_distribution.pdf"), width = 7, height = 4.5)
 
@@ -254,7 +248,7 @@ if (nrow(der_all_regions) > 0) {
     geom_histogram(bins = 40, alpha = 0.8, position = "identity") +
     scale_fill_manual(values = viz_rekey_colors(viz_pal$sig_status, c("TRUE" = "significant", "FALSE" = "ns"))) +
     labs(title = "DER width distribution", x = "Region width", y = "Count", fill = "Significant") +
-    theme_rnaseq_minimal()
+    theme_rnaseq_publication()
   save_plot_versions(der_width_plot, file.path(step13_dir, "14_7_DER_width_distribution.pdf"), width = 8, height = 5)
 
   top_der_plot <- der_all_regions %>%
@@ -267,7 +261,7 @@ if (nrow(der_all_regions) > 0) {
     coord_flip() +
     scale_fill_heatmap_diverging(midpoint = 0) +
     labs(title = "Top DER ranking", x = NULL, y = "-log10(PValue)", fill = "Effect") +
-    theme_rnaseq_minimal()
+    theme_rnaseq_publication()
   save_plot_versions(top_der_plot, file.path(step13_dir, "14_8_top_DER_ranking.pdf"), width = 8.5, height = 6.5)
 
   der_cov_mat <- read.delim(file.path(der_dir, "coverage_matrix.tsv"), row.names = 1, check.names = FALSE)
@@ -301,7 +295,7 @@ if (nrow(der_all_regions) > 0) {
     geom_col(width = 0.75) +
     scale_fill_manual(values = viz_pal$overlap[c("DER_only", "DE_only", "DER_and_DE")]) +
     labs(title = "DE 与 DER overlap", x = NULL, y = "Gene count") +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(legend.position = "none")
   save_plot_versions(der_overlap_plot, file.path(step13_dir, "14_10_DE_DER_overlap_barplot.pdf"), width = 7, height = 4.5)
 }

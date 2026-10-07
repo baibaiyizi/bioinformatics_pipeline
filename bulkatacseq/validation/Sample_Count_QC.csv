@@ -1,0 +1,5 @@
+"sample","biological_sample_id","group","size_factor","total_fragments"
+"01","animal1","control",0.996738133254566,103484
+"02","animal2","control",1.01656275088831,105977
+"03","animal3","treated",1.00115569075608,106664
+"04","animal4","treated",1.00744144594141,108164

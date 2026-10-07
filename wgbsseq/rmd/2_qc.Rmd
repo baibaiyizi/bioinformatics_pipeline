@@ -263,6 +263,30 @@ if(file.exists(qc_coverage_upstream_file) || file.exists(qc_coverage_file)) {
 
   ggsave(file.path(qc_plot_dir, "global_methylation_level_violin.pdf"), p_global_violin, width = 5.5, height = 6, device = cairo_pdf)
 
+  if(length(unique(global_meth$Group)) == 2) {
+    g1_meth <- global_meth$Methylation[global_meth$Group == config$group1_name]
+    g2_meth <- global_meth$Methylation[global_meth$Group == config$group2_name]
+    global_meth_test <- tryCatch(
+      wilcox.test(g1_meth, g2_meth, alternative = "two.sided"),
+      error = function(e) list(p.value = NA_real_, statistic = NA_real_)
+    )
+    global_meth_group_test <- tibble(
+      test = "Wilcoxon rank-sum (exploratory)",
+      group1 = config$group1_name,
+      group2 = config$group2_name,
+      group1_mean_pct = mean(g1_meth, na.rm = TRUE),
+      group2_mean_pct = mean(g2_meth, na.rm = TRUE),
+      diff_group2_minus_group1_percentage_points = group2_mean_pct - group1_mean_pct,
+      pvalue = global_meth_test$p.value,
+      direction = case_when(
+        group2_mean_pct < group1_mean_pct ~ paste0(config$group2_name, " lower than ", config$group1_name),
+        group2_mean_pct > group1_mean_pct ~ paste0(config$group2_name, " higher than ", config$group1_name),
+        TRUE ~ "no mean difference"
+      )
+    )
+    write_csv(global_meth_group_test, file.path(qc_table_dir, "global_methylation_group_test.csv"))
+  }
+
   # ------------------------------------------------------------------
   # 7 染色体级别平均甲基化热图
   # ------------------------------------------------------------------

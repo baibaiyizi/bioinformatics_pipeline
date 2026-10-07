@@ -1,0 +1,3 @@
+chr1	fixture	gene	9000	15000	.	+	.	gene_id "ENSMUSG00000000001"; gene_name "Gnai3";
+chr1	fixture	transcript	9000	15000	.	+	.	gene_id "ENSMUSG00000000001"; transcript_id "synthetic_transcript";
+chr1	fixture	exon	9000	15000	.	+	.	gene_id "ENSMUSG00000000001"; transcript_id "synthetic_transcript"; exon_number "1";

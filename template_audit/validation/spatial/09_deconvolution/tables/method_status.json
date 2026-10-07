@@ -1,0 +1,5 @@
+{
+  "method": "marker_score",
+  "output_kind": "marker_score_not_abundance",
+  "cross_sample_inference": "not_implemented"
+}

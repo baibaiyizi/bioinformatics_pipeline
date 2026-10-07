@@ -1,0 +1,701 @@
+# Module 08. Motif 富集与活性分析
+
+## Motif 富集分析
+
+使用 `motifmatchr` 和 `JASPAR2020` 检验差异 Peak 的 motif 序列富集。全部 tested accessible peaks 只扫描一次（`bg = "subject"`, `p.cutoff = 5e-5`），三套差异 Peak 查询共用该匹配矩阵；Fisher 检验比较查询子集与其在受检背景中的精确补集。扫描匹配阈值与富集检验阈值分别定义：后者按原始 pvalue < 0.05 展示候选，并保留 BH 校正列作补充诊断；它未做 GC/长度匹配，不能单独解释为 TF 结合或活性。
+
+```{r motif_cache_gate, include=FALSE}
+if(isTRUE(reuse_step_tables) && file.exists(cache_08_motif_state_path)) {
+  current_count_status <- read_consensus_count_status()
+  count_inputs_admitted <- "Status" %in% names(current_count_status) &&
+    nrow(current_count_status) > 0 &&
+    all(toupper(current_count_status$Status) %in% c("PASS", "COMPLETED")) &&
+    file.exists(file.path(work_dir, "04counts", "consensus_peak_counts.raw.tsv"))
+  motif_cached_payload <- load_state("08_motif_state.rds", env = globalenv(), required = FALSE)
+  cache_has_enrichment_schema <- isTRUE(count_inputs_admitted) && !is.null(motif_cached_payload) && exists("motif_res") &&
+    is.data.frame(motif_res) &&
+    all(c("AnalysisType", "pvalue", "p.adjust", "background_peak_count") %in% colnames(motif_res)) &&
+    exists("de_novo_motif_summary") && exists("chromvar_status") &&
+    identical(chromvar_status$Status, "COMPLETED")
+  if(isTRUE(cache_has_enrichment_schema)) {
+    report_status(
+      "INFO",
+      paste(
+        "Reusing cached motif state for module 8:",
+        cache_08_motif_state_path,
+        "(set ATAC_REUSE_STEP_TABLES=false to recompute)"
+      )
+    )
+    knitr::knit_exit()
+  }
+  report_status("WARN", "Existing motif cache uses the old frequency-only schema; recomputing module 8.")
+}
+```
+
+```{r motif_analysis}
+motif_res <- data.frame()
+motif_res_pfos <- data.frame()
+motif_res_wt <- data.frame()
+top_motifs <- data.frame()
+top_motifs_pfos <- data.frame()
+top_motifs_wt <- data.frame()
+directional_motif_df <- data.frame()
+motif_direction_summary <- data.frame()
+motif_scan_status <- list()
+unlink(step_table_file("Step8", "Motif_Scan_Status.csv"))
+unlink(vapply(c("Motif_Enrichment", "Directional_Motif_Enrichment"),
+              function(x) step_table_file("Step8", paste0(x, "_Skipped_State.csv")), character(1)))
+
+diff_primary_df <- filter_diff_peaks(res_df, mode = "primary")
+
+if(nrow(diff_primary_df) > 0) {
+  pfm <- getMatrixSet(JASPAR2020, opts = list(species = "Mus musculus", all_versions = FALSE))
+  motif_name_lookup <- TFBSTools::name(pfm)
+  names(motif_name_lookup) <- names(pfm)
+
+  top_diff_df <- diff_primary_df %>%
+    arrange(SelectedSignificanceValue, desc(abs(Fold)))
+  top_diff_peaks <- keep_primary_chromosomes(diff_peak_granges(top_diff_df))
+  seqlevelsStyle(top_diff_peaks) <- "UCSC"
+
+  # The tested DiffBind universe is the only valid enrichment background.
+  # Primary and directional queries are exact coordinate subsets of this universe.
+  background_peaks <- keep_primary_chromosomes(diff_peak_granges(all_res_df))
+  seqlevelsStyle(background_peaks) <- "UCSC"
+  tested_ids <- canonical_peak_id(seqnames(background_peaks), start(background_peaks), end(background_peaks))
+  if(anyNA(tested_ids) || anyDuplicated(tested_ids)) {
+    stop("Motif tested background must contain unique, non-missing canonical peak IDs")
+  }
+  # One subject composition and one motif threshold for every query and complement.
+  bg_match_mat <- if(length(background_peaks) > 0) tryCatch({
+    bg_ix <- matchMotifs(pfm, background_peaks, genome = BSgenome.Mmusculus.UCSC.mm39,
+                        bg = "subject", p.cutoff = 5e-5)
+    motifMatches(bg_ix)
+  }, error = function(e) {
+    report_status("WARN", paste("Tested-background motif scan failed:", e$message))
+    NULL
+  }) else NULL
+
+  motif_scan_summary <- function(gr_obj, label) {
+    gr_obj <- keep_primary_chromosomes(gr_obj)
+    query_ids <- canonical_peak_id(seqnames(gr_obj), start(gr_obj), end(gr_obj))
+    if(anyNA(tested_ids) || anyDuplicated(tested_ids) ||
+       anyNA(query_ids) || anyDuplicated(query_ids)) {
+      stop("Motif query and tested background must have unique, non-missing canonical peak IDs")
+    }
+    query_idx <- match(query_ids, tested_ids)
+    if(anyNA(query_idx)) stop("Motif query is not an exact subset of the tested DiffBind peak universe")
+    query_n <- length(query_idx)
+    background_n <- length(tested_ids)
+    outside_idx <- setdiff(seq_len(background_n), query_idx)
+    outside_n <- length(outside_idx)
+    unavailable_reason <- if(background_n == 0) "empty_tested_background" else
+      if(is.null(bg_match_mat)) "background_scan_failed" else
+        if(query_n == 0) "empty_query" else
+          if(outside_n == 0) "query_is_entire_background" else ""
+    motif_scan_status[[label]] <<- data.frame(
+      peak_set = label, Status = if(nzchar(unavailable_reason)) "UNAVAILABLE" else "COMPLETED",
+      Reason = unavailable_reason, query_peak_count = query_n,
+      background_peak_count = background_n, complement_peak_count = outside_n,
+      ScanBackground = "subject", ScanPvalueCutoff = 5e-5,
+      MatchMatrixSource = "one scan of the entire tested peak universe",
+      stringsAsFactors = FALSE
+    )
+    if(nzchar(unavailable_reason)) {
+      report_status("WARN", paste("Motif sequence enrichment unavailable for", label, ":", unavailable_reason))
+      return(data.frame())
+    }
+    if(nrow(bg_match_mat) != background_n || is.null(colnames(bg_match_mat)) ||
+       anyNA(colnames(bg_match_mat)) || anyDuplicated(colnames(bg_match_mat))) {
+      stop("Tested-background motif matrix dimensions or motif IDs are invalid")
+    }
+    motif_ids <- colnames(bg_match_mat)
+    motif_counts <- as.numeric(Matrix::colSums(bg_match_mat[query_idx, , drop = FALSE]))
+    bg_counts <- as.numeric(Matrix::colSums(bg_match_mat))
+    bg_outside_motif <- bg_counts - motif_counts
+    query_non_motif <- query_n - motif_counts
+    outside_non_motif <- outside_n - bg_outside_motif
+    contingency_counts <- cbind(motif_counts, query_non_motif, bg_outside_motif, outside_non_motif)
+    if(any(!is.finite(contingency_counts)) || any(contingency_counts < 0) ||
+       any(contingency_counts != round(contingency_counts)) ||
+       any(motif_counts + query_non_motif != query_n) ||
+       any(bg_outside_motif + outside_non_motif != outside_n) ||
+       any(motif_counts + bg_outside_motif != bg_counts) ||
+       any(query_non_motif + outside_non_motif != background_n - bg_counts) ||
+       any(rowSums(contingency_counts) != background_n) ||
+       any(bg_outside_motif != as.numeric(Matrix::colSums(bg_match_mat[outside_idx, , drop = FALSE])))) {
+      stop("Motif Fisher contingency counts violate non-negativity or query/complement totals")
+    }
+    names(motif_counts) <- motif_ids
+    motif_freq <- motif_counts / query_n
+
+    out <- data.frame(
+      motif_id = names(motif_counts),
+      motif_name = unname(motif_name_lookup[names(motif_counts)]),
+      count = motif_counts,
+      freq = motif_freq,
+      query_peak_count = query_n,
+      peak_set = label,
+      stringsAsFactors = FALSE
+    )
+
+    fisher_p <- vapply(seq_len(nrow(out)), function(i) {
+      stats::fisher.test(matrix(contingency_counts[i, ], nrow = 2, byrow = TRUE),
+                        alternative = "greater")$p.value
+    }, numeric(1))
+    odds_ratio <- ((out$count + 0.5) * (outside_non_motif + 0.5)) /
+      ((query_non_motif + 0.5) * (bg_outside_motif + 0.5))
+
+    out$query_non_motif_count <- query_non_motif
+    out$complement_peak_count <- outside_n
+    out$complement_count <- bg_outside_motif
+    out$complement_non_motif_count <- outside_non_motif
+    out$background_peak_count <- background_n
+    out$background_count <- bg_counts
+    out$background_freq <- bg_counts / background_n
+    out$odds_ratio <- odds_ratio
+    out$pvalue <- fisher_p
+    out$p.adjust <- p.adjust(fisher_p, method = "BH")
+    out$AnalysisType <- "motif_sequence_fisher_enrichment_vs_accessible_peak_background"
+
+    out$EvidenceRole <- "motif sequence enrichment only; not TF binding or activity"
+    out$BackgroundMatching <- "tested accessible peaks; no GC or length matching"
+    out %>%
+      arrange(is.na(pvalue), pvalue, desc(odds_ratio), desc(freq), desc(count))
+  }
+
+  pfos_peak_df <- diff_primary_df %>%
+    filter(Fold > 0) %>%
+    arrange(SelectedSignificanceValue, desc(abs(Fold)))
+  wt_peak_df <- diff_primary_df %>%
+    filter(Fold < 0) %>%
+    arrange(SelectedSignificanceValue, desc(abs(Fold)))
+
+  motif_res <- motif_scan_summary(top_diff_peaks, "All_DiffPeaks")
+  motif_res_pfos <- motif_scan_summary(diff_peak_granges(pfos_peak_df), "Comparison_open")
+  motif_res_wt <- motif_scan_summary(diff_peak_granges(wt_peak_df), "Reference_open")
+  save_step_table(bind_rows(motif_scan_status), "Step8", "Motif_Scan_Status.csv")
+
+  significant_motif_rows <- function(x, n = 20L) {
+    if(!is.data.frame(x) || !"pvalue" %in% names(x)) return(data.frame())
+    x %>% filter(is.finite(pvalue), pvalue >= 0, pvalue < 0.05) %>%
+      arrange(pvalue, desc(count)) %>% slice_head(n = n)
+  }
+  top_motifs <- significant_motif_rows(motif_res)
+  top_motifs_pfos <- significant_motif_rows(motif_res_pfos)
+  top_motifs_wt <- significant_motif_rows(motif_res_wt)
+
+  write.csv(motif_res, step_table_file("Step8", "Motif_Enrichment.csv"), row.names = FALSE)
+  write.csv(motif_res_pfos, step_table_file("Step8", "Comparison_Open_Motif_Enrichment.csv"), row.names = FALSE)
+  write.csv(motif_res_wt, step_table_file("Step8", "Reference_Open_Motif_Enrichment.csv"), row.names = FALSE)
+
+  if(nrow(top_motifs) > 0) {
+    top_motifs_plot <- top_motifs %>%
+      mutate(PlotScore = -log10(pmax(pvalue, 1e-300)))
+
+    p_motif <- ggplot(top_motifs_plot, aes(x = reorder(motif_name, PlotScore), y = PlotScore)) +
+      geom_bar(stat = "identity", fill = viz_pal$motif) +
+      coord_flip() +
+      theme_atac_classic(base_size = 12) +
+      labs(title = "Motif sequence enrichment in primary differential peaks",
+           subtitle = paste("Query:", primary_diff_peak_label(), "; accessible background, no GC/length matching"),
+           x = "Motif Name",
+           y = "-log10(raw pvalue)")
+
+    if(emit_light_plots) {
+      save_gg_dual(
+        p_motif,
+        file = step_plot_file("Step8", "Motif_Enrichment_Barplot.pdf"),
+        width = 8,
+        height = 10
+      )
+      print(p_motif)
+    }
+  } else {
+    write_skipped_state("Step8", "Motif_Enrichment", "No motif sequence enrichment had an available raw pvalue < 0.05.",
+                        clear_plot_files = "Motif_Enrichment_Barplot.pdf")
+  }
+
+  directional_motif_df <- bind_rows(
+    significant_motif_rows(motif_res_pfos, 15L),
+    significant_motif_rows(motif_res_wt, 15L)
+  )
+
+  if(nrow(directional_motif_df) > 0) {
+    directional_motif_df$peak_set <- factor(
+      directional_motif_df$peak_set,
+      levels = c("Reference_open", "Comparison_open")
+    )
+    directional_motif_df <- directional_motif_df %>%
+      mutate(PlotScore = -log10(pmax(pvalue, 1e-300)))
+
+    motif_direction_summary <- directional_motif_df %>%
+      mutate(
+        Direction = ifelse(peak_set == "Comparison_open", "Comparison_open", "Reference_open"),
+        SignedMotifScore = ifelse(Direction == "Comparison_open", 1, -1) * (PlotScore * log10(count + 1))
+      ) %>%
+      group_by(motif_name) %>%
+      summarise(
+        Comparison_open_freq = max(ifelse(Direction == "Comparison_open", freq, NA_real_), na.rm = TRUE),
+        Reference_open_freq = max(ifelse(Direction == "Reference_open", freq, NA_real_), na.rm = TRUE),
+        Comparison_open_count = max(ifelse(Direction == "Comparison_open", count, NA_real_), na.rm = TRUE),
+        Reference_open_count = max(ifelse(Direction == "Reference_open", count, NA_real_), na.rm = TRUE),
+        Comparison_open_Pvalue = min(ifelse(Direction == "Comparison_open", pvalue, NA_real_), na.rm = TRUE),
+        Comparison_open_FDR = min(ifelse(Direction == "Comparison_open", p.adjust, NA_real_), na.rm = TRUE),
+        Reference_open_Pvalue = min(ifelse(Direction == "Reference_open", pvalue, NA_real_), na.rm = TRUE),
+        Reference_open_FDR = min(ifelse(Direction == "Reference_open", p.adjust, NA_real_), na.rm = TRUE),
+        SignedDirectionScore = sum(replace_na(SignedMotifScore, 0)),
+        DominantDirection = case_when(
+          SignedDirectionScore > 0 ~ "Comparison_open",
+          SignedDirectionScore < 0 ~ "Reference_open",
+          TRUE ~ "Balanced"
+        ),
+        .groups = "drop"
+      ) %>%
+      mutate(across(where(is.numeric), ~ifelse(is.infinite(.x), NA_real_, .x)))
+    write.csv(directional_motif_df,
+              step_table_file("Step8", "Directional_Motif_Enrichment.csv"),
+              row.names = FALSE)
+    save_step_table(motif_direction_summary, "Step8", "Motif_Direction_Summary.csv")
+
+    p_directional_motif <- ggplot(directional_motif_df,
+                                  aes(x = reorder(motif_name, PlotScore), y = PlotScore, fill = peak_set)) +
+      geom_col(show.legend = FALSE) +
+      coord_flip() +
+      facet_wrap(~peak_set, scales = "free_y") +
+      scale_fill_manual(values = pal_named(
+        Comparison_open = viz_pal$group[treatment_group],
+        Reference_open = viz_pal$group[baseline_group]
+      )) +
+      theme_atac_classic(base_size = 12) +
+      labs(title = paste("Directional motif enrichment in", comparison_open_label, "vs", reference_open_label, "peaks"),
+           x = NULL, y = "-log10(raw pvalue)")
+
+    if(emit_light_plots) {
+      save_plot_pdf(p_directional_motif, step_plot_file("Step8", "Directional_Motif_Enrichment.pdf"), width = 12, height = 8)
+      print(p_directional_motif)
+    }
+  } else {
+    write_skipped_state("Step8", "Directional_Motif_Enrichment", "No directional motif sequence enrichment had an available raw pvalue < 0.05.",
+                        clear_plot_files = "Directional_Motif_Enrichment.pdf")
+  }
+
+} else {
+  cat("没有达到项目主阈值的差异 Peak，跳过 Motif 分析。\n")
+  write_skipped_state("Step8", "Motif_Enrichment", paste("No peaks passed", primary_diff_peak_label(), "."))
+}
+```
+
+## 7.0 MEME/Tomtom de novo motif
+
+```{r de_novo_meme_tomtom}
+run_meme_tomtom <- env_bool("ATAC_RUN_MEME_TOMTOM", run_profile == "full")
+meme_bin <- first_nonempty_value(Sys.getenv("ATAC_MEME_BIN", unset = ""), Sys.which("meme"))
+tomtom_bin <- first_nonempty_value(Sys.getenv("ATAC_TOMTOM_BIN", unset = ""), Sys.which("tomtom"))
+tomtom_db <- first_nonempty_value(Sys.getenv("ATAC_TOMTOM_DB", unset = ""), default_jaspar_meme_db)
+de_novo_motif_summary <- data.frame()
+
+write_peak_fasta_for_meme <- function(sample_name, peak_file, out_fasta, top_n = 500L) {
+  if(!file.exists(peak_file)) return(FALSE)
+  peak_tbl <- tryCatch(
+    read.delim(peak_file, header = FALSE, stringsAsFactors = FALSE),
+    error = function(e) data.frame()
+  )
+  if(nrow(peak_tbl) == 0 || ncol(peak_tbl) < 3) return(FALSE)
+  colnames(peak_tbl)[1:min(ncol(peak_tbl), 10)] <- c("chr", "start0", "end", "name", "score", "strand", "fold_enrichment", "neg_log10_pvalue", "neg_log10_qvalue", "summit")[1:min(ncol(peak_tbl), 10)]
+  if(!"neg_log10_pvalue" %in% colnames(peak_tbl)) {
+    report_status("WARN", paste("MEME input raw peak pvalue is unavailable for", sample_name))
+    return(FALSE)
+  }
+  rank_col <- "neg_log10_pvalue"
+  peak_tbl <- peak_tbl %>%
+    mutate(
+      chr = ensure_ucsc_seqnames(chr),
+      start = as.integer(start0) + 1L,
+      end = as.integer(end),
+      score_rank = suppressWarnings(as.numeric(.data[[rank_col]]))
+    ) %>%
+    filter(chr %in% primary_chr_ucsc, !is.na(start), !is.na(end), end >= start,
+           is.finite(score_rank), score_rank > -log10(0.05)) %>%
+    arrange(desc(score_rank)) %>%
+    slice_head(n = top_n)
+  if(nrow(peak_tbl) == 0) return(FALSE)
+  gr <- GRanges(seqnames = peak_tbl$chr, ranges = IRanges(start = peak_tbl$start, end = peak_tbl$end))
+  gr <- keep_primary_chromosomes(gr)
+  if(length(gr) == 0) return(FALSE)
+  seqs <- getSeq(BSgenome.Mmusculus.UCSC.mm39, gr)
+  names(seqs) <- paste(sample_name, seqnames(gr), start(gr), end(gr), sep = "_")
+  Biostrings::writeXStringSet(seqs, filepath = out_fasta)
+  TRUE
+}
+
+if(!run_meme_tomtom) {
+  write_skipped_state("Step8", "DeNovo_MEME_Tomtom", "ATAC_RUN_MEME_TOMTOM is false; de novo MEME/Tomtom was not executed.")
+} else if(!nzchar(meme_bin)) {
+  write_skipped_state("Step8", "DeNovo_MEME_Tomtom", "MEME executable was not found in PATH.")
+} else {
+  meme_root <- file.path(step_table_dir("Step8"), "DeNovo_MEME")
+  dir.create(meme_root, recursive = TRUE, showWarnings = FALSE)
+
+  de_novo_motif_summary <- bind_rows(lapply(samples, function(sample_name) {
+    fasta_file <- file.path(meme_root, paste0(sample_name, "_top500_peaks.fa"))
+    meme_out_dir <- file.path(meme_root, paste0(sample_name, "_meme"))
+    tomtom_out_dir <- file.path(meme_root, paste0(sample_name, "_tomtom"))
+    fasta_ok <- write_peak_fasta_for_meme(sample_name, peak_files[[sample_name]], fasta_file, top_n = 500L)
+    if(!fasta_ok) {
+      return(data.frame(Sample = sample_name, Group = sample_group(sample_name), MEME = "skipped_no_fasta", Tomtom = "skipped", Fasta = fasta_file, MEME_Dir = meme_out_dir, Tomtom_Dir = tomtom_out_dir, stringsAsFactors = FALSE))
+    }
+    meme_status <- system2(
+      meme_bin,
+      c(fasta_file, "-dna", "-mod", "zoops", "-nmotifs", "10", "-minw", "6", "-maxw", "20", "-oc", meme_out_dir),
+      stdout = file.path(meme_root, paste0(sample_name, "_meme.log")),
+      stderr = file.path(meme_root, paste0(sample_name, "_meme.err"))
+    )
+    meme_ok <- identical(meme_status, 0L) || identical(meme_status, 0)
+    tomtom_state <- "skipped_no_db_or_tomtom"
+    meme_txt <- file.path(meme_out_dir, "meme.txt")
+    if(meme_ok && nzchar(tomtom_bin) && nzchar(tomtom_db) && file.exists(tomtom_db) && file.exists(meme_txt)) {
+      tomtom_status <- system2(
+        tomtom_bin,
+        c("-oc", tomtom_out_dir, "-verbosity", "1", meme_txt, tomtom_db),
+        stdout = file.path(meme_root, paste0(sample_name, "_tomtom.log")),
+        stderr = file.path(meme_root, paste0(sample_name, "_tomtom.err"))
+      )
+      tomtom_state <- ifelse(identical(tomtom_status, 0L) || identical(tomtom_status, 0), "ok", "failed")
+    }
+    data.frame(
+      Sample = sample_name,
+      Group = sample_group(sample_name),
+      MEME = ifelse(meme_ok, "ok", "failed"),
+      Tomtom = tomtom_state,
+      Fasta = fasta_file,
+      MEME_Dir = meme_out_dir,
+      Tomtom_Dir = tomtom_out_dir,
+      stringsAsFactors = FALSE
+    )
+  }))
+  save_step_table(de_novo_motif_summary, "Step8", "DeNovo_MEME_Tomtom_Summary.csv")
+}
+```
+
+## 7.1 chromVAR motif activity across samples
+
+该路径只接受正式 chromVAR deviation；缺依赖或输入不完整时写 skipped-state，不再用简化平均可及性冒充 chromVAR。当前每组仅 2 个样本，组间 limma 检验仅作为探索性证据。
+
+```{r formal_chromvar_activity, fig.width=10, fig.height=8}
+chromvar_status <- data.frame(
+  Status = "SKIPPED",
+  Reason = "not evaluated",
+  EvidenceRole = "exploratory; n=2 per group",
+  stringsAsFactors = FALSE
+)
+motif_activity_mat <- NULL
+motif_activity_z_mat <- NULL
+motif_activity_deviations_mat <- NULL
+motif_activity_summary <- data.frame(
+  motif_name = character(), ReferenceMean = numeric(), ComparisonMean = numeric(),
+  GroupMeanDifference = numeric(), Variance = numeric(), Method = character(),
+  stringsAsFactors = FALSE
+)
+chromvar_limma_tbl <- data.frame()
+
+# 清除旧近似和上次正式计算产物，失败时仅保留本次状态。
+chromvar_table_outputs <- c("ChromVAR_Deviation_Scores.csv", "ChromVAR_Deviations.csv",
+  "ChromVAR_Deviation_ZScores.csv", "ChromVAR_Group_Comparison_Exploratory.csv",
+  "ChromVAR_Limma_Exploratory.csv", "ChromVAR_GC_Bias.csv", "ChromVAR_Nonfinite_Motifs.csv",
+  "Motif_Activity_Sample_Matrix.csv", "Motif_Activity_Summary.csv", "Motif_Activity_Method.csv",
+  "Motif_Activity_Enrichment_Combined.csv", "chromVAR_Skipped_State.csv",
+  "ChromVAR_Motif_Activity_Heatmap_Skipped_State.csv")
+unlink(vapply(chromvar_table_outputs, function(x) step_table_file("Step8", x), character(1)))
+invisible(lapply(c("ChromVAR_Motif_Activity_Heatmap.pdf", "Motif_Activity_Heatmap.pdf",
+  "Motif_Activity_Delta_Barplot.pdf", "Motif_Direction_Heatmap.pdf", "Motif_Activity_vs_Enrichment.pdf"),
+  function(x) remove_output_with_preview(step_plot_file("Step8", x))))
+
+chromvar_requirements <- c("chromVAR", "SummarizedExperiment", "limma")
+chromvar_missing <- chromvar_requirements[!vapply(chromvar_requirements, requireNamespace, logical(1), quietly = TRUE)]
+chromvar_counts <- read_consensus_count_matrix("raw")
+chromvar_sample_cols <- order_sample_columns(intersect(samples, colnames(chromvar_counts)))
+pfm_chromvar <- if(exists("pfm")) pfm else getMatrixSet(JASPAR2020, opts = list(species = "Mus musculus", all_versions = FALSE))
+motif_name_lookup_chromvar <- stats::setNames(TFBSTools::name(pfm_chromvar), names(pfm_chromvar))
+
+if(length(chromvar_missing) > 0) {
+  chromvar_status$Reason <- paste("Missing packages:", paste(chromvar_missing, collapse = ", "))
+  write_skipped_state("Step8", "chromVAR", chromvar_status$Reason)
+} else if(nrow(chromvar_counts) == 0 || !all(c("CHR", "END") %in% colnames(chromvar_counts)) ||
+          length(chromvar_sample_cols) != length(samples)) {
+  chromvar_status$Reason <- "Consensus raw fragment counts or one or more sample columns are missing."
+  write_skipped_state("Step8", "chromVAR", chromvar_status$Reason)
+} else {
+  chromvar_start <- if("START_1BASED" %in% colnames(chromvar_counts)) chromvar_counts$START_1BASED else chromvar_counts$START + 1L
+  chromvar_ranges <- GRanges(
+    seqnames = ensure_ucsc_seqnames(chromvar_counts$CHR),
+    ranges = IRanges(start = as.integer(chromvar_start), end = as.integer(chromvar_counts$END))
+  )
+  keep_idx <- as.character(seqnames(chromvar_ranges)) %in% primary_chr_ucsc & granges_genome_keep_idx(chromvar_ranges)
+  chromvar_ranges <- chromvar_ranges[keep_idx]
+  chromvar_count_mat <- as.matrix(chromvar_counts[keep_idx, chromvar_sample_cols, drop = FALSE])
+  storage.mode(chromvar_count_mat) <- "numeric"
+
+  chromvar_result <- tryCatch({
+    if(length(chromvar_ranges) == 0 || nrow(chromvar_count_mat) == 0) stop("No primary-chromosome peaks remain")
+    if(any(!is.finite(chromvar_count_mat)) || any(chromvar_count_mat < 0) || any(abs(chromvar_count_mat - round(chromvar_count_mat)) > 1e-6)) {
+      stop("chromVAR requires non-negative raw integer fragment counts")
+    }
+    if(any(colSums(chromvar_count_mat) == 0)) stop("At least one sample has zero raw fragment counts")
+    positive_peaks <- rowSums(chromvar_count_mat) > 0
+    chromvar_count_mat <- chromvar_count_mat[positive_peaks, , drop = FALSE]
+    chromvar_ranges <- chromvar_ranges[positive_peaks]
+    se <- SummarizedExperiment::SummarizedExperiment(
+      assays = list(counts = round(chromvar_count_mat)),
+      rowRanges = chromvar_ranges
+    )
+    se <- chromVAR::addGCBias(se, genome = BSgenome.Mmusculus.UCSC.mm39)
+    motif_annotations <- motifmatchr::matchMotifs(pfm_chromvar, se, genome = BSgenome.Mmusculus.UCSC.mm39)
+    if(ncol(motifmatchr::motifMatches(motif_annotations)) == 0) stop("No motif annotations were generated")
+    set.seed(123)
+    background_peaks_chromvar <- chromVAR::getBackgroundPeaks(se)
+    deviations <- chromVAR::computeDeviations(
+      object = se,
+      annotations = motif_annotations,
+      background_peaks = background_peaks_chromvar
+    )
+    raw_deviations <- chromVAR::deviations(deviations)
+    z_scores <- chromVAR::deviationScores(deviations)
+    finite_motifs <- rowSums(is.finite(z_scores)) == ncol(z_scores) &
+      rowSums(is.finite(raw_deviations)) == ncol(raw_deviations)
+    if(!any(finite_motifs)) stop("No motif has finite chromVAR scores in every sample")
+    list(
+      se = se,
+      deviations = deviations,
+      annotations = motif_annotations,
+      raw_deviations = raw_deviations[finite_motifs, , drop = FALSE],
+      z = z_scores[finite_motifs, , drop = FALSE],
+      excluded_motifs = rownames(z_scores)[!finite_motifs]
+    )
+  }, error = function(e) {
+    chromvar_status$Reason <<- paste("chromVAR failed:", e$message)
+    NULL
+  })
+
+  if(is.null(chromvar_result)) {
+    write_skipped_state("Step8", "chromVAR", chromvar_status$Reason)
+  } else {
+    motif_activity_mat <- chromvar_result$z[, chromvar_sample_cols, drop = FALSE]
+    motif_activity_z_mat <- motif_activity_mat
+    motif_activity_deviations_mat <- chromvar_result$raw_deviations[, chromvar_sample_cols, drop = FALSE]
+    motif_ids <- rownames(motif_activity_mat)
+    motif_names <- unname(motif_name_lookup_chromvar[motif_ids])
+    motif_labels <- make.unique(ifelse(is.na(motif_names) | !nzchar(motif_names), motif_ids, motif_names))
+    rownames(motif_activity_mat) <- motif_labels
+    rownames(motif_activity_z_mat) <- motif_labels
+    rownames(motif_activity_deviations_mat) <- motif_labels
+
+    group_vec <- factor(sample_group(chromvar_sample_cols), levels = group_levels)
+    design <- model.matrix(~ group_vec)
+    limma_fit <- limma::eBayes(limma::lmFit(motif_activity_mat, design))
+    chromvar_limma_tbl <- limma::topTable(limma_fit, coef = 2, number = Inf, sort.by = "none") %>%
+      tibble::rownames_to_column("motif_name") %>%
+      rename(GroupMeanDifference = logFC, pvalue = P.Value, FDR = adj.P.Val) %>%
+      mutate(
+        Comparison = contrast_label,
+        EvidenceRole = "exploratory; n=2 per group"
+      )
+    baseline_mean <- rowMeans(motif_activity_mat[, group_vec == baseline_group, drop = FALSE], na.rm = TRUE)
+    comparison_mean <- rowMeans(motif_activity_mat[, group_vec == treatment_group, drop = FALSE], na.rm = TRUE)
+    motif_activity_summary <- data.frame(
+      motif_name = rownames(motif_activity_mat),
+      ReferenceGroup = baseline_group,
+      ComparisonGroup = treatment_group,
+      ReferenceMean = baseline_mean,
+      ComparisonMean = comparison_mean,
+      GroupMeanDifference = comparison_mean - baseline_mean,
+      Variance = apply(motif_activity_mat, 1, var, na.rm = TRUE),
+      Method = "chromVAR deviation Z-score",
+      EvidenceRole = "exploratory; n=2 per group",
+      stringsAsFactors = FALSE
+    ) %>%
+      left_join(chromvar_limma_tbl %>% select(motif_name, pvalue, FDR), by = "motif_name") %>%
+      arrange(pvalue, desc(abs(GroupMeanDifference)))
+
+    gc_bias_tbl <- data.frame(
+      peak_id = canonical_peak_id(seqnames(SummarizedExperiment::rowRanges(chromvar_result$se)), start(SummarizedExperiment::rowRanges(chromvar_result$se)), end(SummarizedExperiment::rowRanges(chromvar_result$se))),
+      GC = as.numeric(SummarizedExperiment::rowData(chromvar_result$se)$bias),
+      stringsAsFactors = FALSE
+    )
+    if(any(is.na(gc_bias_tbl$GC))) stop("chromVAR GC bias contains missing values")
+    write.csv(as.data.frame(motif_activity_deviations_mat) %>% tibble::rownames_to_column("motif_name"), step_table_file("Step8", "ChromVAR_Deviations.csv"), row.names = FALSE)
+    write.csv(as.data.frame(motif_activity_z_mat) %>% tibble::rownames_to_column("motif_name"), step_table_file("Step8", "ChromVAR_Deviation_ZScores.csv"), row.names = FALSE)
+    write.csv(motif_activity_summary, step_table_file("Step8", "ChromVAR_Group_Comparison_Exploratory.csv"), row.names = FALSE)
+    write.csv(chromvar_limma_tbl, step_table_file("Step8", "ChromVAR_Limma_Exploratory.csv"), row.names = FALSE)
+    write.csv(gc_bias_tbl, step_table_file("Step8", "ChromVAR_GC_Bias.csv"), row.names = FALSE)
+    # 下游汇总表只接受正式 chromVAR Z-score。
+    write.csv(as.data.frame(motif_activity_mat) %>% tibble::rownames_to_column("motif_name"), step_table_file("Step8", "Motif_Activity_Sample_Matrix.csv"), row.names = FALSE)
+    write.csv(motif_activity_summary, step_table_file("Step8", "Motif_Activity_Summary.csv"), row.names = FALSE)
+
+    chromvar_status <- data.frame(
+      Status = "COMPLETED",
+      Reason = "formal chromVAR deviations with GC-matched background",
+      EvidenceRole = "exploratory; n=2 per group",
+      PeakCount = nrow(chromvar_count_mat),
+      MotifCount = nrow(motif_activity_mat),
+      NonfiniteMotifsExcluded = length(chromvar_result$excluded_motifs),
+      SampleCount = ncol(motif_activity_mat),
+      stringsAsFactors = FALSE
+    )
+    save_step_table(data.frame(motif_id = chromvar_result$excluded_motifs,
+      Reason = rep("non-finite chromVAR score in at least one sample", length(chromvar_result$excluded_motifs))),
+      "Step8", "ChromVAR_Nonfinite_Motifs.csv")
+    save_step_table(data.frame(Method = "chromVAR", Score = "deviationScores(): bias-corrected Z-score",
+      RawDeviation = "deviations(): bias-corrected deviation", Background = "GC/accessibility matched",
+      Significance = "limma raw pvalue < 0.05; FDR retained as diagnostic",
+      Seed = 123, Version = as.character(packageVersion("chromVAR"))), "Step8", "Motif_Activity_Method.csv")
+    top_activity <- motif_activity_summary %>%
+      filter(is.finite(pvalue), pvalue >= 0, pvalue < 0.05) %>% slice_head(n = 30)
+    heatmap_mat <- motif_activity_z_mat[top_activity$motif_name, , drop = FALSE]
+    sample_annotation <- data.frame(Group = group_vec, row.names = chromvar_sample_cols)
+    if(should_render_plots() && nrow(top_activity) > 0) draw_pheatmap_dual(
+      step_plot_file("Step8", "ChromVAR_Motif_Activity_Heatmap.pdf"), width = 9, height = 11,
+      pheatmap(heatmap_mat, cluster_rows = nrow(heatmap_mat) > 1, cluster_cols = TRUE,
+               annotation_col = sample_annotation, annotation_colors = list(Group = viz_pal$group), color = viz_pal$heat_meth)
+    )
+    if(nrow(top_activity) == 0) write_skipped_state(
+      "Step8", "ChromVAR_Motif_Activity_Heatmap", "No motif had a finite limma raw pvalue < 0.05.",
+      clear_plot_files = "ChromVAR_Motif_Activity_Heatmap.pdf")
+  }
+}
+save_step_table(chromvar_status, "Step8", "ChromVAR_Status.csv")
+```
+
+## 7.2 Direction-integrated motif evidence
+
+并列展示 motif 序列富集和样本层 chromVAR Z-score。两项来自同一 ATAC 数据，组合分数仅用于描述性排序，不是独立验证或额外显著性检验。
+
+```{r motif_direction_integrative_plots, fig.width=12, fig.height=8}
+motif_direction_tbl <- if(exists("motif_direction_summary")) {
+  motif_direction_summary
+} else {
+  read_step_table("Step8", "Motif_Direction_Summary.csv")
+}
+motif_activity_tbl_integrated <- if(exists("motif_activity_summary")) {
+  motif_activity_summary
+} else {
+  read_step_table("Step8", "Motif_Activity_Summary.csv")
+}
+
+motif_activity_enrichment_tbl <- data.frame()
+
+if(nrow(motif_direction_tbl) > 0 && nrow(motif_activity_tbl_integrated) > 0) {
+  motif_activity_enrichment_tbl <- full_join(
+    motif_direction_tbl,
+    motif_activity_tbl_integrated %>%
+      dplyr::select(motif_name, ReferenceMean, ComparisonMean, GroupMeanDifference, Variance, Method, ActivityPvalue = pvalue),
+    by = "motif_name"
+  ) %>%
+    filter((is.finite(ActivityPvalue) & ActivityPvalue >= 0 & ActivityPvalue < 0.05) |
+           (is.finite(Comparison_open_Pvalue) & Comparison_open_Pvalue >= 0 & Comparison_open_Pvalue < 0.05) |
+           (is.finite(Reference_open_Pvalue) & Reference_open_Pvalue >= 0 & Reference_open_Pvalue < 0.05)) %>%
+    mutate(
+      Comparison_open_freq = replace_na(Comparison_open_freq, 0),
+      Reference_open_freq = replace_na(Reference_open_freq, 0),
+      Comparison_open_count = replace_na(Comparison_open_count, 0),
+      Reference_open_count = replace_na(Reference_open_count, 0),
+      SignedDirectionScore = replace_na(SignedDirectionScore, 0),
+      GroupMeanDifference = replace_na(GroupMeanDifference, 0),
+      ActivityAbs = abs(GroupMeanDifference),
+      EnrichmentAbs = abs(SignedDirectionScore),
+      CombinedEvidence = round(ActivityAbs + EnrichmentAbs, 3),
+      EvidenceRole = "descriptive heuristic ranking; dependent ATAC evidence, not a statistical test",
+      DominantDirection = case_when(
+        GroupMeanDifference > 0 & SignedDirectionScore >= 0 ~ "Comparison_consistent",
+        GroupMeanDifference < 0 & SignedDirectionScore <= 0 ~ "Reference_consistent",
+        GroupMeanDifference == 0 & SignedDirectionScore == 0 ~ "Neutral",
+        TRUE ~ "Mixed"
+      )
+    ) %>%
+    arrange(desc(CombinedEvidence), desc(ActivityAbs), desc(EnrichmentAbs))
+
+  save_step_table(motif_activity_enrichment_tbl, "Step8", "Motif_Activity_Enrichment_Combined.csv")
+
+  if(should_render_plots() && nrow(motif_activity_enrichment_tbl) > 0) {
+    top_motif_evidence <- motif_activity_enrichment_tbl %>%
+      filter(!is.na(motif_name), motif_name != "") %>%
+      slice_head(n = 25)
+
+    motif_heat_df <- top_motif_evidence %>%
+      dplyr::select(motif_name, SignedDirectionScore, GroupMeanDifference, CombinedEvidence) %>%
+      pivot_longer(cols = -motif_name, names_to = "Metric", values_to = "Value") %>%
+      group_by(Metric) %>%
+      mutate(
+        ScaledValue = ifelse(max(abs(Value), na.rm = TRUE) > 0, Value / max(abs(Value), na.rm = TRUE), 0)
+      ) %>%
+      ungroup() %>%
+      mutate(
+        motif_name = factor(motif_name, levels = rev(top_motif_evidence$motif_name)),
+        Metric = factor(Metric, levels = c("SignedDirectionScore", "GroupMeanDifference", "CombinedEvidence"))
+      )
+
+    p_motif_dir_heat <- ggplot(motif_heat_df, aes(x = Metric, y = motif_name, fill = ScaledValue)) +
+      geom_tile(color = viz_pal$neutral["light"], linewidth = 0.25) +
+      scale_fill_heatmap_diverging(midpoint = 0) +
+      theme_atac_classic(base_size = 12) +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(
+        title = "Motif direction heatmap",
+        subtitle = "Sequence enrichment and chromVAR Z-score; descriptive heuristic ranking",
+        x = NULL,
+        y = NULL,
+        fill = "Scaled signed evidence"
+      )
+    save_plot_pdf(p_motif_dir_heat, step_plot_file("Step8", "Motif_Direction_Heatmap.pdf"), width = 9, height = 9)
+
+    p_motif_activity_vs_enrichment <- ggplot(
+      top_motif_evidence,
+      aes(
+        x = SignedDirectionScore,
+        y = GroupMeanDifference,
+        size = CombinedEvidence,
+        color = DominantDirection
+      )
+    ) +
+      geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
+      geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
+      geom_point(alpha = 0.82) +
+      geom_text_repel(aes(label = motif_name), size = 3, max.overlaps = 35) +
+      scale_color_manual(values = c(
+        Comparison_consistent = pal_pick(viz_pal$group[treatment_group]),
+        Reference_consistent = pal_pick(viz_pal$group[baseline_group]),
+        Mixed = pal_pick(viz_pal$neutral_dark),
+        Neutral = pal_pick(viz_pal$neutral_mid)
+      )) +
+      theme_atac_classic(base_size = 12) +
+      labs(
+        title = "Motif activity vs directional enrichment",
+        x = "Signed directional motif enrichment",
+        y = paste("Sample-level motif activity:", treatment_group, "-", baseline_group),
+        size = "Combined evidence",
+        color = "Consistency"
+      )
+    save_plot_pdf(p_motif_activity_vs_enrichment, step_plot_file("Step8", "Motif_Activity_vs_Enrichment.pdf"), width = 10, height = 7)
+  }
+} else {
+  write_skipped_state("Step8", "Motif_Direction_Integrated", "Missing directional motif and motif activity inputs.")
+}
+```
+
+```{r motif_module_status_plot, include=FALSE}
+write_module_status_plot("Step8", "Module 08 motif activity status")
+```
+
+```{r save_motif_state, include=FALSE}
+save_state(
+  "08_motif_state.rds",
+  c(
+    "pfm", "top_diff_peaks", "motif_res", "motif_res_pfos",
+    "motif_res_wt", "top_motifs", "top_motifs_pfos",
+    "top_motifs_wt", "directional_motif_df",
+    "motif_direction_summary", "motif_activity_mat",
+    "motif_activity_summary", "motif_activity_z_mat", "motif_activity_deviations_mat", "chromvar_limma_tbl", "chromvar_status",
+    "motif_activity_enrichment_tbl", "de_novo_motif_summary"
+  )
+)
+```

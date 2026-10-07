@@ -76,9 +76,9 @@ def test_shared_contract_has_domain_and_claim_gates() -> None:
     contract = (AGENT_DIR / "ai_research_contract.md").read_text(encoding="utf-8")
     for token in [
         "independent_reproduction",
-        "benchmark contamination",
+        "预训练语料不可知范围",
         "额外重试",
-        "p50/p95/p99",
+        "服务延迟主张",
         "证明义务",
         "威胁模型",
         "参与者",

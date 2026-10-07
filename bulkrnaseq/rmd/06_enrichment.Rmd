@@ -32,8 +32,13 @@ gsea_reactome <- NULL
 gsea_go_df <- data.frame()
 gsea_hallmark_df <- data.frame()
 gsea_reactome_df <- data.frame()
-gsea_msigdb_c2_df <- data.frame()
-gsea_msigdb_c5_df <- data.frame()
+gsea_mouse_m2_df <- data.frame()
+gsea_mouse_m5_df <- data.frame()
+gsea_human_hallmark_df <- data.frame()
+gsea_human_c2_df <- data.frame()
+gsea_human_c5_df <- data.frame()
+hallmark_res <- mouse_m2_res <- mouse_m5_res <- mouse_kegg_res <- mouse_reactome_res <- list(result = data.frame(), pathways = list())
+human_hallmark_res <- human_c2_res <- human_c5_res <- list(result = data.frame(), pathways = list())
 go_ora_sets <- list(
   all = list(BP = NULL, MF = NULL, CC = NULL, ALL = NULL),
   up = list(BP = NULL, MF = NULL, CC = NULL, ALL = NULL),
@@ -48,8 +53,18 @@ leading_edge_go <- data.frame()
 leading_edge_kegg <- data.frame()
 leading_edge_hallmark <- data.frame()
 leading_edge_reactome <- data.frame()
-leading_edge_msigdb_c2 <- data.frame()
-leading_edge_msigdb_c5 <- data.frame()
+leading_edge_mouse_m2 <- data.frame()
+leading_edge_mouse_m5 <- data.frame()
+leading_edge_human_hallmark <- data.frame()
+leading_edge_human_c2 <- data.frame()
+leading_edge_human_c5 <- data.frame()
+
+human_result_dir <- file.path(result_06_dir, "human_ortholog")
+human_table_dir <- file.path(human_result_dir, "tables")
+human_plot_dir <- file.path(human_result_dir, "plots")
+ensure_dirs(human_table_dir, human_plot_dir)
+mouse_bundle <- get_pathway_gene_set_bundle("mouse_native")
+human_bundle <- get_pathway_gene_set_bundle("human_ortholog")
 
 sig_entrez_sets <- make_directional_gene_sets(sig_de, "ENTREZID")
 sig_entrez <- sig_entrez_sets$all
@@ -110,7 +125,7 @@ for (one_direction in names(sig_entrez_sets)) {
     attempts = 3,
     sleep_seconds = 5,
     must_succeed = FALSE,
-    timeout_seconds = 120
+    timeout_seconds = 600
   )
   kegg_ora_sets[[one_direction]] <- filter_result_by_pvalue(kegg_ora_sets[[one_direction]], threshold = 0.05)
   if (nrow(make_result_df(kegg_ora_sets[[one_direction]])) > 0) {
@@ -125,7 +140,7 @@ for (one_direction in names(sig_entrez_sets)) {
     attempts = 3,
     sleep_seconds = 5,
     must_succeed = FALSE,
-    timeout_seconds = 120
+    timeout_seconds = 600
   )
   reactome_ora_sets[[one_direction]] <- filter_result_by_pvalue(reactome_ora_sets[[one_direction]], threshold = 0.05)
   if (nrow(make_result_df(reactome_ora_sets[[one_direction]])) == 0) {
@@ -172,10 +187,11 @@ if (nrow(de_result) > 0) {
 }
 
 if (length(geneList_gsea) >= 100) {
-  cat("[Step7] 开始 GO/KEGG/Reactome GSEA，rank_n=", length(geneList_gsea), "\n")
+  cat("[Step7] 开始原生小鼠 GO GSEA，rank_n=", length(geneList_gsea), "\n")
   gsea_go_parts <- setNames(vector("list", 3), c("BP", "MF", "CC"))
   for (one_ont in names(gsea_go_parts)) {
     cat("[Step7] GO GSEA:", one_ont, "\n")
+    set.seed(rnaseq_random_seed)
     gsea_go_parts[[one_ont]] <- run_clusterprofiler_with_retry(
       label = paste0("GO GSEA ", one_ont),
       fn = function() gseGO(
@@ -184,6 +200,7 @@ if (length(geneList_gsea) >= 100) {
         keyType = "ENTREZID",
         ont = one_ont,
         pvalueCutoff = 1,
+        seed = TRUE,
         verbose = FALSE
       ),
       attempts = 2,
@@ -194,92 +211,55 @@ if (length(geneList_gsea) >= 100) {
   }
   gsea_go_df <- combine_gsea_go_results(gsea_go_parts)
   gsea_go <- choose_primary_gsea_obj(gsea_go_parts)
-
-  cat("[Step7] KEGG GSEA\n")
-  gsea_kegg <- run_clusterprofiler_with_retry(
-    label = "KEGG GSEA",
-    fn = function() gseKEGG(
-      geneList = geneList_gsea,
-      organism = kegg_organism_code,
-      pvalueCutoff = 1,
-      verbose = FALSE
-    ),
-    attempts = 3,
-    sleep_seconds = 5,
-    must_succeed = FALSE,
-    timeout_seconds = 180
-  )
-  gsea_kegg <- filter_result_by_pvalue(gsea_kegg, threshold = 0.05)
-
-  cat("[Step7] Reactome GSEA\n")
-  gsea_reactome <- run_clusterprofiler_with_retry(
-    label = "Reactome GSEA",
-    fn = function() ReactomePA::gsePathway(
-      geneList = geneList_gsea,
-      organism = reactome_organism,
-      pvalueCutoff = 1,
-      verbose = FALSE
-    ),
-    attempts = 3,
-    sleep_seconds = 5,
-    must_succeed = FALSE,
-    timeout_seconds = 180
-  )
-  gsea_reactome <- filter_result_by_pvalue(gsea_reactome, threshold = 0.05)
-  gsea_reactome_df <- make_result_df(gsea_reactome)
-  cat("[Step7] 完成 GO/KEGG/Reactome GSEA\n")
+  cat("[Step7] 完成原生小鼠 GO GSEA\n")
 }
 
 if (length(geneList_symbol_gsea) >= 100) {
-  cat("[Step7] Hallmark GSEA，rank_n=", length(geneList_symbol_gsea), "\n")
-  hallmark_res <- run_with_guard(
-    label = "[Step7] Hallmark GSEA",
-    must_succeed = FALSE,
-    fn = function() run_fgsea_hallmark(geneList_symbol_gsea, species = msigdb_species)
-  )
+  cat("[Step7] 原生小鼠 MH/M2/M5 GSEA，rank_n=", length(geneList_symbol_gsea), "\n")
+  hallmark_res <- run_fgsea_symbol_sets(geneList_symbol_gsea, mouse_bundle$libraries$Mouse_MH)
+  mouse_m2_res <- run_fgsea_symbol_sets(geneList_symbol_gsea, mouse_bundle$libraries$Mouse_M2)
+  mouse_m5_res <- run_fgsea_symbol_sets(geneList_symbol_gsea, mouse_bundle$libraries$Mouse_M5)
+  mouse_kegg_res <- run_fgsea_symbol_sets(geneList_symbol_gsea, mouse_bundle$libraries$Mouse_KEGG)
+  mouse_reactome_res <- run_fgsea_symbol_sets(geneList_symbol_gsea, mouse_bundle$libraries$Mouse_Reactome)
   gsea_hallmark_df <- if (is.null(hallmark_res)) data.frame() else hallmark_res$result
-  if (nrow(gsea_hallmark_df) > 0) {
-    gsea_hallmark_df <- gsea_hallmark_df %>%
-      filter(is.finite(pvalue), pvalue < 0.05) %>%
-      arrange(pvalue, desc(abs(NES)))
-  }
-  cat("[Step7] 完成 Hallmark GSEA\n")
+  gsea_mouse_m2_df <- mouse_m2_res$result
+  gsea_mouse_m5_df <- mouse_m5_res$result
+  gsea_kegg <- mouse_kegg_res$result
+  gsea_reactome <- mouse_reactome_res$result
+  gsea_reactome_df <- mouse_reactome_res$result
 
-  cat("[Step7] MSigDB C2/C5 GSEA，rank_n=", length(geneList_symbol_gsea), "\n")
-  msigdb_c2_res <- run_with_guard(
-    label = "[Step7] MSigDB C2 GSEA",
-    must_succeed = FALSE,
-    fn = function() run_fgsea_msig_collection(geneList_symbol_gsea, collection = "C2", species = msigdb_species)
-  )
-  gsea_msigdb_c2_df <- if (is.null(msigdb_c2_res)) data.frame() else msigdb_c2_res$result
-  if (nrow(gsea_msigdb_c2_df) > 0) {
-    # 保留当前项目 nominal pvalue < 0.05 的 GSEA 展示口径；正式报告建议同步查看 padj/FDR。
-    gsea_msigdb_c2_df <- gsea_msigdb_c2_df %>%
-      filter(is.finite(pvalue), pvalue < 0.05) %>%
-      arrange(pvalue, desc(abs(NES)))
-  }
+  human_hallmark_res <- run_fgsea_symbol_sets(geneList_symbol_gsea, human_bundle$libraries$Human_Hallmark)
+  human_c2_res <- run_fgsea_symbol_sets(geneList_symbol_gsea, human_bundle$libraries$Human_C2)
+  human_c5_res <- run_fgsea_symbol_sets(geneList_symbol_gsea, human_bundle$libraries$Human_C5)
+  gsea_human_hallmark_df <- human_hallmark_res$result
+  gsea_human_c2_df <- human_c2_res$result
+  gsea_human_c5_df <- human_c5_res$result
 
-  msigdb_c5_res <- run_with_guard(
-    label = "[Step7] MSigDB C5 GSEA",
-    must_succeed = FALSE,
-    fn = function() run_fgsea_msig_collection(geneList_symbol_gsea, collection = "C5", species = msigdb_species)
-  )
-  gsea_msigdb_c5_df <- if (is.null(msigdb_c5_res)) data.frame() else msigdb_c5_res$result
-  if (nrow(gsea_msigdb_c5_df) > 0) {
-    # 保留当前项目 nominal pvalue < 0.05 的 GSEA 展示口径；正式报告建议同步查看 padj/FDR。
-    gsea_msigdb_c5_df <- gsea_msigdb_c5_df %>%
-      filter(is.finite(pvalue), pvalue < 0.05) %>%
-      arrange(pvalue, desc(abs(NES)))
+  filter_gsea_display <- function(x) {
+    if (!nrow(x)) return(x)
+    x %>% filter(is.finite(pvalue), pvalue < 0.05) %>% arrange(pvalue, desc(abs(NES)))
   }
-  cat("[Step7] 完成 MSigDB C2/C5 GSEA\n")
+  gsea_hallmark_df <- filter_gsea_display(gsea_hallmark_df)
+  gsea_mouse_m2_df <- filter_gsea_display(gsea_mouse_m2_df)
+  gsea_mouse_m5_df <- filter_gsea_display(gsea_mouse_m5_df)
+  gsea_kegg <- filter_gsea_display(gsea_kegg)
+  gsea_reactome <- filter_gsea_display(gsea_reactome)
+  gsea_reactome_df <- gsea_reactome
+  gsea_human_hallmark_df <- filter_gsea_display(gsea_human_hallmark_df)
+  gsea_human_c2_df <- filter_gsea_display(gsea_human_c2_df)
+  gsea_human_c5_df <- filter_gsea_display(gsea_human_c5_df)
+  cat("[Step7] 完成原生小鼠与人源同源补充 GSEA\n")
 }
 
 leading_edge_go <- extract_leading_edge_table(gsea_go_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
 leading_edge_kegg <- extract_leading_edge_table(make_result_df(gsea_kegg), id_col = "ID", gene_col = "core_enrichment", top_n = 20)
 leading_edge_hallmark <- extract_leading_edge_table(gsea_hallmark_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
 leading_edge_reactome <- extract_leading_edge_table(gsea_reactome_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
-leading_edge_msigdb_c2 <- extract_leading_edge_table(gsea_msigdb_c2_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
-leading_edge_msigdb_c5 <- extract_leading_edge_table(gsea_msigdb_c5_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_mouse_m2 <- extract_leading_edge_table(gsea_mouse_m2_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_mouse_m5 <- extract_leading_edge_table(gsea_mouse_m5_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_human_hallmark <- extract_leading_edge_table(gsea_human_hallmark_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_human_c2 <- extract_leading_edge_table(gsea_human_c2_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
+leading_edge_human_c5 <- extract_leading_edge_table(gsea_human_c5_df, id_col = "ID", gene_col = "core_enrichment", top_n = 20)
 
 enrichment_results <- bind_rows(
   standardize_enrichment_table(go_directional_df, "ORA", "GO", "06_enrichment"),
@@ -287,34 +267,70 @@ enrichment_results <- bind_rows(
   standardize_enrichment_table(reactome_directional_df, "ORA", "Reactome", "06_enrichment"),
   standardize_enrichment_table(gsea_go_df, "GSEA", "GO", "06_enrichment"),
   standardize_enrichment_table(make_result_df(gsea_kegg), "GSEA", "KEGG", "06_enrichment"),
-  standardize_enrichment_table(gsea_hallmark_df, "GSEA", "Hallmark", "06_enrichment"),
+  standardize_enrichment_table(gsea_hallmark_df, "GSEA", "Mouse_MH", "06_enrichment"),
   standardize_enrichment_table(gsea_reactome_df, "GSEA", "Reactome", "06_enrichment"),
-  standardize_enrichment_table(gsea_msigdb_c2_df, "GSEA", "MSigDB_C2", "06_enrichment"),
-  standardize_enrichment_table(gsea_msigdb_c5_df, "GSEA", "MSigDB_C5", "06_enrichment")
-)
+  standardize_enrichment_table(gsea_mouse_m2_df, "GSEA", "Mouse_M2", "06_enrichment"),
+  standardize_enrichment_table(gsea_mouse_m5_df, "GSEA", "Mouse_M5", "06_enrichment")
+) %>% mutate(origin = "mouse_native", db_species = "MM", analysis_species = "Mus musculus")
 write_csv_safe(enrichment_results, file.path(step5_table_dir("all"), "enrichment_results.csv"), row.names = FALSE)
+
+human_enrichment_results <- bind_rows(
+  standardize_enrichment_table(gsea_human_hallmark_df, "GSEA", "Human_Hallmark", "06_enrichment"),
+  standardize_enrichment_table(gsea_human_c2_df, "GSEA", "Human_C2", "06_enrichment"),
+  standardize_enrichment_table(gsea_human_c5_df, "GSEA", "Human_C5", "06_enrichment")
+) %>% mutate(origin = "human_ortholog", db_species = "HS", analysis_species = "Mus musculus")
+write_csv_safe(human_enrichment_results, file.path(human_table_dir, "enrichment_results.csv"), row.names = FALSE)
 
 gsea_leading_edge <- bind_rows(
   standardize_leading_edge_table(leading_edge_go, "GO", "06_enrichment"),
   standardize_leading_edge_table(leading_edge_kegg, "KEGG", "06_enrichment"),
-  standardize_leading_edge_table(leading_edge_hallmark, "Hallmark", "06_enrichment", pathway_col = "pathway"),
+  standardize_leading_edge_table(leading_edge_hallmark, "Mouse_MH", "06_enrichment", pathway_col = "pathway"),
   standardize_leading_edge_table(leading_edge_reactome, "Reactome", "06_enrichment"),
-  standardize_leading_edge_table(leading_edge_msigdb_c2, "MSigDB_C2", "06_enrichment", pathway_col = "pathway"),
-  standardize_leading_edge_table(leading_edge_msigdb_c5, "MSigDB_C5", "06_enrichment", pathway_col = "pathway")
-)
+  standardize_leading_edge_table(leading_edge_mouse_m2, "Mouse_M2", "06_enrichment", pathway_col = "pathway"),
+  standardize_leading_edge_table(leading_edge_mouse_m5, "Mouse_M5", "06_enrichment", pathway_col = "pathway")
+) %>% mutate(origin = "mouse_native")
 write_csv_safe(gsea_leading_edge, file.path(step5_table_dir("all"), "gsea_leading_edge.csv"), row.names = FALSE)
+
+human_gsea_leading_edge <- bind_rows(
+  standardize_leading_edge_table(leading_edge_human_hallmark, "Human_Hallmark", "06_enrichment", pathway_col = "pathway"),
+  standardize_leading_edge_table(leading_edge_human_c2, "Human_C2", "06_enrichment", pathway_col = "pathway"),
+  standardize_leading_edge_table(leading_edge_human_c5, "Human_C5", "06_enrichment", pathway_col = "pathway")
+) %>% mutate(origin = "human_ortholog")
+write_csv_safe(human_gsea_leading_edge, file.path(human_table_dir, "gsea_leading_edge.csv"), row.names = FALSE)
 
 for (one_direction in names(kegg_ora_sets)) {
   one_table_dir <- step5_table_dir(one_direction)
-  write_csv_compat(make_result_df(kegg_ora_sets[[one_direction]]), file.path(one_table_dir, "6_1_KEGG_ORA_results.csv"), row.names = FALSE)
-  write_csv_compat(make_result_df(reactome_ora_sets[[one_direction]]), file.path(one_table_dir, "6_2_Reactome_ORA_results.csv"), row.names = FALSE)
+
+
 }
-write_csv_compat(kegg_directional_df, file.path(step5_table_dir("all"), "6_0_KEGG_directional_summary.csv"), row.names = FALSE)
-write_csv_compat(reactome_directional_df, file.path(step5_table_dir("all"), "6_0_Reactome_directional_summary.csv"), row.names = FALSE)
-write_csv_compat(gsea_msigdb_c2_df, file.path(step5_table_dir("all"), "6_3_MSigDB_C2_GSEA_results.csv"), row.names = FALSE)
-write_csv_compat(gsea_msigdb_c5_df, file.path(step5_table_dir("all"), "6_4_MSigDB_C5_GSEA_results.csv"), row.names = FALSE)
-write_csv_compat(leading_edge_msigdb_c2, file.path(step5_table_dir("all"), "6_3_MSigDB_C2_leading_edge.csv"), row.names = FALSE)
-write_csv_compat(leading_edge_msigdb_c5, file.path(step5_table_dir("all"), "6_4_MSigDB_C5_leading_edge.csv"), row.names = FALSE)
+
+
+
+
+
+
+
+write_csv_safe(gsea_human_hallmark_df, file.path(human_table_dir, "6_1_Human_Hallmark_GSEA_results.csv"), row.names = FALSE)
+write_csv_safe(gsea_human_c2_df, file.path(human_table_dir, "6_2_Human_C2_GSEA_results.csv"), row.names = FALSE)
+write_csv_safe(gsea_human_c5_df, file.path(human_table_dir, "6_3_Human_C5_GSEA_results.csv"), row.names = FALSE)
+write_csv_safe(leading_edge_human_hallmark, file.path(human_table_dir, "6_1_Human_Hallmark_leading_edge.csv"), row.names = FALSE)
+write_csv_safe(leading_edge_human_c2, file.path(human_table_dir, "6_2_Human_C2_leading_edge.csv"), row.names = FALSE)
+write_csv_safe(leading_edge_human_c5, file.path(human_table_dir, "6_3_Human_C5_leading_edge.csv"), row.names = FALSE)
+
+mouse_manifest <- manifest_with_tested_counts(mouse_bundle, c(
+  Mouse_MH = length(hallmark_res$pathways),
+  Mouse_M2 = length(mouse_m2_res$pathways),
+  Mouse_M5 = length(mouse_m5_res$pathways),
+  Mouse_Reactome = length(mouse_reactome_res$pathways),
+  Mouse_KEGG = length(mouse_kegg_res$pathways)
+)) %>% filter(library %in% c("Mouse_MH", "Mouse_M2", "Mouse_M5", "Mouse_Reactome", "Mouse_KEGG"))
+human_manifest <- manifest_with_tested_counts(human_bundle, c(
+  Human_Hallmark = length(human_hallmark_res$pathways),
+  Human_C2 = length(human_c2_res$pathways),
+  Human_C5 = length(human_c5_res$pathways)
+)) %>% filter(library %in% c("Human_Hallmark", "Human_C2", "Human_C5"))
+write_csv_safe(mouse_manifest, file.path(step5_table_dir("all"), "gene_set_source_manifest.csv"), row.names = FALSE)
+write_csv_safe(human_manifest, file.path(human_table_dir, "gene_set_source_manifest.csv"), row.names = FALSE)
 
 go_all_df <- make_result_df(go_all)
 kegg_ora_df <- make_result_df(kegg_ora)
@@ -335,14 +351,14 @@ enrichment_tables <- list(
   gsea_kegg_df = make_result_df(gsea_kegg),
   gsea_hallmark_df = gsea_hallmark_df,
   gsea_reactome_df = gsea_reactome_df,
-  gsea_msigdb_c2_df = gsea_msigdb_c2_df,
-  gsea_msigdb_c5_df = gsea_msigdb_c5_df,
+  gsea_mouse_m2_df = gsea_mouse_m2_df,
+  gsea_mouse_m5_df = gsea_mouse_m5_df,
   leading_edge_go = leading_edge_go,
   leading_edge_kegg = leading_edge_kegg,
   leading_edge_hallmark = leading_edge_hallmark,
   leading_edge_reactome = leading_edge_reactome,
-  leading_edge_msigdb_c2 = leading_edge_msigdb_c2,
-  leading_edge_msigdb_c5 = leading_edge_msigdb_c5,
+  leading_edge_mouse_m2 = leading_edge_mouse_m2,
+  leading_edge_mouse_m5 = leading_edge_mouse_m5,
   enrichment_results = enrichment_results,
   gsea_leading_edge = gsea_leading_edge,
   go_circle_data = go_circle_data,
@@ -350,6 +366,19 @@ enrichment_tables <- list(
   gsea_circle_data = gsea_circle_data
 )
 saveRDS(enrichment_tables, cache_06_tables_path)
+
+human_enrichment_tables <- list(
+  gsea_human_hallmark_df = gsea_human_hallmark_df,
+  gsea_human_c2_df = gsea_human_c2_df,
+  gsea_human_c5_df = gsea_human_c5_df,
+  leading_edge_human_hallmark = leading_edge_human_hallmark,
+  leading_edge_human_c2 = leading_edge_human_c2,
+  leading_edge_human_c5 = leading_edge_human_c5,
+  enrichment_results = human_enrichment_results,
+  gsea_leading_edge = human_gsea_leading_edge,
+  manifest = human_manifest
+)
+saveRDS(human_enrichment_tables, cache_06_human_tables_path)
 
 enrichment_objects <- list(
   go_ora_sets = go_ora_sets,
@@ -366,11 +395,24 @@ saveRDS(enrichment_objects, cache_06_objects_path)
 
 write_csv_safe(
   data.frame(
-    cache = c("tables", "objects"),
-    path = c(cache_06_tables_path, cache_06_objects_path),
+    cache = c("mouse_tables", "mouse_objects", "mouse_gene_sets"),
+    path = c(
+      cache_06_tables_path,
+      cache_06_objects_path,
+      cache_mouse_native_gene_sets_path
+    ),
     stringsAsFactors = FALSE
   ),
   file.path(step5_table_dir("all"), "6_0_cache_manifest.csv"),
+  row.names = FALSE
+)
+write_csv_safe(
+  data.frame(
+    cache = c("human_tables", "human_gene_sets"),
+    path = c(cache_06_human_tables_path, cache_human_ortholog_gene_sets_path),
+    stringsAsFactors = FALSE
+  ),
+  file.path(human_table_dir, "6_0_cache_manifest.csv"),
   row.names = FALSE
 )
 ```
@@ -382,14 +424,14 @@ if (nrow(kegg_directional_df) > 0) {
   save_directional_ora_plot(
     kegg_directional_df,
     file.path(step5_plot_dir("all"), "6_0_KEGG_directional_dotplot.pdf"),
-    "KEGG ORA by direction"
+    "Mouse native KEGG mmu ORA by direction"
   )
 }
 if (nrow(reactome_directional_df) > 0) {
   save_directional_ora_plot(
     reactome_directional_df,
     file.path(step5_plot_dir("all"), "6_0_Reactome_directional_dotplot.pdf"),
-    "Reactome ORA by direction"
+    "Mouse native Reactome ORA by direction"
   )
 }
 
@@ -401,7 +443,7 @@ for (one_direction in names(kegg_ora_sets)) {
       kegg_ora_sets[[one_direction]],
       out_dir = one_plot_dir,
       prefix = "6_1_KEGG_ORA",
-      title_prefix = paste("KEGG ORA", one_label)
+      title_prefix = paste("Mouse native KEGG mmu ORA", one_label)
     )
   }
   if (nrow(make_result_df(reactome_ora_sets[[one_direction]])) > 0) {
@@ -409,25 +451,40 @@ for (one_direction in names(kegg_ora_sets)) {
       reactome_ora_sets[[one_direction]],
       out_dir = one_plot_dir,
       prefix = "6_2_Reactome_ORA",
-      title_prefix = paste("Reactome", one_label)
+      title_prefix = paste("Mouse native Reactome", one_label)
     )
   }
 }
 
-if (nrow(gsea_msigdb_c2_df) > 0) {
+if (nrow(gsea_mouse_m2_df) > 0) {
   save_gsea_df_dotplot(
-    gsea_msigdb_c2_df,
-    file.path(step5_plot_dir("all"), "6_3_MSigDB_C2_GSEA_dotplot.pdf"),
-    title_prefix = "MSigDB C2 curated gene sets GSEA",
+    gsea_mouse_m2_df,
+    file.path(step5_plot_dir("all"), "6_3_Mouse_M2_GSEA_dotplot.pdf"),
+    title_prefix = "Mouse native MSigDB M2 GSEA",
     top_n = 20
   )
 }
-if (nrow(gsea_msigdb_c5_df) > 0) {
+if (nrow(gsea_mouse_m5_df) > 0) {
   save_gsea_df_dotplot(
-    gsea_msigdb_c5_df,
-    file.path(step5_plot_dir("all"), "6_4_MSigDB_C5_GSEA_dotplot.pdf"),
-    title_prefix = "MSigDB C5 GO gene sets GSEA",
+    gsea_mouse_m5_df,
+    file.path(step5_plot_dir("all"), "6_4_Mouse_M5_GSEA_dotplot.pdf"),
+    title_prefix = "Mouse native MSigDB M5 GSEA",
     top_n = 20
   )
+}
+
+for (human_plot_spec in list(
+  list(data = gsea_human_hallmark_df, stem = "6_1_Human_Hallmark_GSEA_dotplot.pdf", title = "Human MSigDB Hallmark HS->Mus musculus ortholog GSEA"),
+  list(data = gsea_human_c2_df, stem = "6_2_Human_C2_GSEA_dotplot.pdf", title = "Human MSigDB C2 HS->Mus musculus ortholog GSEA"),
+  list(data = gsea_human_c5_df, stem = "6_3_Human_C5_GSEA_dotplot.pdf", title = "Human MSigDB C5 HS->Mus musculus ortholog GSEA")
+)) {
+  if (nrow(human_plot_spec$data) > 0) {
+    save_gsea_df_dotplot(
+      human_plot_spec$data,
+      file.path(human_plot_dir, human_plot_spec$stem),
+      title_prefix = human_plot_spec$title,
+      top_n = 20
+    )
+  }
 }
 ```

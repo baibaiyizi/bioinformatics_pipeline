@@ -1,0 +1,39 @@
+PASS inputs; no outputs created
+Project root: /tmp/spatial-template-e2e-e9_x7sy2/copy with space
+Config:       /tmp/spatial-template-e2e-e9_x7sy2/copy with space/config/spatial_config.yaml
+Manifest:     
+Log:          /tmp/spatial-template-e2e-e9_x7sy2/copy with space/result/logs/run_spatial_20260929_233121.log
+Steps:        1 2 3 4 5 7 8 9 11 13 14
+[2026-09-29 23:31:21] START 1 01_validate_inputs
+[2026-09-29 23:31:22] END   1 01_validate_inputs
+[2026-09-29 23:31:22] START 2 02_build_objects
+[2026-09-29 23:31:24] END   2 02_build_objects
+[2026-09-29 23:31:24] START 3 03_qc_filter
+[2026-09-29 23:31:36] END   3 03_qc_filter
+[2026-09-29 23:31:36] START 4 04_normalize_features
+/home/h1028/miniconda3/lib/python3.13/functools.py:934: UserWarning: zero-centering a sparse array/matrix densifies it.
+  return dispatch(args[0].__class__)(*args, **kw)
+[2026-09-29 23:32:01] END   4 04_normalize_features
+[2026-09-29 23:32:01] START 5 05_integrate_cluster
+/tmp/spatial-template-e2e-e9_x7sy2/copy with space/scripts/spatial_pipeline.py:591: FutureWarning: The `igraph` implementation of leiden clustering is *orders of magnitude faster*. Set the flavor argument to (and install if needed) 'igraph' to use it.
+In the future, the default backend for leiden will be igraph instead of leidenalg. To achieve the future defaults please pass: `flavor='igraph'` and `n_iterations=2`. `directed` must also be `False` to work with igraph’s implementation.
+  sc.tl.leiden(adata, resolution=integ["leiden_resolution"], key_added="leiden")
+[2026-09-29 23:32:59] END   5 05_integrate_cluster
+[2026-09-29 23:32:59] START 7 07_spatial_domains
+/tmp/spatial-template-e2e-e9_x7sy2/copy with space/scripts/spatial_pipeline.py:662: FutureWarning: The `igraph` implementation of leiden clustering is *orders of magnitude faster*. Set the flavor argument to (and install if needed) 'igraph' to use it.
+In the future, the default backend for leiden will be igraph instead of leidenalg. To achieve the future defaults please pass: `flavor='igraph'` and `n_iterations=2`. `directed` must also be `False` to work with igraph’s implementation.
+  sc.tl.leiden(adata, resolution=ctx.config["domains"]["resolution"], neighbors_key="domain_neighbors", key_added="spatial_domain")
+[2026-09-29 23:33:54] END   7 07_spatial_domains
+[2026-09-29 23:33:54] START 8 08_cell_type_annotation
+[2026-09-29 23:34:15] END   8 08_cell_type_annotation
+[2026-09-29 23:34:16] START 9 09_deconvolution
+[2026-09-29 23:34:19] END   9 09_deconvolution
+[2026-09-29 23:34:19] START 11 11_programs_descriptive
+/home/h1028/workspace/sc/Mus/PFOS/.venv/lib/python3.13/site-packages/sklearn/decomposition/_nmf.py:1723: ConvergenceWarning: Maximum number of iterations 500 reached. Increase it to improve convergence.
+  warnings.warn(
+[2026-09-29 23:34:25] END   11 11_programs_descriptive
+[2026-09-29 23:34:25] START 13 13_multi_sample_summary
+[2026-09-29 23:34:27] END   13 13_multi_sample_summary
+[2026-09-29 23:34:27] START 14 14_report_index
+[2026-09-29 23:34:28] END   14 14_report_index
+[2026-09-29 23:34:28] Pipeline finished

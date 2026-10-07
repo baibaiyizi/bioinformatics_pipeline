@@ -36,13 +36,13 @@ sig_de_symbols <- de_result %>%
   as.data.frame(stringsAsFactors = FALSE)
 
 string_species_id <- if (identical(rnaseq_species, "mouse")) 10090 else 9606
-pkg_state <- try_install_and_load("STRINGdb", bioc = TRUE)
+pkg_state <- try_require_and_load("STRINGdb", bioc = TRUE)
 if (!isTRUE(pkg_state$ok)) {
   ppi_status <- data.frame(step = "dependency", status = "skipped", detail = paste(pkg_state$messages, collapse = " | "), stringsAsFactors = FALSE)
 } else if (nrow(sig_de_symbols) < 5) {
   ppi_status <- data.frame(step = "input", status = "skipped", detail = "fewer than 5 significant DE symbols", stringsAsFactors = FALSE)
 } else {
-  default_string_input_dir <- "/home/h1028/workspace/reference/GRCm39/ppi"
+  default_string_input_dir <- Sys.getenv("STRING_INPUT_DIR", unset="")
   string_input_dir <- normalizePath(first_nonempty(Sys.getenv("RNASEQ_STRINGDB_DIR", unset = ""), default_string_input_dir), winslash = "/", mustWork = FALSE)
   if (!identical(rnaseq_species, "mouse") && identical(string_input_dir, default_string_input_dir)) {
     stop("当前公共 STRINGdb 目录是 GRCm39/mouse: ", default_string_input_dir, "。非 mouse 分析请通过 RNASEQ_STRINGDB_DIR 指定对应物种的 STRINGdb 目录。")
@@ -118,7 +118,7 @@ write.csv(ppi_status, "result/11_ppi/11_0_PPI_status.csv", row.names = FALSE)
 ```{r}
 ppi_topology <- data.frame()
 if (nrow(ppi_edges) > 0) {
-  ig_state <- try_install_and_load("igraph", bioc = FALSE)
+  ig_state <- try_require_and_load("igraph", bioc = FALSE)
   if (isTRUE(ig_state$ok)) {
     ppi_scale01 <- function(x) {
       x <- suppressWarnings(as.numeric(x))
@@ -160,6 +160,7 @@ if (nrow(ppi_edges) > 0) {
       stringsAsFactors = FALSE
     )
 
+    set.seed(rnaseq_random_seed)
     community <- tryCatch(igraph::cluster_louvain(g_all, weights = igraph::E(g_all)$combined_score), error = function(e) NULL)
     if (!is.null(community)) {
       ppi_topology$modularity <- igraph::modularity(community)
@@ -241,7 +242,7 @@ if (nrow(ppi_edges) > 0) {
       )
     write.csv(ppi_centrality, "result/11_ppi/11_8_PPI_node_centrality.csv", row.names = FALSE)
 
-    set.seed(1)
+    set.seed(rnaseq_random_seed)
     coords <- as.data.frame(igraph::layout_with_fr(g_plot, weights = igraph::E(g_plot)$combined_score / 1000))
     colnames(coords) <- c("x", "y")
     node_tbl <- data.frame(gene_label = igraph::V(g_plot)$name, coords, stringsAsFactors = FALSE) %>%
@@ -271,7 +272,7 @@ if (nrow(ppi_edges) > 0) {
       ggrepel::geom_text_repel(
         data = label_nodes,
         aes(x = x, y = y, label = gene_label),
-        size = 3,
+        size = rnaseq_figure_text_size,
         max.overlaps = 60,
         box.padding = 0.45,
         min.segment.length = 0,
@@ -290,7 +291,7 @@ if (nrow(ppi_edges) > 0) {
         fill = "Subnetwork",
         color = "DE direction"
       ) +
-      theme_void() +
+      theme_rnaseq_void() +
       theme(
         legend.position = "right",
         plot.background = element_rect(fill = "white", color = NA),
@@ -298,18 +299,24 @@ if (nrow(ppi_edges) > 0) {
         plot.title = element_text(hjust = 0.5, face = "bold", color = viz_pal$neutral["dark"]),
         plot.subtitle = element_text(hjust = 0.5, color = viz_pal$neutral["dark"])
       )
-    save_plot_versions(ppi_network_plot, "result/11_ppi/11_6_STRING_PPI_network.pdf", width = 10, height = 8)
+    save_plot_versions(
+      ppi_network_plot,
+      "result/11_ppi/11_6_STRING_PPI_network.pdf",
+      width = 10,
+      height = 8,
+      coordinate_system = "none"
+    )
 
     if (nrow(ppi_subnetworks) > 0) {
       subnetwork_bubble_tbl <- ppi_subnetworks %>%
         mutate(subnetwork = factor(subnetwork, levels = rev(subnetwork)))
       subnetwork_bubble_plot <- ggplot(subnetwork_bubble_tbl, aes(x = gene_count, y = mean_degree)) +
         geom_point(aes(size = edge_count, color = up_fraction), alpha = 0.9) +
-        ggrepel::geom_text_repel(aes(label = subnetwork), size = 3, max.overlaps = 40) +
+        ggrepel::geom_text_repel(aes(label = subnetwork), size = rnaseq_figure_text_size, max.overlaps = 40) +
         scale_color_gradientn(colors = unname(viz_pal$heatmap_diverging), limits = c(0, 1), name = "Up fraction") +
         scale_size_continuous(range = c(3, 10), name = "Internal edges") +
         labs(title = "PPI subnetwork summary", x = "Genes in subnetwork", y = "Mean degree") +
-        theme_rnaseq_minimal()
+        theme_rnaseq_publication()
       save_plot_versions(subnetwork_bubble_plot, "result/11_ppi/11_8_PPI_subnetwork_bubble.pdf", width = 8.5, height = 6)
 
       top_subnetworks <- ppi_subnetworks %>% slice_head(n = 6) %>% pull(subnetwork)
@@ -340,7 +347,7 @@ if (nrow(ppi_edges) > 0) {
           ggrepel::geom_text_repel(
             data = subnetwork_label_tbl,
             aes(x = x, y = y, label = gene_label),
-            size = 2.6,
+            size = rnaseq_figure_text_size,
             max.overlaps = 30,
             min.segment.length = 0
           ) +
@@ -348,7 +355,7 @@ if (nrow(ppi_edges) > 0) {
           scale_fill_manual(values = viz_pal$de, drop = FALSE) +
           scale_alpha(range = c(0.15, 0.65), guide = "none") +
           labs(title = "Top PPI subnetworks", x = NULL, y = NULL, size = "Degree", fill = "DE direction") +
-          theme_void() +
+          theme_rnaseq_void() +
           theme(
             legend.position = "right",
             plot.background = element_rect(fill = "white", color = NA),
@@ -357,7 +364,13 @@ if (nrow(ppi_edges) > 0) {
             strip.text = element_text(face = "bold", color = viz_pal$neutral["dark"]),
             plot.title = element_text(hjust = 0.5, face = "bold", color = viz_pal$neutral["dark"])
           )
-        save_plot_versions(subnetwork_panel_plot, "result/11_ppi/11_9_PPI_top_subnetwork_panels.pdf", width = 11, height = 7.5)
+        save_plot_versions(
+          subnetwork_panel_plot,
+          "result/11_ppi/11_9_PPI_top_subnetwork_panels.pdf",
+          width = 11,
+          height = 7.5,
+          coordinate_system = "none"
+        )
       }
     }
   } else {
@@ -403,49 +416,73 @@ if (nrow(ppi_centrality) > 0) {
     geom_tile(color = "white", linewidth = 0.35) +
     scale_fill_heatmap_sequential(limits = c(0, 1), na.value = viz_pal$neutral["light"], name = "Scaled\ncentrality") +
     labs(title = "Consensus PPI hub centrality", x = NULL, y = NULL) +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(axis.text.x = element_text(angle = 35, hjust = 1), panel.grid = element_blank())
   save_plot_versions(centrality_heatmap, "result/11_ppi/11_10_PPI_centrality_heatmap.pdf", width = 9, height = 7)
 }
 
 if (nrow(ppi_hubs) > 0) {
-  hub_plot_tbl <- ppi_hubs %>%
+  hub_plot_tbl <- ppi_hubs
+  hub_plot_tbl$figure_significance <- figure_significance_values(
+    hub_plot_tbl,
+    pvalue_candidates = "pvalue",
+    fdr_candidates = "padj"
+  )
+  hub_plot_tbl <- hub_plot_tbl %>%
     arrange(dplyr::desc(degree), pvalue) %>%
     slice_head(n = 30) %>%
-    mutate(gene_label = factor(gene_label, levels = rev(gene_label)))
-  hub_plot <- ggplot(hub_plot_tbl, aes(x = gene_label, y = degree, fill = direction)) +
+    mutate(
+      gene_label = factor(gene_label, levels = rev(gene_label)),
+      figure_direction = case_when(
+        !is.finite(figure_significance) | figure_significance >= de_pvalue_cutoff |
+          !is.finite(log2FoldChange) | abs(log2FoldChange) < de_log2fc_cutoff ~ "ns",
+        log2FoldChange > 0 ~ "up",
+        TRUE ~ "down"
+      )
+    )
+  hub_plot <- ggplot(hub_plot_tbl, aes(x = gene_label, y = degree, fill = figure_direction)) +
     geom_col(width = 0.75) +
     coord_flip() +
-    scale_fill_manual(values = viz_pal$de, drop = FALSE) +
+    scale_fill_manual(values = viz_pal$de, drop = FALSE, name = "DE direction") +
     labs(title = "Top PPI hub genes", x = NULL, y = "STRING network degree") +
-    theme_rnaseq_minimal()
+    theme_rnaseq_publication()
   save_plot_versions(hub_plot, "result/11_ppi/11_7_PPI_hub_degree_barplot.pdf", width = 8.5, height = 7)
 }
 
 if (nrow(ppi_centrality) > 0) {
-  hub_scatter_tbl <- ppi_centrality %>%
+  hub_scatter_tbl <- ppi_centrality
+  hub_scatter_tbl$figure_significance <- figure_significance_values(
+    hub_scatter_tbl,
+    pvalue_candidates = "pvalue",
+    fdr_candidates = "padj"
+  )
+  hub_scatter_tbl <- hub_scatter_tbl %>%
     mutate(
-      direction = dplyr::coalesce(direction, "ns"),
-      pvalue_plot = pmax(dplyr::coalesce(suppressWarnings(as.numeric(pvalue)), 1), 1e-300),
-      neg_log10_pvalue = -log10(pvalue_plot)
+      figure_direction = case_when(
+        !is.finite(figure_significance) | figure_significance >= de_pvalue_cutoff |
+          !is.finite(log2FoldChange) | abs(log2FoldChange) < de_log2fc_cutoff ~ "ns",
+        log2FoldChange > 0 ~ "up",
+        TRUE ~ "down"
+      ),
+      neg_log10_pvalue = -log10(pmax(dplyr::coalesce(figure_significance, 1), 1e-300))
     )
   hub_scatter_labels <- hub_scatter_tbl %>%
-    arrange(consensus_rank, dplyr::desc(degree), pvalue) %>%
+    arrange(consensus_rank, dplyr::desc(degree), figure_significance) %>%
     slice_head(n = 18)
   hub_scatter <- ggplot(hub_scatter_tbl, aes(x = log2FoldChange, y = degree)) +
     geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral["mid"]) +
-    geom_point(aes(size = neg_log10_pvalue, color = direction, alpha = consensus_score)) +
-    ggrepel::geom_text_repel(data = hub_scatter_labels, aes(label = gene_label), size = 3, max.overlaps = 50) +
+    geom_point(aes(size = neg_log10_pvalue, color = figure_direction, alpha = consensus_score)) +
+    ggrepel::geom_text_repel(data = hub_scatter_labels, aes(label = gene_label), size = rnaseq_figure_text_size, max.overlaps = 50) +
     scale_color_manual(values = viz_pal$de, drop = FALSE) +
     scale_alpha(range = c(0.35, 0.95), guide = "none") +
-    scale_size_continuous(range = c(1.8, 7), name = "-log10(p)") +
+    scale_size_continuous(range = c(1.8, 7), name = figure_significance_axis_label()) +
     labs(
       title = "Expression change versus PPI centrality",
       x = "log2 fold change",
       y = "PPI degree",
       color = "DE direction"
     ) +
-    theme_rnaseq_minimal()
+    theme_rnaseq_publication()
   save_plot_versions(hub_scatter, "result/11_ppi/11_11_PPI_hub_expression_centrality_scatter.pdf", width = 8.5, height = 6.5)
 }
 ```
@@ -477,7 +514,7 @@ if (nrow(ppi_edges) > 0) {
       geom_vline(xintercept = threshold_values, linetype = "dashed", color = viz_pal$neutral["dark"], linewidth = 0.35) +
       scale_x_continuous(limits = c(400, 1000), breaks = seq(400, 1000, 100)) +
       labs(title = "STRING combined score distribution", x = "Combined score", y = "PPI edges") +
-      theme_rnaseq_minimal(legend = "none")
+      theme_rnaseq_publication(legend = "none")
     threshold_long <- ppi_threshold_sensitivity %>%
       tidyr::pivot_longer(c(edge_count, node_count), names_to = "metric", values_to = "count") %>%
       mutate(metric = dplyr::recode(metric, edge_count = "Edges", node_count = "Nodes"))
@@ -487,7 +524,7 @@ if (nrow(ppi_edges) > 0) {
       scale_color_manual(values = c(Edges = unname(viz_pal$accent["warm"]), Nodes = unname(viz_pal$accent["purple"]))) +
       scale_x_continuous(breaks = threshold_values) +
       labs(x = "Minimum combined score", y = "Retained count", color = NULL) +
-      theme_rnaseq_minimal()
+      theme_rnaseq_publication()
     edge_score_plot <- patchwork::wrap_plots(edge_score_hist, threshold_plot, ncol = 1, heights = c(2, 1.15))
     save_plot_versions(edge_score_plot, "result/11_ppi/11_12_PPI_edge_score_threshold_sensitivity.pdf", width = 8.5, height = 7)
   }
@@ -515,7 +552,7 @@ if (nrow(ppi_centrality) > 1 && nrow(ppi_edges) > 0) {
     scale_fill_heatmap_sequential(na.value = viz_pal$neutral["light"], name = "STRING\nscore") +
     coord_equal() +
     labs(title = "Top consensus hub adjacency matrix", x = NULL, y = NULL) +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), panel.grid = element_blank())
   save_plot_versions(adjacency_heatmap, "result/11_ppi/11_13_PPI_top_hub_adjacency_heatmap.pdf", width = 10, height = 9.5)
 }
@@ -583,11 +620,15 @@ if (nrow(ppi_string_enrichment) > 0) {
     }
     hits[[1]]
   }
-  fdr_col <- first_existing_col(ppi_string_enrichment, c("fdr", "FDR", "p.adjust", "padj", "p_value"))
+  string_figure_significance_col <- figure_significance_column(
+    ppi_string_enrichment,
+    pvalue_candidates = c("p_value", "pvalue"),
+    fdr_candidates = c("fdr", "FDR", "p.adjust", "padj")
+  )
   gene_count_col <- first_existing_col(ppi_string_enrichment, c("number_of_genes", "gene_count", "Count", "count"))
   description_col <- first_existing_col(ppi_string_enrichment, c("description", "Description", "term", "ID"))
   category_col <- first_existing_col(ppi_string_enrichment, c("requested_category", "category"))
-  if (!is.null(fdr_col) && !is.null(gene_count_col) && !is.null(description_col) && !is.null(category_col)) {
+  if (!is.null(gene_count_col) && !is.null(description_col) && !is.null(category_col)) {
     string_enrichment_plot_tbl <- ppi_string_enrichment %>%
       mutate(
         category_plot = dplyr::recode(
@@ -598,13 +639,13 @@ if (nrow(ppi_string_enrichment) > 0) {
           .default = as.character(.data[[category_col]])
         ),
         term_description = as.character(.data[[description_col]]),
-        fdr_value = suppressWarnings(as.numeric(.data[[fdr_col]])),
+        figure_significance = suppressWarnings(as.numeric(.data[[string_figure_significance_col]])),
         gene_count = suppressWarnings(as.numeric(.data[[gene_count_col]])),
-        enrichment_signal = -log10(pmax(fdr_value, 1e-300))
+        enrichment_signal = -log10(pmax(figure_significance, 1e-300))
       ) %>%
       filter(is.finite(enrichment_signal), is.finite(gene_count), !is.na(term_description), nzchar(term_description)) %>%
       group_by(category_plot) %>%
-      arrange(fdr_value, dplyr::desc(gene_count), .by_group = TRUE) %>%
+      arrange(figure_significance, dplyr::desc(gene_count), .by_group = TRUE) %>%
       slice_head(n = 8) %>%
       ungroup() %>%
       mutate(term_label = stringr::str_trunc(term_description, width = 58))
@@ -613,16 +654,16 @@ if (nrow(ppi_string_enrichment) > 0) {
         string_enrichment_plot_tbl,
         aes(x = enrichment_signal, y = reorder(term_label, enrichment_signal))
       ) +
-        geom_point(aes(size = gene_count, color = fdr_value), alpha = 0.92) +
+        geom_point(aes(size = gene_count, color = figure_significance), alpha = 0.92) +
         facet_wrap(~ category_plot, scales = "free_y", ncol = 2) +
-        scale_color_gradientn(colors = rev(unname(viz_pal$enrich_p)), name = "FDR") +
+        scale_color_gradientn(colors = rev(unname(viz_pal$enrich_p)), name = figure_significance_label()) +
         scale_size_continuous(range = c(2.2, 8), name = "Genes") +
         labs(
           title = "STRING functional enrichment of PPI nodes",
-          x = "-log10(FDR)",
+          x = figure_significance_axis_label(),
           y = NULL
         ) +
-        theme_rnaseq_minimal() +
+        theme_rnaseq_publication() +
         theme(panel.grid.major.y = element_blank())
       save_plot_versions(string_enrichment_plot, "result/11_ppi/11_14_STRING_PPI_node_enrichment_dotplot.pdf", width = 11, height = 8)
     }
@@ -657,7 +698,7 @@ if (nrow(ppi_edges) > 0 && isTRUE(ig_state$ok)) {
       annotate("label",
         x = Inf, y = Inf, hjust = 1.1, vjust = 1.3,
         label = sprintf("R² = %.3f\nSlope = %.2f", r_squared, slope),
-        size = 3.5, fontface = "italic",
+        size = rnaseq_figure_text_size, fontface = "italic",
         fill = "white", label.size = 0.3, color = viz_pal$neutral["dark"]
       ) +
       labs(
@@ -665,7 +706,7 @@ if (nrow(ppi_edges) > 0 && isTRUE(ig_state$ok)) {
         subtitle = "Dashed line: power-law fit; higher R² suggests scale-free topology",
         x = "Degree (log10)", y = "Frequency (log10)"
       ) +
-      theme_rnaseq_minimal()
+      theme_rnaseq_publication()
     save_plot_versions(degree_dist_plot, "result/11_ppi/11_15_PPI_degree_distribution.pdf", width = 7.5, height = 6)
   }
 }
@@ -697,11 +738,11 @@ if (nrow(ppi_centrality) > 5) {
 
   centrality_cor_heatmap <- ggplot(cent_cor_long, aes(x = metric_y, y = metric_x, fill = spearman_rho)) +
     geom_tile(color = "white", linewidth = 0.4) +
-    geom_text(aes(label = sprintf("%.2f", spearman_rho)), size = 3, color = viz_pal$neutral["dark"]) +
+    geom_text(aes(label = sprintf("%.2f", spearman_rho)), size = rnaseq_figure_text_size, color = viz_pal$neutral["dark"]) +
     scale_fill_heatmap_sequential(limits = c(-1, 1), na.value = viz_pal$neutral["light"], name = "Spearman ρ") +
     coord_equal() +
     labs(title = "Centrality metric correlation", x = NULL, y = NULL) +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(axis.text.x = element_text(angle = 35, hjust = 1), panel.grid = element_blank())
   save_plot_versions(centrality_cor_heatmap, "result/11_ppi/11_16_PPI_centrality_correlation.pdf", width = 7, height = 6.5)
 }
@@ -772,7 +813,7 @@ if (nrow(ppi_centrality) > 0 && exists("gene_exp", inherits = TRUE) && exists("s
       cluster_columns = TRUE,
       show_row_names = TRUE,
       show_column_names = FALSE,
-      row_names_gp = grid::gpar(fontsize = 7),
+      row_names_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_tick_size),
       col = circlize::colorRamp2(c(-z_limit, 0, z_limit), unname(viz_pal$heatmap_diverging)),
       heatmap_legend_param = list(direction = "horizontal"),
       border = TRUE
@@ -839,7 +880,7 @@ if (nrow(ppi_subnetwork_membership) > 0 && nrow(ppi_edges) > 0 && nrow(ppi_subne
 
     bridge_barplot <- ggplot(bridge_plot_tbl, aes(x = gene, y = cross_fraction, fill = direction)) +
       geom_col(width = 0.7) +
-      geom_text(aes(label = paste0(cross_edges, "/", total_edges)), hjust = -0.1, size = 2.8, color = viz_pal$neutral["dark"]) +
+      geom_text(aes(label = paste0(cross_edges, "/", total_edges)), hjust = -0.1, size = rnaseq_figure_text_size, color = viz_pal$neutral["dark"]) +
       coord_flip() +
       scale_fill_manual(values = viz_pal$de, drop = FALSE) +
       scale_y_continuous(limits = c(0, 1.05), expand = expansion(mult = 0.08)) +
@@ -848,7 +889,7 @@ if (nrow(ppi_subnetwork_membership) > 0 && nrow(ppi_edges) > 0 && nrow(ppi_subne
         subtitle = "Fraction of edges connecting different Louvain subnetworks",
         x = NULL, y = "Cross-module edge fraction", fill = "DE direction"
       ) +
-      theme_rnaseq_minimal()
+      theme_rnaseq_publication()
     save_plot_versions(bridge_barplot, "result/11_ppi/11_18_PPI_bridge_genes_barplot.pdf", width = 8.5, height = 7)
   }
 }
@@ -873,11 +914,23 @@ if (nrow(ppi_centrality) > 0 && nrow(de_result) > 0) {
     transmute(
       gene_label,
       log2FoldChange,
-      pvalue_plot = pmax(dplyr::coalesce(suppressWarnings(as.numeric(pvalue)), 1), 1e-300),
-      direction = dplyr::coalesce(direction, "ns")
-    ) %>%
+      pvalue,
+      padj
+    )
+  volcano_tbl$figure_significance <- figure_significance_values(
+    volcano_tbl,
+    pvalue_candidates = "pvalue",
+    fdr_candidates = "padj"
+  )
+  volcano_tbl <- volcano_tbl %>%
     mutate(
-      neg_log10_p = -log10(pvalue_plot),
+      neg_log10_p = -log10(pmax(dplyr::coalesce(figure_significance, 1), 1e-300)),
+      figure_direction = case_when(
+        !is.finite(figure_significance) | figure_significance >= de_pvalue_cutoff |
+          !is.finite(log2FoldChange) | abs(log2FoldChange) < de_log2fc_cutoff ~ "ns",
+        log2FoldChange > 0 ~ "up",
+        TRUE ~ "down"
+      ),
       is_hub = gene_label %in% hub_gene_set
     ) %>%
     filter(is.finite(log2FoldChange), is.finite(neg_log10_p))
@@ -885,17 +938,17 @@ if (nrow(ppi_centrality) > 0 && nrow(de_result) > 0) {
   hub_labels <- volcano_tbl %>% filter(is_hub)
 
   hub_volcano <- ggplot(volcano_tbl, aes(x = log2FoldChange, y = neg_log10_p)) +
-    geom_point(aes(color = direction), alpha = 0.35, size = 1.2) +
-    geom_point(data = hub_labels, aes(fill = direction), shape = 21, size = 3.2, stroke = 0.8, color = viz_pal$neutral["dark"]) +
-    ggrepel::geom_text_repel(data = hub_labels, aes(label = gene_label), size = 2.8, max.overlaps = 50, min.segment.length = 0) +
+    geom_point(aes(color = figure_direction), alpha = 0.35, size = 1.2) +
+    geom_point(data = hub_labels, aes(fill = figure_direction), shape = 21, size = 3.2, stroke = 0.8, color = viz_pal$neutral["dark"]) +
+    ggrepel::geom_text_repel(data = hub_labels, aes(label = gene_label), size = rnaseq_figure_text_size, max.overlaps = 50, min.segment.length = 0) +
     scale_color_manual(values = viz_pal$de, drop = FALSE, guide = "none") +
     scale_fill_manual(values = viz_pal$de, drop = FALSE, name = "DE direction") +
     labs(
       title = "Volcano plot with PPI hub genes highlighted",
       subtitle = "Circles: top 20 consensus hub genes from PPI network",
-      x = "log2 fold change", y = "-log10(p-value)"
+      x = "log2 fold change", y = figure_significance_axis_label()
     ) +
-    theme_rnaseq_minimal()
+    theme_rnaseq_publication()
   save_plot_versions(hub_volcano, "result/11_ppi/11_19_PPI_hub_volcano.pdf", width = 9, height = 7)
 }
 ```

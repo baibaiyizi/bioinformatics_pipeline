@@ -1,0 +1,12 @@
+package	version
+DESeq2	1.50.2
+Rsubread	2.24.0
+edgeR	4.8.2
+org.Mm.eg.db	3.22.0
+ggplot2	4.0.3
+knitr	1.51
+Cairo	1.7.0
+ComplexHeatmap	2.26.1
+htmltools	0.5.9
+stringr	1.6.0
+msigdbr	26.1.0

@@ -39,8 +39,8 @@ if (nrow(count_qc_tbl) > 0) {
   library_size_plot <- ggplot(count_qc_tbl, aes(x = sample, y = raw_counts / 1e6, fill = group)) +
     geom_col(width = 0.7) +
     scale_fill_manual(values = group_colors) +
-    labs(title = "测序文库大小概览", x = NULL, y = "Raw counts (million)") +
-    theme_rnaseq_minimal() +
+    labs(title = "Library size", x = NULL, y = "Raw counts (million)") +
+    theme_rnaseq_publication() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
 
   save_plot_versions(
@@ -88,7 +88,7 @@ if (nrow(count_qc_tbl) > 0) {
 }
 
 write_csv_safe(sample_qc_overview, "result/03_qc/sample_qc_overview.csv", row.names = FALSE)
-write_csv_compat(sample_overview, "result/03_qc/3_1_selected_sample_overview.csv", row.names = FALSE)
+
 
 expr_long <- as.data.frame(expr_plot_mat) %>%
   rownames_to_column("gene_id") %>%
@@ -98,8 +98,8 @@ expr_long <- as.data.frame(expr_plot_mat) %>%
 expr_boxplot <- ggplot(expr_long, aes(x = sample, y = expr, fill = group)) +
   geom_boxplot(outlier.size = 0.25, width = 0.7) +
   scale_fill_manual(values = group_colors) +
-  labs(title = "选中样本表达分布", x = NULL, y = expr_plot_label) +
-  theme_rnaseq_minimal() +
+  labs(title = "Expression distribution of selected samples", x = NULL, y = expr_plot_label) +
+  theme_rnaseq_publication() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
 
 save_plot_versions(
@@ -132,7 +132,7 @@ rle_plot <- ggplot(rle_long, aes(x = sample, y = rle, fill = group)) +
   geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
   scale_fill_manual(values = group_colors) +
   labs(title = "Relative Log Expression (RLE)", x = NULL, y = "RLE") +
-  theme_rnaseq_minimal() +
+  theme_rnaseq_publication() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
 
 save_plot_versions(
@@ -148,10 +148,10 @@ cor_df$correlation <- as.vector(sample_cor)
 
 cor_plot <- ggplot(cor_df, aes(sample_x, sample_y, fill = correlation)) +
   geom_tile(color = viz_pal$neutral["light"]) +
-  geom_text(aes(label = sprintf("%.2f", correlation)), size = 3) +
+  geom_text(aes(label = sprintf("%.2f", correlation)), size = rnaseq_figure_text_size) +
   scale_fill_heatmap_diverging(midpoint = 0.95, limits = c(min(cor_df$correlation), 1)) +
-  labs(title = "样本相关性热图", x = NULL, y = NULL, fill = "Pearson r") +
-  theme_rnaseq_minimal() +
+  labs(title = "Sample correlation", x = NULL, y = NULL, fill = "Pearson r") +
+  theme_rnaseq_publication() +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 save_plot_versions(
@@ -193,10 +193,10 @@ try({
 if (!distance_saved) {
   dist_plot <- ggplot(dist_df, aes(sample_x, sample_y, fill = distance)) +
     geom_tile(color = viz_pal$neutral["light"]) +
-    geom_text(aes(label = sprintf("%.1f", distance)), size = 3) +
+    geom_text(aes(label = sprintf("%.1f", distance)), size = rnaseq_figure_text_size) +
     scale_fill_heatmap_sequential() +
-    labs(title = "样本距离热图", x = NULL, y = NULL, fill = "Distance") +
-    theme_rnaseq_minimal() +
+    labs(title = "Sample distance", x = NULL, y = NULL, fill = "Distance") +
+    theme_rnaseq_publication() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
   save_plot_versions(
     dist_plot,
@@ -213,8 +213,8 @@ dend_plot <- ggplot(ggdendro::segment(dend_data)) +
   geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) +
   coord_flip() +
   scale_y_reverse(expand = c(0.2, 0)) +
-  labs(title = "样本聚类树", x = NULL, y = "Height") +
-  theme_rnaseq_minimal()
+  labs(title = "Hierarchical clustering of samples", x = NULL, y = "Height") +
+  theme_rnaseq_publication()
 
 save_plot_versions(
   dend_plot,
@@ -304,8 +304,9 @@ if (nrow(fastp_ok) > 0) {
 
   fastp_reads_plot <- ggplot(fastp_reads_long, aes(x = sample, y = reads / 1e6, fill = stage)) +
     geom_col(position = position_dodge(width = 0.75), width = 0.68) +
+    scale_fill_manual(values = resolve_named_colors(c(viz_pal$accent["teal"], viz_pal$accent["warm"]), fastp_reads_long$stage)) +
     labs(title = "fastp filtering read retention", x = NULL, y = "Reads (million)", fill = NULL) +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
   save_plot_versions(fastp_reads_plot, "result/03_qc/3_9_fastp_read_retention_barplot.pdf", width = 9, height = 5)
 
@@ -319,7 +320,7 @@ if (nrow(fastp_ok) > 0) {
     facet_wrap(~ metric, ncol = 1, scales = "free_y") +
     scale_fill_manual(values = group_colors) +
     labs(title = "fastp quality summary", x = NULL, y = "Rate") +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "top")
   save_plot_versions(fastp_quality_plot, "result/03_qc/3_10_fastp_quality_metrics.pdf", width = 9, height = 7)
 }

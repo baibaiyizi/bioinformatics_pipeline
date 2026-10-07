@@ -1,0 +1,3 @@
+# Replace with tissue-appropriate positive/negative marker sets.
+# Empty configuration produces unknown labels, never guessed labels.
+cell_types: {}

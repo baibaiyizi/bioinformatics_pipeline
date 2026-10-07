@@ -14,6 +14,7 @@ set -euo pipefail
 
 # ---------- A. 项目目录与输入矩阵 ----------
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${ROOT_DIR}/scripts/config.sh"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 FIRST_SCRIPT="${ROOT_DIR}/rnaseq_first.sh"
 MERGE_DIR="${ROOT_DIR}/3.Merge_result"
@@ -34,10 +35,6 @@ RNASEQ_SECOND_SKIP_DE="${RNASEQ_SECOND_SKIP_DE:-false}"
 resolve_rscript_bin() {
     if [[ -n "${RSCRIPT_BIN:-}" ]]; then
         printf '%s' "${RSCRIPT_BIN}"
-        return 0
-    fi
-    if [[ -x "/home/h1028/miniconda3/bin/Rscript" ]]; then
-        printf '%s' "/home/h1028/miniconda3/bin/Rscript"
         return 0
     fi
     command -v Rscript 2>/dev/null || printf '%s' Rscript
@@ -121,6 +118,7 @@ Options:
   --steps LIST       Run selected steps. LIST can be comma- or space-separated.
   --list             Show available steps.
   --dry-run          Print planned commands without running heavy tools.
+  --preflight        只读检查配置、样本表与必要输入。
   --force            Re-run completed outputs.
   --threads N        Override THREADS for this run.
   --skip-de          Skip DESeq2 and reuse existing ${DE_RESULTS_FILE}.
@@ -236,7 +234,7 @@ show_selected_samples() {
 }
 
 get_group_order() {
-    awk 'NF >= 2 && $1 !~ /^#/ {if (!seen[$1]++) print $1}' "${SAMPLES_FILE}"
+    printf '%s\n' "${RNASEQ_GROUP1}" "${RNASEQ_GROUP2}"
 }
 
 read_selected_sample_names() {
@@ -275,7 +273,7 @@ contrasts_complete() {
 }
 
 validate_inputs() {
-    [[ -f "${SAMPLES_FILE}" ]] || die "未找到样本文件: ${SAMPLES_FILE}。请先运行 bash rnaseq_first.sh --steps 5"
+    [[ "${DRY_RUN}" == 1 || -f "${SAMPLES_FILE}" ]] || die "未找到样本文件: ${SAMPLES_FILE}。请先运行 bash rnaseq_first.sh --steps 5"
     [[ -f "${FIRST_SCRIPT}" ]] || die "未找到第一阶段脚本: ${FIRST_SCRIPT}"
 
     local groups=()
@@ -288,7 +286,8 @@ validate_inputs() {
     log "de results   : ${DE_RESULTS_FILE}"
     log "dry run      : ${DRY_RUN}"
     log "selected samples:"
-    show_selected_samples
+    [[ -f "${SAMPLES_FILE}" ]] && show_selected_samples
+    return 0
 }
 
 add_step_with_deps() {
@@ -372,6 +371,10 @@ generate_contrasts_file() {
 }
 
 merge_selected_samples() {
+    if [[ "${RNASEQ_INPUT_MODE}" == counts ]]; then
+        [[ "${DRY_RUN}" == 1 ]] || "${RSCRIPT_BIN}" --vanilla "${ROOT_DIR}/rmd/import_counts.R"
+        return 0
+    fi
     [[ -f "${FIRST_SCRIPT}" ]] || die "未找到第一阶段脚本: ${FIRST_SCRIPT}"
 
     if [[ "${FORCE}" != "1" ]] && selected_merge_outputs_match; then
@@ -593,12 +596,13 @@ dev.off()
 
 summary_path <- file.path(out_dir, paste0(prefix, ".summary.txt"))
 summary_lines <- c(
+  "screening_interpretation\texploratory_nominal_p",
   sprintf("contrast\t%s_vs_%s", group2, group1),
   sprintf("sampleA\t%s", group2),
   sprintf("sampleB\t%s", group1),
   sprintf("n_genes\t%s", nrow(result_df)),
   sprintf("pvalue_lt_0.05\t%s", sum(!is.na(result_df$pvalue) & result_df$pvalue < 0.05)),
-  sprintf("pvalue_lt_0.05_and_abs_log2fc_ge_0.58\t%s", sum(!is.na(result_df$pvalue) & result_df$pvalue < 0.05 & !is.na(result_df$log2FoldChange) & abs(result_df$log2FoldChange) >= 0.58))
+  sprintf("pvalue_lt_0.05_and_abs_log2fc_ge_configured\t%s", sum(!is.na(result_df$pvalue) & result_df$pvalue < 0.05 & !is.na(result_df$log2FoldChange) & abs(result_df$log2FoldChange) >= as.numeric(Sys.getenv("RNASEQ_DE_LOG2FC_CUTOFF", "1"))))
 )
 writeLines(summary_lines, summary_path)
 
@@ -609,7 +613,7 @@ summary_if_lines <- c(
   sprintf("n_genes\t%s", nrow(result_if_df)),
   sprintf("pvalue_lt_0.05\t%s", sum(!is.na(result_if_df$pvalue) & result_if_df$pvalue < 0.05)),
   sprintf("padj_lt_0.05\t%s", sum(!is.na(result_if_df$padj) & result_if_df$padj < 0.05)),
-  sprintf("padj_lt_0.05_and_abs_log2fc_ge_0.58\t%s", sum(!is.na(result_if_df$padj) & result_if_df$padj < 0.05 & !is.na(result_if_df$log2FoldChange) & abs(result_if_df$log2FoldChange) >= 0.58))
+  sprintf("padj_lt_0.05_and_abs_log2fc_ge_configured\t%s", sum(!is.na(result_if_df$padj) & result_if_df$padj < 0.05 & !is.na(result_if_df$log2FoldChange) & abs(result_if_df$log2FoldChange) >= as.numeric(Sys.getenv("RNASEQ_DE_LOG2FC_CUTOFF", "1"))))
 )
 writeLines(summary_if_lines, summary_if_path)
 EOF
@@ -725,6 +729,10 @@ main() {
         mapfile -t REQUESTED_STEPS <<< "${parsed_steps}"
     fi
 
+    "${PYTHON_BIN:-python3}" "${ROOT_DIR}/scripts/input_contract.py" validate
+    if [[ "${DRY_RUN}" != 1 ]]; then
+        "${PYTHON_BIN:-python3}" "${ROOT_DIR}/scripts/input_contract.py" prepare
+    fi
     resolve_run_order "${REQUESTED_STEPS[@]}"
     REQUESTED_STEPS_LABEL="$(format_steps "${REQUESTED_STEPS[@]}")"
     RUN_ORDER_LABEL="$(format_steps "${RUN_ORDER[@]}")"

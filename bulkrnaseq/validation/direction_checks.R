@@ -1,0 +1,25 @@
+# 无需额外 R 包；只验证小表方向/身份/NA，不能代替 rMATS 重算。
+script <- sub("^--file=", "", grep("^--file=", commandArgs(FALSE), value=TRUE)[[1]])
+script <- gsub("~+~", " ", script, fixed=TRUE)
+root <- dirname(dirname(normalizePath(script)))
+source(file.path(root, "rmd/rmats_direction.R"))
+d <- tempfile('rmats direction ');dir.create(d)
+samples <- file.path(d,'samples.txt');writeLines(c('treatment\tT2','control\tC1','treatment\tT1','control\tC2'),samples)
+x <- data.frame(IncLevel1=c('0.1,NA','NA,NA'),IncLevel2=c('0.7,0.9','NA,NA'),IncLevelDifference=c(-0.7,NA),PValue=c(0.01,NA),FDR=c(0.1,NA))
+write.table(x,file.path(d,'SE.MATS.JC.txt'),row.names=FALSE,sep='\t',quote=FALSE)
+metadata <- c('group1=control','group2=treatment','group1_samples=C2,C1','group2_samples=T1,T2','sample_key=C1,C2,T1,T2')
+writeLines(metadata,file.path(d,'run_metadata.tsv'))
+design <- read_rmats_direction(d,samples,'control','treatment');result <- orient_rmats_table(x,design)
+stopifnot(identical(result$IncLevelDifference,x$IncLevelDifference), identical(result$PValue,x$PValue), result$delta_psi[[1]]==0.7,is.na(result$delta_psi[[2]]), identical(split_rmats_psi('0.1,NA,0.3'),c(0.1,NA_real_,0.3)),identical(design$group1_samples,c('C2','C1')))
+writeLines(rev(readLines(samples)),samples);design2<-read_rmats_direction(d,samples,'control','treatment');stopifnot(design$multiplier==design2$multiplier, identical(design$group1_samples,design2$group1_samples))
+writeLines(c('group1=treatment','group2=control','group1_samples=T1,T2','group2_samples=C2,C1','sample_key=C1,C2,T1,T2'),file.path(d,'run_metadata.tsv'));stopifnot(read_rmats_direction(d,samples,'control','treatment')$multiplier==1)
+unlink(file.path(d,'run_metadata.tsv'));stopifnot(inherits(try(read_rmats_direction(d,samples,'control','treatment'),silent=TRUE),'try-error'))
+writeLines(c(metadata[1:4],'sample_key=bogus'),file.path(d,'run_metadata.tsv'));stopifnot(inherits(try(read_rmats_direction(d,samples,'control','treatment'),silent=TRUE),'try-error'))
+cat('PASS: rMATS forward/reverse b1, metadata order, NA position, raw fields, missing and invalid metadata\n')
+# Exercise exact module 05 direction code before annotation with minimal stubs.
+text <- readLines(file.path(root, 'rmd/05_de.Rmd'));start<-which(text=='```{r}')[1]+1;end<-which(grepl('^de_result <- de_raw',text))[1]-1
+code <- paste(text[start:end],collapse='\n');de_path<-file.path(d,'DE_results')
+write.table(data.frame(gene_id='gene',sampleA='control',sampleB='treatment',baseMeanA=10,baseMeanB=30,log2FoldChange=-2,stat=-5),de_path,sep='\t',row.names=FALSE,quote=FALSE)
+group1_label<-'control';group2_label<-'treatment';ensure_module_result_layout<-function(...) NULL;write_csv_safe<-function(...) NULL
+eval(parse(text=code));stopifnot(de_raw$log2FoldChange==2,de_raw$stat==5,de_raw$baseMeanA==30,de_raw$sampleA=='treatment',de_contrast_inverted)
+cat('PASS: reverse DE standardization and contrast audit\n')

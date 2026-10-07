@@ -1,0 +1,920 @@
+## Module 10. Footprinting 分析（分层证据版）
+
+这一部分参考了更完整的 TOBIAS 工作流思路，把足迹分析拆成三层：差异 TF binding 概览、motif 中心插入 profile、以及与靶基因注释合并后的 regulator ranking。仅来源校验通过的 BINDetect 用于 TF 结合证据；内部 motif-centered profile 作为独立描述性结果，不替代差异结合。
+
+```{r footprint_cache_gate, include=FALSE}
+if(isTRUE(reuse_step_tables) && file.exists(cache_10_footprint_state_path)) {
+  required_footprint_schema_version <- "tobias_sha256_required_v3"
+  footprint_cached_payload <- load_state("10_footprint_state.rds", env = globalenv(), required = FALSE)
+  cache_has_footprint_schema <- !is.null(footprint_cached_payload) &&
+    identical(validate_bindetect_provenance()$Status[1], "VERIFIED") && exists("footprint_schema_version") &&
+    identical(as.character(footprint_schema_version), required_footprint_schema_version)
+  if(isTRUE(cache_has_footprint_schema)) {
+    report_status(
+      "INFO",
+      paste(
+        "Reusing cached footprint state for module 11:",
+        cache_10_footprint_state_path,
+        "(set ATAC_REUSE_STEP_TABLES=false to recompute)"
+      )
+    )
+    knitr::knit_exit()
+  }
+  report_status("WARN", "Existing footprint cache predates TOBIAS-required evidence rules; recomputing module 11.")
+}
+required_footprint_schema_version <- "tobias_sha256_required_v3"
+footprint_schema_version <- required_footprint_schema_version
+```
+
+```{r footprint_regulator_landscape, fig.width=14, fig.height=10}
+bindetect_provenance_status <- validate_bindetect_provenance()
+save_step_table(bindetect_provenance_status, "Step10", "BINDetect_Provenance_Status.csv")
+bindetect_df <- read_bindetect_results()
+if(is.null(bindetect_df)) {
+  # Remove superseded derived evidence so single-module downstream runs cannot
+  # pick up old TF evidence after the current input has been rejected.
+  invalid_evidence <- c(
+    "Footprint_Regulator_Evidence.csv", "Integrated_Footprint_Regulator_Summary.csv",
+    "Footprint_Supported_Motif_Target_Edges.csv", "Footprint_Supported_Motif_Summary.csv",
+    "Footprint_Supported_Gene_Summary.csv", "TF_Gene_Concordance_Summary.csv",
+    "TF_Evidence_Matrix.csv", "TF_Target_Module_Edges.csv"
+  )
+  unlink(vapply(invalid_evidence, function(x) step_table_file("Step10", x), character(1)))
+  invalid_plots <- c("BINDetect_Regulator_Summary.pdf", "Footprint_Supported_Regulators.pdf",
+                    "Top_TF_Target_Concordance.pdf", "TF_Evidence_Matrix.pdf",
+                    "TF_Confidence_Quadrant.pdf", "TF_Target_Module_Summary.pdf")
+  invisible(lapply(invalid_plots, function(x) remove_output_with_preview(step_plot_file("Step10", x))))
+}
+footprint_regulator_tbl <- data.frame()
+motifs_to_prioritize <- character(0)
+min_footprint_peak_count <- suppressWarnings(as.integer(Sys.getenv("ATAC_FOOTPRINT_MIN_PRIMARY_PEAKS", unset = "50")))
+if(is.na(min_footprint_peak_count) || min_footprint_peak_count < 1) min_footprint_peak_count <- 50
+
+if(!is.null(bindetect_df) && nrow(bindetect_df) > 0 &&
+   !should_compute_step("Step10", c("Footprint_Regulator_Evidence.csv")) &&
+   file.exists(step_table_file("Step10", "Footprint_Regulator_Evidence.csv"))) {
+  footprint_regulator_tbl <- read_step_table("Step10", "Footprint_Regulator_Evidence.csv")
+  motifs_to_prioritize <- footprint_regulator_tbl %>%
+    arrange(desc(IntegratedEvidenceScore), pvalue_value) %>%
+    slice_head(n = 10) %>%
+    pull(motif_name)
+  report_status("INFO", "Step10 使用现有 Footprint_Regulator_Evidence.csv，跳过 BINDetect regulator 重计算。")
+} else if(!is.null(bindetect_df) && nrow(bindetect_df) > 0) {
+  footprint_regulator_tbl <- build_footprint_regulator_evidence(
+    bindetect_df = bindetect_df,
+    motif_df = if(exists("motif_res")) motif_res else NULL,
+    de_gene_df = if(exists("de_genes")) de_genes else NULL
+  )
+
+  write.csv(footprint_regulator_tbl,
+            step_table_file("Step10", "Footprint_Regulator_Evidence.csv"),
+            row.names = FALSE)
+
+  top_labels <- footprint_regulator_tbl %>%
+    filter(direction != "NS") %>%
+    slice_max(order_by = IntegratedEvidenceScore, n = 20, with_ties = FALSE)
+
+  p_bindetect <- ggplot(footprint_regulator_tbl,
+                        aes(x = change_value, y = neg_log10_p, color = direction, size = total_tfbs)) +
+    geom_point(alpha = 0.8) +
+    geom_text_repel(data = top_labels, aes(label = motif_name), size = 3, max.overlaps = 40) +
+    scale_color_manual(values = pal_named(
+      Comparison_gain = viz_pal$group[comparison_group],
+      Reference_gain = viz_pal$group[reference_group],
+      NS = viz_pal$neutral_mid
+    )) +
+    theme_atac_classic(base_size = 12) +
+    labs(
+      title = "Differential TF binding landscape",
+      subtitle = paste0("Source: ", basename(attr(bindetect_df, "bindetect_file"))),
+      x = "Differential binding score",
+      y = "-log10(pvalue)",
+      size = "TFBS count",
+      color = "Direction"
+    )
+
+  top_gain <- footprint_regulator_tbl %>%
+    filter(direction == "Comparison_gain") %>%
+    slice_max(order_by = IntegratedEvidenceScore, n = 12, with_ties = FALSE)
+  top_loss <- footprint_regulator_tbl %>%
+    filter(direction == "Reference_gain") %>%
+    slice_max(order_by = IntegratedEvidenceScore, n = 12, with_ties = FALSE)
+
+  p_gain <- ggplot(top_gain,
+                   aes(x = reorder(motif_name, IntegratedEvidenceScore), y = IntegratedEvidenceScore)) +
+    geom_col(fill = viz_pal$group[comparison_group]) +
+    coord_flip() +
+    theme_atac_classic(base_size = 12) +
+    labs(title = "Top Comparison-gain motifs", x = NULL, y = "Integrated evidence")
+
+  p_loss <- ggplot(top_loss,
+                   aes(x = reorder(motif_name, IntegratedEvidenceScore), y = IntegratedEvidenceScore)) +
+    geom_col(fill = viz_pal$group[reference_group]) +
+    coord_flip() +
+    theme_atac_classic(base_size = 12) +
+    labs(title = "Top Reference-gain motifs", x = NULL, y = "Integrated evidence")
+
+  combined_bindetect <- p_bindetect / (p_gain + p_loss) +
+    plot_annotation(title = "Footprint regulator overview")
+  save_plot_pdf(combined_bindetect, step_plot_file("Step10", "BINDetect_Regulator_Summary.pdf"), width = 14, height = 10)
+  print(combined_bindetect)
+
+  motifs_to_prioritize <- unique(c(
+    footprint_regulator_tbl %>%
+      filter(direction != "NS") %>%
+      slice_max(order_by = IntegratedEvidenceScore, n = 10, with_ties = FALSE) %>%
+      pull(motif_name),
+    if(exists("top_motifs")) head(top_motifs$motif_name, 10) else character(0)
+  ))
+
+  cat("读取到 TOBIAS/BINDetect 结果:", attr(bindetect_df, "bindetect_file"), "\n")
+  cat("显著 differential binding motifs:",
+      sum(footprint_regulator_tbl$direction != "NS", na.rm = TRUE), "\n")
+} else {
+  cat("未检测到完整 TOBIAS BINDetect 结果；不会生成 regulator evidence。\n")
+  motifs_to_prioritize <- if(exists("top_motifs")) head(top_motifs$motif_name, 10) else character(0)
+  write_skipped_state(
+    "Step10",
+    "Footprint_Regulator_Landscape",
+    paste0(bindetect_provenance_status$Status[1], ": ", bindetect_provenance_status$Reason[1], "; internal motif profile is not regulator evidence."),
+    clear_plot_files = "BINDetect_Regulator_Summary.pdf"
+  )
+}
+```
+
+## 12.1 Motif-centered footprint profiles
+
+在差异 peak 中重新扫描候选 motif，生成原始 Tn5 插入描述曲线。每个 BAM 用 samtools 多区间迭代器一次提取全部有效窗口，再逐原始窗口统计插入；按该原始 final BAM 的 idxstats mapped alignment record 总数归一到每百万 mapped alignments，除以有效窗口数后取样本组均值。这里以 alignment record 为单位（配对 reads 的两端分别计数），没有新增过滤，不使用 fragment 总数。曲线及中心/侧翼差值均未做 Tn5 序列偏好校正，不是 TF 结合或 differential binding 检验。
+
+```{r footprinting_profiles}
+footprint_profile_summary <- data.frame()
+site_summary_df <- data.frame()
+primary_footprint_df <- filter_diff_peaks(res_df, mode = "primary")
+if((!exists("top_diff_peaks") || length(top_diff_peaks) == 0) && nrow(primary_footprint_df) > 0) {
+  top_diff_peaks <- primary_footprint_df %>%
+    arrange(pvalue, desc(abs(Fold))) %>%
+    slice_head(n = min(500, n())) %>%
+    diff_peak_granges() %>%
+    keep_primary_chromosomes()
+}
+primary_footprint_peak_count <- if(exists("top_diff_peaks")) length(top_diff_peaks) else 0L
+
+if(primary_footprint_peak_count >= min_footprint_peak_count &&
+   !should_compute_step("Step10", c("Footprint_Profile_Summary.csv")) &&
+   file.exists(step_table_file("Step10", "Footprint_Profile_Summary.csv"))) {
+  footprint_profile_summary <- read_step_table("Step10", "Footprint_Profile_Summary.csv")
+  site_summary_df <- read_step_table("Step10", "Motif_Binding_Site_Summary.csv")
+  report_status("INFO", "Step10 profile 层使用现有 Footprint_Profile_Summary.csv。")
+} else if(primary_footprint_peak_count >= min_footprint_peak_count && exists("top_diff_peaks")) {
+  cat("Starting motif-centered footprint profiling...\n")
+
+  pfm_db <- getMatrixSet(JASPAR2020, opts = list(species = "Mus musculus", all_versions = FALSE))
+  pfm_list <- as.list(pfm_db)
+  pfm_names <- sapply(pfm_list, TFBSTools::name)
+
+  selected_names <- unique(motifs_to_prioritize)
+  if(length(selected_names) == 0 && exists("top_motifs")) {
+    selected_names <- head(top_motifs$motif_name, 10)
+  }
+  selected_indices <- which(pfm_names %in% selected_names)
+
+  if(length(selected_indices) == 0) {
+    cat("没有匹配到可用于 footprint 的 JASPAR motif，跳过 profile 计算。\n")
+  } else {
+    selected_pfms <- pfm_list[selected_indices]
+    peak_sequences <- getSeq(BSgenome.Mmusculus.UCSC.mm39, top_diff_peaks)
+
+    motif_scans <- list()
+    pfm_lookup <- list()
+
+    for(i in seq_along(selected_pfms)) {
+      pfm_obj <- selected_pfms[[i]]
+      motif_name <- TFBSTools::name(pfm_obj)
+      pfm_lookup[[motif_name]] <- pfm_obj
+      pwm_obj <- toPWM(pfm_obj)
+      siteset <- searchSeq(pwm_obj, peak_sequences, min.score = "80%")
+
+      scans_df <- data.frame()
+      for(j in seq_along(siteset)) {
+        ss <- siteset[[j]]
+        if(length(ss) > 0) {
+          current_sites <- data.frame(
+            peak_idx = j,
+            start = start(ss),
+            end = end(ss),
+            score = score(ss),
+            strand = as.character(strand(ss))
+          )
+          scans_df <- bind_rows(scans_df, current_sites)
+        }
+      }
+
+      if(nrow(scans_df) > 0) {
+        motif_scans[[motif_name]] <- scans_df
+      }
+    }
+
+    footprint_sites <- list()
+    for(motif_name in names(motif_scans)) {
+      scans <- motif_scans[[motif_name]]
+      related_peaks <- top_diff_peaks[scans$peak_idx]
+      footprint_sites[[motif_name]] <- data.frame(
+        peak_id = paste(seqnames(related_peaks), start(related_peaks), end(related_peaks), sep = ":"),
+        motif_name = motif_name,
+        start_rel = scans$start,
+        end_rel = scans$end,
+        score = scans$score,
+        strand = scans$strand,
+        start_abs = start(related_peaks) + scans$start - 1,
+        end_abs = start(related_peaks) + scans$end - 1
+      )
+    }
+
+    if(length(footprint_sites) > 0) {
+      all_sites <- bind_rows(footprint_sites)
+      write.csv(all_sites, step_table_file("Step10", "Motif_Binding_Sites.csv"), row.names = FALSE)
+
+      site_summary_df <- all_sites %>%
+        dplyr::count(motif_name, name = "SupportingSiteCount", sort = TRUE)
+      write.csv(site_summary_df,
+                step_table_file("Step10", "Motif_Binding_Site_Summary.csv"),
+                row.names = FALSE)
+      cat("Identified", nrow(all_sites), "candidate binding sites across",
+          length(footprint_sites), "motifs.\n")
+    }
+
+    get_footprint_profile <- function(sites, bams, window_size = 100) {
+      centers <- round((sites$start_abs + sites$end_abs) / 2)
+      chrs <- sub(":.*", "", sites$peak_id)
+      windows <- GRanges(seqnames = chrs,
+                         ranges = IRanges(start = centers - window_size, end = centers + window_size))
+      bam_samples <- sub("\\.final\\.bam$", "", basename(bams))
+      bam_groups <- sample_group(bam_samples)
+      if(!length(bams) || !setequal(unique(bam_groups), group_levels)) stop("Profile requires both explicitly configured groups")
+      samtools_bin <- unname(Sys.which("samtools"))
+      sample_profiles <- list()
+      sample_audits <- list()
+
+      for(i in seq_along(bams)) {
+        bam <- bams[[i]]
+        sample_name <- sub("\\.final\\.bam$", "", basename(bam))
+        audit <- data.frame(
+          Sample = sample_name, Group = bam_groups[[i]], BAM = bam,
+          InputWindows = length(windows), ValidWindows = NA_integer_,
+          MappedAlignmentRecords = NA_real_, PerMillionScaleFactor = NA_real_,
+          ExtractedAlignmentRecords = NA_integer_, InsertionWindowPairs = NA_integer_,
+          Status = "FAILED", Reason = "", stringsAsFactors = FALSE
+        )
+        sample_result <- tryCatch({
+          if(!nzchar(samtools_bin)) stop("samtools is required for a multi-region BAM iterator")
+          if(!file.exists(bam)) stop("Declared final BAM is missing")
+          index_stats <- Rsamtools::idxstatsBam(bam)
+          library_size <- sum(as.numeric(index_stats$mapped))
+          if(!is.finite(library_size) || library_size <= 0) stop("Original final BAM has no valid mapped-alignment library size")
+          audit$MappedAlignmentRecords <- library_size
+          audit$PerMillionScaleFactor <- 1e6 / library_size
+          target_names <- as.character(index_stats$seqnames)
+          windows_bam <- windows
+          if(!any(grepl("^chr", target_names))) {
+            seqlevels(windows_bam) <- sub("^chr", "", seqlevels(windows_bam))
+            if("MT" %in% target_names) seqlevels(windows_bam)[seqlevels(windows_bam) == "M"] <- "MT"
+          }
+          target_idx <- match(as.character(seqnames(windows_bam)), target_names)
+          valid_windows <- !is.na(target_idx) & start(windows_bam) >= 1 &
+            end(windows_bam) <= index_stats$seqlength[target_idx]
+          windows_bam <- windows_bam[which(valid_windows)]
+          audit$ValidWindows <- length(windows_bam)
+          if(length(windows_bam) == 0) stop("No complete motif window lies within this BAM reference")
+
+          # -M uses one multi-region iterator: overlapping or disjoint BED ranges
+          # cannot re-emit one BAM record. Distinct records at identical coordinates remain distinct.
+          tmp_dir <- tempfile("motif_profile_")
+          if(!dir.create(tmp_dir)) stop("Could not create temporary profile extraction directory")
+          on.exit(unlink(tmp_dir, recursive = TRUE), add = TRUE)
+          bed_file <- file.path(tmp_dir, "windows.bed")
+          subset_bam <- file.path(tmp_dir, "windows.bam")
+          command_log <- file.path(tmp_dir, "samtools.stderr")
+          write.table(data.frame(chr = as.character(seqnames(windows_bam)),
+                                 start0 = start(windows_bam) - 1L, end = end(windows_bam)),
+                      bed_file, sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+          status <- system2(samtools_bin,
+                            args = c("view", "-b", "-M", "-L", shQuote(bed_file),
+                                     "-o", shQuote(subset_bam), shQuote(bam)),
+                            stdout = FALSE, stderr = command_log)
+          if(!identical(as.integer(status), 0L) || !file.exists(subset_bam)) {
+            detail <- if(file.exists(command_log)) paste(readLines(command_log, warn = FALSE), collapse = " ") else ""
+            stop("samtools multi-region extraction failed: ", detail)
+          }
+          # Sequentially read the extracted BAM once, with no 'which' intervals.
+          reads <- GenomicAlignments::readGAlignments(
+            subset_bam, param = Rsamtools::ScanBamParam(flag = Rsamtools::scanBamFlag(isUnmappedQuery = FALSE)))
+          audit$ExtractedAlignmentRecords <- length(reads)
+          raw_profile <- numeric(2 * window_size + 1)
+          if(length(reads) > 0) {
+            read_strand <- as.character(strand(reads))
+            if(any(!read_strand %in% c("+", "-"))) stop("Mapped alignment has unavailable strand")
+            ins_pos <- ifelse(read_strand == "+", start(reads) + 4L, end(reads) - 5L)
+            ins_gr <- GRanges(seqnames = seqnames(reads), ranges = IRanges(start = ins_pos, width = 1))
+            hits <- findOverlaps(ins_gr, windows_bam, ignore.strand = TRUE)
+            if(length(hits) > 0) {
+              rel_dist <- start(ins_gr)[queryHits(hits)] - (start(windows_bam)[subjectHits(hits)] + window_size)
+              raw_profile <- tabulate(rel_dist + window_size + 1L, nbins = length(raw_profile))
+            }
+          }
+          audit$InsertionWindowPairs <- sum(raw_profile)
+          audit$Status <- "COMPLETED"
+          audit$Reason <- "Each original mapped alignment counted once per original valid motif window"
+          sample_profile <- data.frame(
+            Sample = sample_name, Group = bam_groups[[i]], distance = -window_size:window_size,
+            RawInsertions = raw_profile,
+            insertions = raw_profile * audit$PerMillionScaleFactor / audit$ValidWindows,
+            stringsAsFactors = FALSE
+          )
+          unlink(tmp_dir, recursive = TRUE)
+          list(profile = sample_profile, audit = audit, error = NULL)
+        }, error = function(e) {
+          audit$Reason <- conditionMessage(e)
+          list(profile = NULL, audit = audit,
+               error = paste("Motif profile sample failed:", sample_name, conditionMessage(e)))
+        })
+        sample_audits[[i]] <- sample_result$audit
+        if(!is.null(sample_result$error)) {
+          return(list(profile = NULL, sample_profiles = data.frame(),
+                      audit = bind_rows(sample_audits), error = sample_result$error))
+        }
+        sample_profiles[[i]] <- sample_result$profile
+      }
+      sample_profiles <- bind_rows(sample_profiles)
+      group_profile <- sample_profiles %>% group_by(group = Group, distance) %>%
+        summarise(insertions = mean(insertions), .groups = "drop")
+      list(profile = group_profile, sample_profiles = sample_profiles,
+           audit = bind_rows(sample_audits), error = NULL)
+    }
+
+    bam_files_existing <- bam_files  # Missing declared samples must fail, not disappear from group means.
+    motifs_to_plot <- intersect(selected_names, names(footprint_sites))
+    if(length(motifs_to_plot) == 0) {
+      motifs_to_plot <- head(names(footprint_sites), 8)
+    }
+    motifs_to_plot <- head(unique(motifs_to_plot), 10)
+    window_size <- 100
+    profile_records <- list()
+    profile_sample_audits <- list()
+    profile_sample_values <- list()
+    profile_group_values <- list()
+    set.seed(20260518)
+
+    if(length(bam_files_existing) == 0) {
+      cat("未找到用于 footprint 的 BAM 文件，跳过 profile 绘图。\n")
+    } else {
+      for(motif_name in motifs_to_plot) {
+        sites <- footprint_sites[[motif_name]]
+        if(nrow(sites) > 2000) {
+          sites <- sites[sample(nrow(sites), 2000), ]
+        }
+
+        profile_result <- get_footprint_profile(sites, bam_files_existing, window_size)
+        profile_sample_audits[[motif_name]] <- profile_result$audit %>% mutate(motif_name = motif_name)
+        save_step_table(bind_rows(profile_sample_audits), "Step10", "Footprint_Profile_Sample_Audit.csv")
+        if(!is.null(profile_result$error)) stop(profile_result$error)
+        profile_data <- profile_result$profile
+        profile_sample_values[[motif_name]] <- profile_result$sample_profiles %>% mutate(motif_name = motif_name)
+        profile_group_values[[motif_name]] <- profile_data %>% mutate(motif_name = motif_name)
+        save_step_table(bind_rows(profile_sample_values), "Step10", "Footprint_Profile_Sample_Values.csv")
+        save_step_table(bind_rows(profile_group_values), "Step10", "Footprint_Profile_Group_Values.csv")
+
+        pfm_obj <- pfm_lookup[[motif_name]]
+        pwm_mat <- as.matrix(toPWM(pfm_obj, type = "prob"))
+        motif_len <- ncol(pwm_mat)
+        center_half_width <- max(3, floor(motif_len / 2))
+
+        profile_metrics <- profile_data %>%
+          mutate(region = case_when(
+            abs(distance) <= center_half_width ~ "center",
+            abs(distance) >= 30 & abs(distance) <= 60 ~ "flank",
+            TRUE ~ "other"
+          )) %>%
+          filter(region != "other") %>%
+          group_by(group, region) %>%
+          summarise(MeanInsertion = mean(insertions, na.rm = TRUE), .groups = "drop") %>%
+          pivot_wider(names_from = region, values_from = MeanInsertion, values_fill = list(MeanInsertion = NA_real_))
+        if(!"center" %in% colnames(profile_metrics)) profile_metrics$center <- NA_real_
+        if(!"flank" %in% colnames(profile_metrics)) profile_metrics$flank <- NA_real_
+        profile_metrics <- profile_metrics %>%
+          mutate(
+            motif_name = motif_name,
+            SupportingSiteCount = nrow(sites),
+            MotifLength = motif_len,
+            FootprintDepth = flank - center
+          )
+        profile_records[[motif_name]] <- profile_metrics
+
+        p_logo <- ggseqlogo(pwm_mat) +
+          theme_void() +
+          coord_cartesian(xlim = c(1 - motif_len / 2, motif_len + motif_len / 2), expand = FALSE) +
+          theme(plot.margin = ggplot2::margin(b = 0))
+
+        profile_data$x_idx <- profile_data$distance + window_size + 1
+        center_idx <- window_size + 1
+        y_max <- max(profile_data$insertions, na.rm = TRUE) * 1.05
+        poly_df <- data.frame(
+          x = c(-motif_len / 2 + center_idx, motif_len / 2 + center_idx, 50 + center_idx, -50 + center_idx),
+          y = c(0, 0, y_max, y_max)
+        )
+
+        p_fp <- ggplot(profile_data, aes(x = x_idx, y = insertions, color = group)) +
+          geom_polygon(data = poly_df, aes(x = x, y = y), fill = viz_pal$neutral["light"], inherit.aes = FALSE) +
+          geom_line(linewidth = 1) +
+          scale_color_manual(values = viz_pal$group) +
+          coord_cartesian(xlim = c(center_idx - 100, center_idx + 100), ylim = c(0, y_max), expand = FALSE) +
+          scale_x_continuous(
+            breaks = seq(center_idx - 100, center_idx + 100, by = 20),
+            labels = seq(-100, 100, by = 20)
+          ) +
+          theme_atac_classic(base_size = 12, legend = "bottom") +
+          theme(legend.position = "bottom", plot.margin = ggplot2::margin(t = 0)) +
+          labs(x = "Distance from motif center (bp)",
+               y = "Tn5 insertions / million mapped alignments / valid window")
+
+        p_combined <- p_logo / p_fp + plot_layout(heights = c(1, 3)) +
+          plot_annotation(title = paste("Raw Tn5 insertion profile:", motif_name),
+                          subtitle = "Library-normalized descriptive profile; no sequence-bias correction or TF-binding test")
+
+        safe_name <- gsub("::", "_", motif_name, fixed = TRUE)
+        save_plot_pdf(p_combined, step_plot_file("Step10", paste0("Footprint_", safe_name, ".pdf")), width = 8, height = 6)
+        print(p_combined)
+      }
+    }
+
+    if(length(profile_records) > 0) {
+      footprint_profile_summary <- bind_rows(profile_records) %>%
+        dplyr::select(motif_name, group, SupportingSiteCount, MotifLength, center, flank, FootprintDepth) %>%
+        rename(CenterMean = center, FlankMean = flank)
+
+      footprint_profile_summary <- footprint_profile_summary %>%
+        mutate(group = ifelse(group == comparison_group, "Comparison", "Reference")) %>%
+        pivot_wider(names_from = group,
+                    values_from = c(CenterMean, FlankMean, FootprintDepth),
+                    names_sep = "_")
+      if(!"FootprintDepth_Comparison" %in% colnames(footprint_profile_summary)) {
+        footprint_profile_summary$FootprintDepth_Comparison <- NA_real_
+      }
+      if(!"FootprintDepth_Reference" %in% colnames(footprint_profile_summary)) {
+        footprint_profile_summary$FootprintDepth_Reference <- NA_real_
+      }
+      footprint_profile_summary <- footprint_profile_summary %>%
+        mutate(DeltaFootprintDepth_Comparison_vs_Reference = FootprintDepth_Comparison - FootprintDepth_Reference,
+               ProfileUnit = "insertions per million original final-BAM mapped alignments per valid motif window; group mean",
+               EvidenceRole = "raw Tn5 insertion descriptive profile; no sequence-bias correction; not a TF-binding test")
+
+      write.csv(footprint_profile_summary,
+                step_table_file("Step10", "Footprint_Profile_Summary.csv"),
+                row.names = FALSE)
+      print(head(footprint_profile_summary, 10))
+    }
+  }
+} else {
+  cat("项目主阈值差异 peak 数量不足，跳过 footprint profile 计算。\n")
+  write_skipped_state(
+    "Step10",
+    "Footprint_Profile",
+    paste0("Fewer than ", min_footprint_peak_count, " primary differential peaks were available for internal motif-centered footprint profiling (", primary_diff_peak_label(), ")."),
+    clear_plot_files = "Footprint_Profile_Summary.pdf"
+  )
+}
+```
+
+## 12.2 Footprint-supported regulator summary
+
+将 footprint 候选位点、差异 binding 证据和 peak 注释整合到同一张 regulator 排名图里，作为更适合汇报的 TF 候选优先级结果。
+
+```{r footprint_supported_summary, fig.width=14, fig.height=6}
+if(!is.null(bindetect_df) && nrow(bindetect_df) > 0 && nrow(site_summary_df) > 0) {
+  footprint_regulator_tbl <- build_footprint_regulator_evidence(
+    bindetect_df = bindetect_df,
+    motif_df = if(exists("motif_res")) motif_res else NULL,
+    de_gene_df = if(exists("de_genes")) de_genes else NULL,
+    site_summary_df = site_summary_df
+  )
+  write.csv(footprint_regulator_tbl,
+            step_table_file("Step10", "Footprint_Regulator_Evidence.csv"),
+            row.names = FALSE)
+}
+
+footprint_supported <- if(!is.null(bindetect_df) && nrow(bindetect_df) > 0) {
+  build_footprint_supported_tables()
+} else {
+  NULL
+}
+
+if(!is.null(footprint_supported) && nrow(footprint_supported$motif_summary) > 0) {
+  if(exists("footprint_regulator_tbl") && nrow(footprint_regulator_tbl) > 0) {
+    footprint_regulator_best <- footprint_regulator_tbl %>%
+      filter(!is.na(motif_name), motif_name != "") %>%
+      arrange(
+        desc(IntegratedEvidenceScore),
+        pvalue_value,
+        desc(abs(change_value)),
+        desc(total_tfbs),
+        motif_name
+      ) %>%
+      distinct(motif_name, .keep_all = TRUE)
+    integrated_fp <- footprint_supported$motif_summary %>%
+      left_join(
+        footprint_regulator_best %>%
+          dplyr::select(motif_name, direction, change_value, pvalue_value,
+                        total_tfbs, SupportingSiteCount, IntegratedEvidenceScore, EvidenceTier),
+        by = "motif_name"
+      ) %>%
+      arrange(desc(IntegratedEvidenceScore), desc(TargetGeneCount), desc(SupportingPeakCount))
+
+    write.csv(integrated_fp,
+              step_table_file("Step10", "Integrated_Footprint_Regulator_Summary.csv"),
+              row.names = FALSE)
+
+    top_integrated <- integrated_fp %>%
+      slice_max(order_by = IntegratedEvidenceScore, n = 15, with_ties = FALSE)
+    top_label_points <- integrated_fp %>%
+      filter(!is.na(change_value)) %>%
+      slice_max(order_by = IntegratedEvidenceScore, n = 12, with_ties = FALSE)
+
+    p_rank <- ggplot(top_integrated,
+                     aes(x = reorder(motif_name, IntegratedEvidenceScore), y = IntegratedEvidenceScore, fill = EvidenceTier)) +
+      geom_col() +
+      coord_flip() +
+      scale_fill_manual(values = viz_pal$tier) +
+      theme_atac_classic(base_size = 12) +
+      labs(title = "Top integrated footprint regulators", x = NULL, y = "Integrated evidence")
+
+    p_map <- ggplot(integrated_fp %>% filter(!is.na(change_value)),
+                    aes(x = change_value, y = TargetGeneCount, size = SupportingPeakCount, color = direction)) +
+      geom_point(alpha = 0.8) +
+      geom_text_repel(data = top_label_points, aes(label = motif_name), size = 3, max.overlaps = 30) +
+      scale_color_manual(values = pal_named(
+        Comparison_gain = viz_pal$group[comparison_group],
+        Reference_gain = viz_pal$group[reference_group],
+        NS = viz_pal$neutral_mid
+      )) +
+      theme_atac_classic(base_size = 12) +
+      labs(title = "Footprint-supported motif-target map",
+           x = "Differential binding score",
+           y = "Target gene count",
+           size = "Supporting peaks",
+           color = "Direction")
+
+    combined_fp_summary <- p_rank + p_map
+    save_plot_pdf(combined_fp_summary, step_plot_file("Step10", "Footprint_Supported_Regulators.pdf"), width = 14, height = 6)
+    print(combined_fp_summary)
+    print(head(integrated_fp, 10))
+  } else {
+    top_motif_summary <- footprint_supported$motif_summary %>% slice_head(n = 15)
+    top_gene_summary <- footprint_supported$gene_summary %>% slice_head(n = 15)
+
+    p_motif_support <- ggplot(top_motif_summary,
+                              aes(x = reorder(motif_name, TargetGeneCount), y = TargetGeneCount)) +
+      geom_col(fill = viz_pal$group[reference_group]) +
+      coord_flip() +
+      theme_atac_classic(base_size = 12) +
+      labs(title = "Top footprint-supported motifs", x = NULL, y = "Target gene count")
+
+    p_gene_support <- ggplot(top_gene_summary,
+                             aes(x = reorder(geneSymbol, MotifCount), y = MotifCount)) +
+      geom_col(fill = viz_pal$group[comparison_group]) +
+      coord_flip() +
+      theme_atac_classic(base_size = 12) +
+      labs(title = "Genes linked to the most motifs", x = NULL, y = "Motif count")
+
+    combined_fp_summary <- p_motif_support + p_gene_support
+    save_plot_pdf(combined_fp_summary, step_plot_file("Step10", "Footprint_Supported_Regulators.pdf"), width = 14, height = 6)
+    print(combined_fp_summary)
+    print(head(footprint_supported$motif_summary, 10))
+  }
+
+  cat("Footprint-supported motif-target edges:",
+      nrow(footprint_supported$edges), "\n")
+} else {
+  cat("缺少 Step8/Step10 所需输入，跳过 footprint-supported regulator summary。\n")
+  write_skipped_state(
+    "Step10",
+    "Footprint_Supported_Regulators",
+    "Footprint-supported regulator summary requires complete TOBIAS BINDetect output and motif-site tables.",
+    clear_plot_files = "Footprint_Supported_Regulators.pdf"
+  )
+}
+```
+
+## 12.3 TF-gene concordance summary
+
+把 `motif enrichment`、`motif activity`、`footprint evidence` 与 `target gene / RNA support` 压成一张 TF 摘要表，避免只剩网络图而没有可以直接讲的排序结果。
+
+```{r tf_gene_concordance_summary, fig.width=13, fig.height=7}
+tf_target_concordance <- data.frame()
+tf_evidence_matrix <- data.frame()
+
+motif_tbl_step9 <- if(exists("motif_res")) motif_res else read_step_table("Step8", "Motif_Enrichment.csv")
+motif_activity_tbl_step9 <- if(exists("motif_activity_summary")) motif_activity_summary else read_step_table("Step8", "Motif_Activity_Summary.csv")
+bindetect_tbl_step9 <- if(exists("footprint_regulator_tbl")) footprint_regulator_tbl else read_step_table("Step10", "Footprint_Regulator_Evidence.csv")
+footprint_edges_tbl <- read_step_table("Step10", "Footprint_Supported_Motif_Target_Edges.csv")
+gene_priority_tbl <- if(exists("multiomics_candidates")) multiomics_candidates else read_step_table("Step9", "Multiomics_Gene_Priority_Table.csv")
+gene_priority_tbl <- ensure_columns(gene_priority_tbl, list(
+  geneSymbol = NA_character_,
+  RNA_log2FC = NA_real_,
+  IntegratedPriorityScore = NA_real_
+))
+
+if(nrow(bindetect_tbl_step9) > 0 && identical(bindetect_provenance_status$Status[1], "VERIFIED")) {
+  motif_support_tbl <- if(nrow(motif_tbl_step9) > 0) {
+    motif_tbl_step9 %>%
+      group_by(motif_name) %>%
+      summarise(
+        MotifCount = max(count, na.rm = TRUE),
+        MotifFreq = max(freq, na.rm = TRUE),
+        .groups = "drop"
+      )
+  } else {
+    tibble(
+      motif_name = character(),
+      MotifCount = numeric(),
+      MotifFreq = numeric()
+    )
+  }
+
+  activity_support_tbl <- if(nrow(motif_activity_tbl_step9) > 0) {
+    motif_activity_tbl_step9 %>%
+      dplyr::select(motif_name, MotifActivityDelta = GroupMeanDifference, MotifActivityMethod = Method) %>%
+      distinct()
+  } else {
+    tibble(
+      motif_name = character(),
+      MotifActivityDelta = numeric(),
+      MotifActivityMethod = character()
+    )
+  }
+
+  target_support_tbl <- if(nrow(footprint_edges_tbl) > 0) {
+    footprint_edges_tbl %>%
+      left_join(
+        gene_priority_tbl %>%
+          dplyr::select(geneSymbol, RNA_log2FC, IntegratedPriorityScore),
+        by = "geneSymbol"
+      ) %>%
+      group_by(motif_name) %>%
+      summarise(
+        TargetGeneCount = n_distinct(geneSymbol),
+        RNA_SupportedTargetCount = sum(!is.na(RNA_log2FC) & abs(RNA_log2FC) > 0.58, na.rm = TRUE),
+        MeanTargetRNAlog2FC = mean(RNA_log2FC, na.rm = TRUE),
+        MeanTargetPriority = mean(IntegratedPriorityScore, na.rm = TRUE),
+        .groups = "drop"
+      )
+  } else {
+    tibble(
+      motif_name = character(),
+      TargetGeneCount = integer(),
+      RNA_SupportedTargetCount = integer(),
+      MeanTargetRNAlog2FC = numeric(),
+      MeanTargetPriority = numeric()
+    )
+  }
+
+  tf_target_concordance <- bindetect_tbl_step9 %>%
+    dplyr::select(
+      motif_name,
+      direction,
+      change_value,
+      pvalue_value,
+      FootprintEvidenceScore = IntegratedEvidenceScore,
+      EvidenceTier,
+      total_tfbs
+    ) %>%
+    filter(!is.na(motif_name), motif_name != "") %>%
+    arrange(
+      desc(FootprintEvidenceScore),
+      pvalue_value,
+      desc(abs(change_value)),
+      desc(total_tfbs),
+      motif_name
+    ) %>%
+    distinct(motif_name, .keep_all = TRUE) %>%
+    full_join(motif_support_tbl, by = "motif_name") %>%
+    full_join(activity_support_tbl, by = "motif_name") %>%
+    full_join(target_support_tbl, by = "motif_name") %>%
+    mutate(
+      direction = case_when(
+        !is.na(direction) ~ direction,
+        !is.na(MotifActivityDelta) & MotifActivityDelta > 0 ~ "Comparison_gain",
+        !is.na(MotifActivityDelta) & MotifActivityDelta < 0 ~ "Reference_gain",
+        TRUE ~ "NS"
+      ),
+      MotifFreq = replace_na(MotifFreq, 0),
+      MotifCount = replace_na(MotifCount, 0),
+      MotifActivityDelta = replace_na(MotifActivityDelta, 0),
+      TargetGeneCount = replace_na(TargetGeneCount, 0),
+      RNA_SupportedTargetCount = replace_na(RNA_SupportedTargetCount, 0),
+      MeanTargetPriority = replace_na(MeanTargetPriority, 0),
+      FootprintEvidenceScore = replace_na(FootprintEvidenceScore, 0),
+      MotifEvidenceScore = pmin(2.5, MotifFreq * 3 + log10(MotifCount + 1)),
+      ActivityEvidenceScore = pmin(2.5, abs(MotifActivityDelta) * 2),
+      TargetEvidenceScore = pmin(2.5, log10(TargetGeneCount + 1) + RNA_SupportedTargetCount / 5),
+      RNAEvidenceScore = pmin(2, MeanTargetPriority / 4),
+      TFGeneConcordanceScore = round(
+        FootprintEvidenceScore + MotifEvidenceScore + ActivityEvidenceScore + TargetEvidenceScore + RNAEvidenceScore,
+        2
+      )
+    ) %>%
+    arrange(desc(TFGeneConcordanceScore), desc(TargetGeneCount), pvalue_value)
+
+  save_step_table(tf_target_concordance, "Step10", "TF_Gene_Concordance_Summary.csv")
+  tf_evidence_matrix <- tf_target_concordance %>%
+    transmute(
+      motif_name,
+      direction,
+      DifferentialBindingScore = replace_na(change_value, 0),
+      FootprintStrength = replace_na(FootprintEvidenceScore, 0),
+      MotifEnrichment = replace_na(MotifEvidenceScore, 0),
+      MotifActivity = replace_na(ActivityEvidenceScore, 0),
+      TargetSupport = replace_na(TargetEvidenceScore, 0),
+      RNASupport = replace_na(RNAEvidenceScore, 0),
+      TotalEvidence = replace_na(TFGeneConcordanceScore, 0),
+      TargetGeneCount = replace_na(TargetGeneCount, 0),
+      RNA_SupportedTargetCount = replace_na(RNA_SupportedTargetCount, 0)
+    ) %>%
+    arrange(desc(TotalEvidence), desc(TargetGeneCount), desc(FootprintStrength))
+  save_step_table(tf_evidence_matrix, "Step10", "TF_Evidence_Matrix.csv")
+
+  if(nrow(tf_target_concordance) > 0 && should_render_plots()) {
+    top_tf_target <- tf_target_concordance %>%
+      filter(direction != "NS" | TFGeneConcordanceScore > 0) %>%
+      slice_head(n = 20)
+
+    p_tf_rank <- ggplot(
+      top_tf_target,
+      aes(x = reorder(motif_name, TFGeneConcordanceScore), y = TFGeneConcordanceScore, fill = direction)
+    ) +
+      geom_col(width = 0.72) +
+      coord_flip() +
+      scale_fill_manual(values = pal_named(
+        Comparison_gain = viz_pal$group[comparison_group],
+        Reference_gain = viz_pal$group[reference_group],
+        NS = viz_pal$neutral_mid
+      )) +
+      theme_atac_classic(base_size = 12) +
+      labs(title = "Top TF-gene concordance summary", x = NULL, y = "Integrated TF-gene evidence", fill = "Direction")
+
+    p_tf_bubble <- ggplot(
+      top_tf_target,
+      aes(x = TargetGeneCount, y = TFGeneConcordanceScore, size = RNA_SupportedTargetCount, color = direction)
+    ) +
+      geom_point(alpha = 0.82) +
+      geom_text_repel(aes(label = motif_name), size = 3, max.overlaps = 30) +
+      scale_color_manual(values = pal_named(
+        Comparison_gain = viz_pal$group[comparison_group],
+        Reference_gain = viz_pal$group[reference_group],
+        NS = viz_pal$neutral_mid
+      )) +
+      theme_atac_classic(base_size = 12) +
+      labs(title = "TF evidence vs supported target genes", x = "Supported target gene count", y = "Integrated TF-gene evidence", size = "RNA-supported targets", color = "Direction")
+
+    save_plot_pdf(p_tf_rank + p_tf_bubble, step_plot_file("Step10", "Top_TF_Target_Concordance.pdf"), width = 13, height = 7)
+  }
+} else {
+  write_skipped_state("Step10", "TF_Gene_Concordance", "No provenance-verified BINDetect binding evidence; motif enrichment alone is not differential TF binding.")
+}
+```
+
+## 12.4 TF evidence matrix and confidence maps
+
+把 `motif enrichment`、`motif activity`、`footprint`、`target support`、`RNA support` 收成机制层的统一矩阵和摘要图。
+
+```{r tf_evidence_matrix_plots, fig.width=13, fig.height=8}
+tf_evidence_matrix <- if(exists("tf_evidence_matrix")) tf_evidence_matrix else read_step_table("Step10", "TF_Evidence_Matrix.csv")
+tf_target_concordance <- if(exists("tf_target_concordance")) tf_target_concordance else read_step_table("Step10", "TF_Gene_Concordance_Summary.csv")
+footprint_edges_tbl <- if(exists("footprint_edges_tbl")) footprint_edges_tbl else read_step_table("Step10", "Footprint_Supported_Motif_Target_Edges.csv")
+gene_priority_tbl_step9 <- if(exists("gene_priority_tbl")) gene_priority_tbl else read_step_table("Step9", "Multiomics_Gene_Priority_Table.csv")
+gene_priority_tbl_step9 <- ensure_columns(gene_priority_tbl_step9, list(
+  geneSymbol = NA_character_,
+  IntegratedPriorityScore = NA_real_
+))
+
+if(nrow(tf_evidence_matrix) > 0 && should_render_plots()) {
+  top_tf_matrix <- tf_evidence_matrix %>%
+    filter(!is.na(motif_name), motif_name != "") %>%
+    slice_head(n = 25)
+
+  tf_matrix_long <- top_tf_matrix %>%
+    dplyr::select(motif_name, FootprintStrength, MotifEnrichment, MotifActivity, TargetSupport, RNASupport) %>%
+    pivot_longer(cols = -motif_name, names_to = "EvidenceType", values_to = "EvidenceValue") %>%
+    group_by(EvidenceType) %>%
+    mutate(
+      ScaledEvidence = ifelse(max(abs(EvidenceValue), na.rm = TRUE) > 0, EvidenceValue / max(abs(EvidenceValue), na.rm = TRUE), 0)
+    ) %>%
+    ungroup() %>%
+    mutate(
+      motif_name = factor(motif_name, levels = rev(top_tf_matrix$motif_name)),
+      EvidenceType = factor(EvidenceType, levels = c("MotifEnrichment", "MotifActivity", "FootprintStrength", "TargetSupport", "RNASupport"))
+    )
+
+  p_tf_matrix <- ggplot(tf_matrix_long, aes(x = EvidenceType, y = motif_name, fill = ScaledEvidence)) +
+    geom_tile(color = viz_pal$neutral["light"], linewidth = 0.25) +
+    scale_fill_heatmap_diverging(midpoint = 0) +
+    theme_atac_classic(base_size = 12) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(
+      title = "TF evidence matrix",
+      subtitle = "Mechanism-layer evidence integrated across motif, activity, footprint and targets",
+      x = NULL,
+      y = NULL,
+      fill = "Scaled evidence"
+    )
+  save_plot_pdf(p_tf_matrix, step_plot_file("Step10", "TF_Evidence_Matrix.pdf"), width = 10, height = 9)
+
+  p_tf_quadrant <- ggplot(
+    top_tf_matrix,
+    aes(x = MotifActivity, y = FootprintStrength, size = TargetGeneCount, color = direction)
+  ) +
+    geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
+    geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
+    geom_point(alpha = 0.84) +
+    geom_text_repel(aes(label = motif_name), size = 3, max.overlaps = 35) +
+    scale_color_manual(values = pal_named(
+      Comparison_gain = viz_pal$group[comparison_group],
+      Reference_gain = viz_pal$group[reference_group],
+      NS = viz_pal$neutral_mid
+    )) +
+    theme_atac_classic(base_size = 12) +
+    labs(
+      title = "TF confidence quadrant",
+      x = "Motif activity evidence",
+      y = "Footprint evidence",
+      size = "Target gene count",
+      color = "Direction"
+    )
+  save_plot_pdf(p_tf_quadrant, step_plot_file("Step10", "TF_Confidence_Quadrant.pdf"), width = 9, height = 7)
+
+  if(nrow(footprint_edges_tbl) > 0 && nrow(gene_priority_tbl_step9) > 0) {
+    top_tf_names <- top_tf_matrix %>% slice_head(n = 8) %>% pull(motif_name)
+    top_gene_names <- gene_priority_tbl_step9 %>%
+      filter(!is.na(geneSymbol), geneSymbol != "") %>%
+      arrange(desc(IntegratedPriorityScore), RNA_pvalue) %>%
+      slice_head(n = 20) %>%
+      pull(geneSymbol)
+
+    module_edges <- footprint_edges_tbl %>%
+      filter(motif_name %in% top_tf_names, geneSymbol %in% top_gene_names) %>%
+      distinct(motif_name, geneSymbol)
+
+    if(nrow(module_edges) > 0) {
+      save_step_table(module_edges, "Step10", "TF_Target_Module_Edges.csv")
+      tf_nodes <- data.frame(name = unique(module_edges$motif_name), type = "TF", stringsAsFactors = FALSE)
+      gene_nodes <- data.frame(name = unique(module_edges$geneSymbol), type = "Gene", stringsAsFactors = FALSE)
+      graph_nodes <- bind_rows(tf_nodes, gene_nodes) %>% distinct(name, .keep_all = TRUE)
+      graph_edges <- module_edges %>% rename(from = motif_name, to = geneSymbol)
+      g_tf_module <- igraph::graph_from_data_frame(graph_edges, directed = FALSE, vertices = graph_nodes)
+
+      set.seed(1)
+      p_tf_module <- ggraph::ggraph(g_tf_module, layout = "fr") +
+        ggraph::geom_edge_link(alpha = 0.18, color = viz_pal$neutral_dark) +
+        ggraph::geom_node_point(aes(color = type, size = type)) +
+        ggraph::geom_node_text(aes(label = name), repel = TRUE, size = 3) +
+        scale_color_manual(values = c(TF = pal_pick(viz_pal$group[comparison_group]), Gene = pal_pick(viz_pal$group[reference_group]))) +
+        scale_size_manual(values = c(TF = 5.5, Gene = 3.2)) +
+        theme_void() +
+        labs(title = "TF-target module summary", color = "Node type", size = "Node type")
+      save_plot_pdf(
+        p_tf_module,
+        step_plot_file("Step10", "TF_Target_Module_Summary.pdf"),
+        width = 11,
+        height = 8,
+        coordinate_system = "none"
+      )
+    }
+  }
+} else {
+  write_skipped_state(
+    "Step10",
+    "TF_Evidence_Matrix",
+    "Missing TF concordance inputs for matrix/quadrant/module plots.",
+    clear_plot_files = c(
+      "TF_Evidence_Matrix.pdf",
+      "TF_Confidence_Quadrant.pdf",
+      "TF_Target_Module_Summary.pdf"
+    )
+  )
+}
+```
+
+```{r footprint_module_status_plot, include=FALSE}
+write_module_status_plot("Step10", "Module 10 footprinting and TF evidence status")
+```
+
+```{r save_footprint_state, include=FALSE}
+save_state(
+  "10_footprint_state.rds",
+  c(
+    "bindetect_df", "footprint_regulator_tbl", "motifs_to_prioritize",
+    "footprint_schema_version",
+    "footprint_profile_summary", "motif_sites", "footprint_supported",
+    "tf_target_concordance", "tf_evidence_matrix",
+    "footprint_edges_tbl", "module_edges"
+  )
+)
+```

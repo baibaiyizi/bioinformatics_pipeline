@@ -1,0 +1,941 @@
+## Module 05. 差异 Peak 分析 (DiffBind)
+
+使用 `DiffBind` 包进行差异可及性分析。
+
+```{r diffbind_cache_gate, include=FALSE}
+diff_tables_reused <- FALSE
+diff_state_reused <- FALSE
+
+if(isTRUE(reuse_step_tables) && file.exists(cache_05_differential_accessibility_state_path)) {
+  diff_cached_payload <- load_state("05_differential_accessibility_state.rds", env = globalenv(), required = FALSE)
+  cache_has_project_schema <- !is.null(diff_cached_payload) && exists("all_res_df") &&
+    is.data.frame(all_res_df) &&
+    all(c("PvalueDiffPeak", "FDRDiffPeak", "PrimaryDiffPeak",
+          "SelectedSignificanceMetric", "SelectedSignificanceValue", "SelectedSignificanceThreshold") %in% colnames(all_res_df))
+  cache_is_native_diffbind <- exists("diff_peak_source_audit_tbl") &&
+    is.data.frame(diff_peak_source_audit_tbl) &&
+    "AnalysisSource" %in% colnames(diff_peak_source_audit_tbl) &&
+    any(diff_peak_source_audit_tbl$AnalysisSource == "native_diffbind")
+  if(isTRUE(cache_has_project_schema) && isTRUE(cache_is_native_diffbind)) {
+    # 重新应用当前显著性门和统一 peak ID；已有图不能跳过修正后的重画。
+    report_status("INFO", "Reusing native DiffBind counts and estimates; regenerating current peak layers and plots.")
+    diff_tables_reused <- TRUE
+    diff_state_reused <- TRUE
+  } else if(isTRUE(cache_has_project_schema)) {
+    report_status("WARN", "Existing module 5 cache has no native DiffBind provenance; recomputing from BAM and peak files.")
+  } else {
+    report_status("WARN", "Existing DiffBind cache uses an old differential-peak schema; recomputing module 5.")
+  }
+}
+```
+
+```{r diffbind_table_reuse_gate, include=FALSE}
+read_first_existing_csv <- function(files) {
+  files <- files[file.exists(files)]
+  if(length(files) == 0) return(data.frame())
+  read.csv(files[1], stringsAsFactors = FALSE, check.names = FALSE)
+}
+
+write_diff_peak_layers <- function(all_df) {
+  all_df <- standardize_diff_peak_df(all_df)
+  layers <- list(
+    primary = filter_diff_peaks(all_df, mode = "primary"),
+    pvalue = all_df %>% filter(PvalueDiffPeak),
+    fdr = all_df %>% filter(FDRDiffPeak)
+  )
+  write.csv(all_df, step_table_file("Step5", "Differential_Peaks_AllSites.csv"), row.names = FALSE)
+  write.csv(layers$primary, step_table_file("Step5", "Differential_Peaks.csv"), row.names = FALSE)
+  write.csv(layers$pvalue, step_table_file("Step5", "Differential_Peaks_Pvalue.csv"), row.names = FALSE)
+  write.csv(layers$fdr, step_table_file("Step5", "Differential_Peaks_FDR.csv"), row.names = FALSE)
+  layers
+}
+
+diff_sample_count_columns <- function(df) {
+  if(is.null(df) || !is.data.frame(df) || ncol(df) == 0) return(character())
+  # Only explicitly declared sample columns are counts; numeric metadata are not samples.
+  order_sample_columns(intersect(samples, colnames(df)))
+}
+
+build_counts_norm_from_diff_table <- function(df) {
+  df <- standardize_diff_peak_df(df)
+  sample_cols <- diff_sample_count_columns(df)
+  if(length(sample_cols) == 0) return(data.frame())
+
+  keep_cols <- unique(c(intersect(c("CHR", "START", "END", "Chr", "Start", "End", "seqnames", "start", "end", "peak_id"), colnames(df)), sample_cols))
+  out <- df[, keep_cols, drop = FALSE]
+  if(!"CHR" %in% colnames(out)) out$CHR <- if("seqnames" %in% colnames(out)) out$seqnames else NA_character_
+  if(!"START" %in% colnames(out)) out$START <- if("start" %in% colnames(out)) out$start else NA_integer_
+  if(!"END" %in% colnames(out)) out$END <- if("end" %in% colnames(out)) out$end else NA_integer_
+  out$peak_id_join <- canonical_peak_id(out$CHR, out$START, out$END)
+  out$peak_id <- out$peak_id_join
+  for(nm in sample_cols) out[[nm]] <- suppressWarnings(as.numeric(out[[nm]]))
+  out
+}
+
+# DiffBind test intervals are summit-centred and 1-based. Upstream BED consensus
+# intervals are a different feature universe and cannot replace their count rows.
+normalize_diffbind_count_ids <- function(df) {
+  if(!is.data.frame(df) || nrow(df) == 0) return(data.frame())
+  if(all(c("CHR", "START", "END") %in% names(df))) {
+    count_start <- if("START_1BASED" %in% names(df)) df$START_1BASED else df$START
+    df$peak_id_join <- canonical_peak_id(df$CHR, count_start, df$END)
+  } else if(all(c("seqnames", "start", "end") %in% names(df))) {
+    df$peak_id_join <- canonical_peak_id(df$seqnames, df$start, df$end)
+  } else {
+    return(data.frame())
+  }
+  if(anyDuplicated(df$peak_id_join)) stop("Duplicate count coordinates after peak-ID normalization")
+  df$peak_id <- df$peak_id_join
+  df
+}
+
+if(isTRUE(diff_state_reused)) {
+  all_res_df <- standardize_diff_peak_df(all_res_df)
+  diff_layers <- write_diff_peak_layers(all_res_df)
+  res_df <- diff_layers$primary
+  pvalue_res_df <- diff_layers$pvalue
+  fdr_res_df <- diff_layers$fdr
+  nominal_res_df <- filter_diff_peaks(all_res_df, mode = "nominal")
+  dba_res <- diff_peak_granges(res_df)
+  counts_norm <- normalize_diffbind_count_ids(counts_norm)
+}
+
+consensus_raw_count_matrix <- read_consensus_count_matrix("raw")
+consensus_cpm_count_matrix <- read_consensus_count_matrix("cpm")
+consensus_count_status_tbl <- read_consensus_count_status()
+consensus_count_method_tbl <- read_consensus_count_method()
+consensus_count_library_tbl <- read_consensus_count_library_size()
+
+consensus_matrix_audit <- data.frame(
+  Matrix = c("raw", "cpm"),
+  File = c(
+    attr(consensus_raw_count_matrix, "source_file") %||% file.path(work_dir, "04counts", "consensus_peak_counts.raw.tsv"),
+    attr(consensus_cpm_count_matrix, "source_file") %||% file.path(work_dir, "04counts", "consensus_peak_counts.cpm.tsv")
+  ),
+  Exists = c(nrow(consensus_raw_count_matrix) > 0, nrow(consensus_cpm_count_matrix) > 0),
+  PeakRows = c(nrow(consensus_raw_count_matrix), nrow(consensus_cpm_count_matrix)),
+  SampleColumns = c(
+    paste(order_sample_columns(intersect(samples, colnames(consensus_raw_count_matrix))), collapse = ";"),
+    paste(order_sample_columns(intersect(samples, colnames(consensus_cpm_count_matrix))), collapse = ";")
+  ),
+  DownstreamUse = c(
+    "Primary raw consensus peak matrix for audit and motif activity / chromVAR-compatible inputs.",
+    "Upstream CPM matrix is restricted to descriptive sample PCA/correlation when DiffBind counts are absent; differential peak plots require exact tested coordinates."
+  ),
+  stringsAsFactors = FALSE
+)
+save_step_table(consensus_matrix_audit, "Step5", "Consensus_Count_Matrix_Input_Audit.csv")
+if(nrow(consensus_count_status_tbl) > 0) save_step_table(consensus_count_status_tbl, "Step5", "Consensus_Count_Matrix_Status.csv")
+if(nrow(consensus_count_method_tbl) > 0) save_step_table(consensus_count_method_tbl, "Step5", "Consensus_Count_Matrix_Method.csv")
+if(nrow(consensus_count_library_tbl) > 0) save_step_table(consensus_count_library_tbl, "Step5", "Consensus_Count_Matrix_Library_Size.csv")
+
+source_audit_file <- step_table_file("Step5", "Differential_Peak_Source_Audit.csv")
+reuse_diff_source_candidates <- c(step_table_file("Step5", "Differential_Peaks_AllSites.csv"))
+reuse_diff_source_candidates <- reuse_diff_source_candidates[
+  file.exists(reuse_diff_source_candidates) &&
+    file.exists(source_audit_file)
+]
+
+if(length(reuse_diff_source_candidates) > 0 && file.exists(source_audit_file)) {
+  source_audit_for_reuse <- read.csv(source_audit_file, stringsAsFactors = FALSE, check.names = FALSE)
+  source_audit_is_native <- all(c("AnalysisSource", "AnalysisSignature") %in% colnames(source_audit_for_reuse)) &&
+    any(source_audit_for_reuse$AnalysisSource == "native_diffbind" &
+        source_audit_for_reuse$AnalysisSignature == current_analysis_signature)
+  if(!isTRUE(source_audit_is_native)) {
+    reuse_diff_source_candidates <- character()
+  }
+}
+
+if(!isTRUE(diff_state_reused) && isTRUE(reuse_step_tables) && length(reuse_diff_source_candidates) > 0) {
+  diff_tables_reused <- TRUE
+  reuse_diff_source <- reuse_diff_source_candidates[file.exists(reuse_diff_source_candidates)][1]
+  report_status("INFO", paste("Reusing native DiffBind differential peak table for module 5 and regenerating plots:", reuse_diff_source))
+
+  sampleSheet <- data.frame(
+    SampleID = samples,
+    Condition = conditions,
+    bamReads = bam_files,
+    Peaks = peak_files,
+    PeakCaller = "narrow"
+  )
+
+  atac_dba <- NULL
+  dba_report_all <- NULL
+  all_res_df <- standardize_diff_peak_df(read.csv(reuse_diff_source, stringsAsFactors = FALSE, check.names = FALSE))
+  diff_layers <- write_diff_peak_layers(all_res_df)
+  res_df <- diff_layers$primary
+  pvalue_res_df <- diff_layers$pvalue
+  fdr_res_df <- diff_layers$fdr
+  nominal_res_df <- filter_diff_peaks(all_res_df, mode = "nominal")
+  dba_res <- diff_peak_granges(res_df)
+
+  if(!(atac_significance_mode == "pvalue" && identical(format_threshold(atac_nominal_p_cutoff), format_threshold(atac_primary_p_cutoff)))) {
+    write.csv(nominal_res_df, step_table_file("Step5", "Differential_Peaks_Nominal_Exploratory.csv"), row.names = FALSE)
+  }
+
+  differential_threshold_definitions <- data.frame(
+    Tier = c("Current primary", "P-value", "FDR/padj", "Nominal/exploratory"),
+    OutputFile = c(
+      "Differential_Peaks.csv",
+      "Differential_Peaks_Pvalue.csv",
+      "Differential_Peaks_FDR.csv",
+      ifelse(
+        (atac_significance_mode == "pvalue" && identical(format_threshold(atac_nominal_p_cutoff), format_threshold(atac_primary_p_cutoff))),
+        "not written when identical to Differential_Peaks.csv",
+        "Differential_Peaks_Nominal_Exploratory.csv"
+      )
+    ),
+    Threshold = c(
+      primary_diff_peak_label(),
+      primary_pvalue_diff_peak_label(),
+      paste0("FDR <= ", format_threshold(atac_diff_fdr_cutoff)),
+      nominal_diff_peak_label()
+    ),
+    DownstreamUse = c(
+      "Primary project result set; all ATAC downstream modules use PrimaryDiffPeak.",
+      "Fixed p-value layer, retained independently of the selected primary mode.",
+      "Fixed multiple-testing-controlled layer, retained independently of the selected primary mode.",
+      "Exploratory-only support; do not use alone for strong conclusions."
+    ),
+    stringsAsFactors = FALSE
+  )
+  write.csv(differential_threshold_definitions, step_table_file("Step5", "Differential_Threshold_Definitions.csv"), row.names = FALSE)
+
+  counts_norm <- read_step_table("Step5", "DiffBind_Normalized_Counts.csv", check.names = FALSE)
+  if(nrow(counts_norm) == 0) counts_norm <- build_counts_norm_from_diff_table(all_res_df)
+  counts_norm <- normalize_diffbind_count_ids(counts_norm)
+  diff_peak_source_audit_tbl <- read.csv(source_audit_file, stringsAsFactors = FALSE, check.names = FALSE)
+
+  sample_cols <- diff_sample_count_columns(counts_norm)
+  if(length(sample_cols) > 0) {
+    count_mat <- as.matrix(counts_norm[, sample_cols, drop = FALSE])
+    storage.mode(count_mat) <- "numeric"
+    count_mat[is.na(count_mat)] <- 0
+    log_counts <- log2(count_mat + 1)
+  } else {
+    count_mat <- matrix(numeric(), nrow = 0, ncol = 0)
+    log_counts <- count_mat
+  }
+
+  pca_res <- NULL
+  pca_df <- read_first_existing_csv(step_table_file("Step5", "Sample_PCA_Scores.csv"))
+  var_explained <- numeric()
+  scatter_data <- data.frame()
+  direction_context_df <- read_first_existing_csv(step_table_file("Step5", "Directional_Chromatin_Context.csv"))
+  direction_feature_summary <- read_first_existing_csv(step_table_file("Step5", "Directional_Feature_Summary.csv"))
+  direction_tss_summary <- read_first_existing_csv(step_table_file("Step5", "Directional_Context_Summary.csv"))
+  save_state(
+    "05_differential_accessibility_state.rds",
+    c(
+      "sampleSheet", "atac_dba", "counts_norm", "count_mat", "log_counts",
+      "pca_res", "pca_df", "var_explained", "dba_report_all",
+      "all_res_df", "dba_res", "res_df", "pvalue_res_df", "fdr_res_df", "nominal_res_df",
+      "scatter_data", "direction_context_df", "direction_feature_summary",
+      "direction_tss_summary", "diff_peak_source_audit_tbl"
+    )
+  )
+}
+```
+
+```{r diffbind_setup}
+if(!isTRUE(diff_tables_reused)) {
+  # 创建 Sample Sheet
+  sampleSheet <- data.frame(
+    SampleID = samples,
+    Condition = conditions,
+    bamReads = bam_files,
+    Peaks = peak_files,
+    PeakCaller = "narrow"
+  )
+
+  # 读取数据 (dba object)
+  # 注意：如果 Peak 文件很多，这一步可能需要一些时间
+  atac_dba <- dba(sampleSheet = sampleSheet, minOverlap = atac_diffbind_min_overlap)
+
+  # 计算 Count Matrix (基于共有 Peak) - 优化参数
+  atac_dba <- dba.count(
+    atac_dba,
+    summits = atac_diffbind_summits,
+    bUseSummarizeOverlaps = TRUE,
+    bRemoveDuplicates = FALSE,
+    mapQCth = 0,
+    filter = atac_diffbind_rpkm_filter,
+    filterFun = atac_diffbind_filter_fun,
+    minCount = atac_diffbind_min_count,
+    bParallel = FALSE
+  )
+} else {
+  report_status("INFO", "Skipping DiffBind object construction; module 5 is using an existing differential table.")
+}
+
+# 样本相关性热图在提取标准化计数矩阵后用固定列顺序绘制，
+# 避免热图聚类把 Reference/control 与处理组左右顺序打乱。
+```
+
+```{r pca_plot}
+# PCA 分析
+# 手动计算 PCA 以避免 dba.plotPCA 的 lattice 错误
+if(!isTRUE(diff_tables_reused) && exists("atac_dba") && !is.null(atac_dba)) {
+  counts_norm <- dba.peakset(atac_dba, bRetrieve=TRUE, DataType=DBA_DATA_FRAME)
+} else if(!exists("counts_norm") || !is.data.frame(counts_norm) || nrow(counts_norm) == 0) {
+  counts_norm <- build_counts_norm_from_diff_table(all_res_df)
+}
+
+if((!exists("counts_norm") || !is.data.frame(counts_norm) || nrow(counts_norm) == 0 ||
+    length(diff_sample_count_columns(counts_norm)) < 2) &&
+   exists("consensus_cpm_count_matrix") && is.data.frame(consensus_cpm_count_matrix) &&
+   nrow(consensus_cpm_count_matrix) > 0) {
+  counts_norm <- consensus_cpm_count_matrix
+  report_status("INFO", "Using upstream CPM consensus count matrix for Module05 PCA/correlation fallback.")
+}
+
+sample_cols <- diff_sample_count_columns(counts_norm)
+save_step_table(data.frame(
+  CountSource = if("START_1BASED" %in% names(counts_norm)) "upstream consensus CPM" else "DiffBind normalized counts",
+  PeakRows = nrow(counts_norm), SampleColumns = paste(sample_cols, collapse = ";"),
+  EvidenceRole = "descriptive sample PCA/correlation; no sample selection"
+), "Step5", "Sample_Exploration_Count_Source.csv")
+
+if(length(sample_cols) >= 2 && nrow(counts_norm) > 1) {
+  count_mat <- as.matrix(counts_norm[, sample_cols, drop = FALSE])
+  storage.mode(count_mat) <- "numeric"
+  count_mat[is.na(count_mat)] <- 0
+
+  # 过滤低表达 Peak (可选)
+  # count_mat <- count_mat[rowSums(count_mat) > 10, ]
+
+  log_counts <- log2(count_mat + 1)
+
+  sample_cor <- stats::cor(log_counts, use = "pairwise.complete.obs")
+  sample_cor <- sample_cor[sample_cols, sample_cols, drop = FALSE]
+  save_step_table(
+    data.frame(SampleID = rownames(sample_cor), sample_cor, check.names = FALSE),
+    "Step5",
+    "Sample_Correlation_Matrix.csv"
+  )
+  sample_cor_anno <- data.frame(
+    Group = factor(sample_group(sample_cols), levels = group_levels),
+    row.names = sample_cols
+  )
+  draw_pheatmap_dual(
+    step_plot_file("Step5", "Sample_Correlation_Heatmap.pdf"),
+    width = 8,
+    height = 8,
+    pheatmap(
+      sample_cor,
+      cluster_rows = FALSE,
+      cluster_cols = FALSE,
+      annotation_col = sample_cor_anno,
+      annotation_row = sample_cor_anno,
+      annotation_colors = list(Group = viz_pal$group),
+      color = viz_pal$heat_meth,
+      main = paste0("Sample correlation heatmap (", baseline_group, " left, ", treatment_group, " right)")
+    )
+  )
+
+  pca_res <- prcomp(t(log_counts), scale. = TRUE)
+  pca_df <- as.data.frame(pca_res$x)
+  pca_df$SampleID <- rownames(pca_df)
+  var_explained <- round(pca_res$sdev^2 / sum(pca_res$sdev^2) * 100, 1)
+
+  pca_df$Condition <- sample_group(pca_df$SampleID)
+  if(exists("sampleSheet")) {
+    for(i in seq_len(nrow(pca_df))) {
+      idx <- which(sampleSheet$SampleID == pca_df$SampleID[i])
+      if(length(idx) > 0) {
+        pca_df$Condition[i] <- as.character(sampleSheet$Condition[idx][1])
+      } else {
+        idx <- grep(pca_df$SampleID[i], sampleSheet$SampleID)
+        if(length(idx) > 0) pca_df$Condition[i] <- as.character(sampleSheet$Condition[idx[1]])
+      }
+    }
+  }
+  pca_df$Condition <- factor(pca_df$Condition, levels = c(group_levels, "Unknown"))
+
+  write.csv(pca_df, step_table_file("Step5", "Sample_PCA_Scores.csv"), row.names = FALSE)
+
+  pca_colors <- c(viz_pal$group, "Unknown" = viz_pal$neutral_mid)
+  p_pca <- ggplot(pca_df, aes(x=PC1, y=PC2, color=Condition, label=SampleID)) +
+    geom_point(size=4, alpha = 0.95) +
+    geom_text_repel() +
+    scale_color_manual(values = pca_colors) +
+    theme_atac_classic(base_size = 12) +
+    labs(title="PCA of ATAC-seq Samples",
+         x=paste0("PC1 (", var_explained[1], "%)"),
+         y=paste0("PC2 (", var_explained[2], "%)"))
+
+  if(emit_light_plots) {
+    save_plot_pdf(p_pca, step_plot_file("Step5", "Sample_PCA.pdf"), width = 8, height = 8)
+    print(p_pca)
+  }
+} else {
+  count_mat <- matrix(numeric(), nrow = 0, ncol = 0)
+  log_counts <- count_mat
+  pca_res <- NULL
+  pca_df <- data.frame()
+  var_explained <- numeric()
+  write_skipped_state(
+    "Step5",
+    "Sample_Correlation_Heatmap",
+    "Fewer than two sample count columns were available for correlation plotting.",
+    clear_plot_files = "Sample_Correlation_Heatmap.pdf"
+  )
+  write_skipped_state(
+    "Step5",
+    "Sample_PCA",
+    "Fewer than two sample count columns were available for PCA plotting.",
+    clear_plot_files = "Sample_PCA.pdf"
+  )
+}
+```
+
+```{r diff_analysis}
+if(!isTRUE(diff_tables_reused)) {
+  # comparison-reference direction comes from validated public configuration.
+  atac_dba <- dba.contrast(atac_dba, contrast = c("Condition", treatment_group, baseline_group))
+  print(dba.show(atac_dba, bContrasts = TRUE))
+
+  # DESeq2 is primary; edgeR is a sensitivity analysis on the identical DBA count/design.
+  atac_dba <- dba.analyze(atac_dba, method = c(DBA_DESEQ2, DBA_EDGER), bParallel = FALSE)
+
+  dba_report_all <- dba.report(atac_dba, method = DBA_DESEQ2, th = 1, bUsePval = FALSE, fold = 0)
+  all_res_df <- standardize_diff_peak_df(as.data.frame(dba_report_all))
+  diff_layers <- write_diff_peak_layers(all_res_df)
+  res_df <- diff_layers$primary
+  pvalue_res_df <- diff_layers$pvalue
+  fdr_res_df <- diff_layers$fdr
+  nominal_res_df <- filter_diff_peaks(all_res_df, mode = "nominal")
+  dba_res <- diff_peak_granges(res_df)
+
+  edger_report_all <- dba.report(atac_dba, method = DBA_EDGER, th = 1, bUsePval = FALSE, fold = 0)
+  edger_res_df <- standardize_diff_peak_df(as.data.frame(edger_report_all))
+  method_concordance_tbl <- all_res_df %>%
+    select(peak_id, seqnames, start, end, DESeq2_Fold = Fold, DESeq2_pvalue = pvalue, DESeq2_FDR = FDR,
+           DESeq2_Primary = PrimaryDiffPeak) %>%
+    inner_join(
+      edger_res_df %>%
+        select(peak_id, edgeR_Fold = Fold, edgeR_pvalue = pvalue, edgeR_FDR = FDR, edgeR_Primary = PrimaryDiffPeak),
+      by = "peak_id"
+    ) %>%
+    distinct(peak_id, .keep_all = TRUE)
+  if(nrow(method_concordance_tbl) != nrow(all_res_df) || nrow(method_concordance_tbl) != nrow(edger_res_df)) {
+    stop("DESeq2 与 edgeR 未返回完全相同的 peak universe；停止生成不可比的敏感性结果")
+  }
+  method_concordance_tbl <- method_concordance_tbl %>%
+    mutate(
+      DirectionConsistent = sign(DESeq2_Fold) == sign(edgeR_Fold),
+      SelectedByEither = DESeq2_Primary | edgeR_Primary,
+      SelectedByBoth = DESeq2_Primary & edgeR_Primary
+    )
+  selected_union_n <- sum(method_concordance_tbl$SelectedByEither, na.rm = TRUE)
+  method_sensitivity_summary <- data.frame(
+    Comparison = contrast_label,
+    EvidenceRole = "exploratory sensitivity analysis; n=2 per group",
+    CommonPeakCount = nrow(method_concordance_tbl),
+    DESeq2PrimaryCount = sum(method_concordance_tbl$DESeq2_Primary, na.rm = TRUE),
+    edgeRPrimaryCount = sum(method_concordance_tbl$edgeR_Primary, na.rm = TRUE),
+    DirectionAgreementRate = mean(method_concordance_tbl$DirectionConsistent, na.rm = TRUE),
+    FoldSpearman = suppressWarnings(cor(method_concordance_tbl$DESeq2_Fold, method_concordance_tbl$edgeR_Fold,
+                                        method = "spearman", use = "complete.obs")),
+    SignificantSetJaccard = if(selected_union_n > 0) sum(method_concordance_tbl$SelectedByBoth, na.rm = TRUE) / selected_union_n else NA_real_,
+    stringsAsFactors = FALSE
+  )
+  write.csv(method_concordance_tbl, step_table_file("Step5", "DESeq2_edgeR_Peak_Concordance.csv"), row.names = FALSE)
+  write.csv(method_sensitivity_summary, step_table_file("Step5", "DESeq2_edgeR_Sensitivity_Summary.csv"), row.names = FALSE)
+
+  # 方向性快速检查
+  if("Fold" %in% colnames(res_df)) {
+    cat("Up (", treatment_group, " > ", baseline_group, "): ", sum(res_df$Fold > 0), "\n", sep = "")
+    cat("Down (", treatment_group, " < ", baseline_group, "): ", sum(res_df$Fold < 0), "\n", sep = "")
+  }
+
+  cat("全量 DiffBind 位点数量:", nrow(all_res_df), "\n")
+  cat("正式差异 Peak 数量 (", primary_diff_peak_label(), "): ", nrow(res_df), "\n", sep = "")
+  cat("p-value 差异 Peak 数量 (", nominal_diff_peak_label(), "): ", nrow(nominal_res_df), "\n", sep = "")
+  head(res_df)
+
+  # 保存差异结果
+  diff_peak_source_audit_tbl <- data.frame(
+    AnalysisSource = "native_diffbind",
+    AnalysisSignature = current_analysis_signature,
+    AnalysisMethod = paste0(
+      "DiffBind dba.count(minOverlap=", atac_diffbind_min_overlap,
+      ",summits=", atac_diffbind_summits,
+      ",filter=RPKM,filterFun=", atac_diffbind_filter_fun_name,
+      ",minCount=", atac_diffbind_min_count,
+      ") -> DESeq2 primary + edgeR sensitivity"
+    ),
+    DiffBindRPKMFilter = atac_diffbind_rpkm_filter,
+    DiffBindMinOverlap = atac_diffbind_min_overlap,
+    DiffBindSummits = atac_diffbind_summits,
+    DiffBindFilterFun = atac_diffbind_filter_fun_name,
+    DiffBindMinCount = atac_diffbind_min_count,
+    ReferenceGroup = baseline_group,
+    ComparisonGroup = treatment_group,
+    DifferentialPeakTable = step_table_file("Step5", "Differential_Peaks_AllSites.csv"),
+    BAMFiles = paste(bam_files, collapse = ";"),
+    PeakFiles = paste(peak_files, collapse = ";"),
+    SampleIDs = paste(samples, collapse = ";"),
+    Conditions = paste(conditions, collapse = ";"),
+    ReferenceGenome = "GRCm39/mm39",
+    ExternalDiffTableUsed = FALSE,
+    CreatedAt = as.character(Sys.time()),
+    stringsAsFactors = FALSE
+  )
+  write.csv(diff_peak_source_audit_tbl, source_audit_file, row.names = FALSE)
+  if(!(atac_significance_mode == "pvalue" && identical(format_threshold(atac_nominal_p_cutoff), format_threshold(atac_primary_p_cutoff)))) {
+    write.csv(nominal_res_df, step_table_file("Step5", "Differential_Peaks_Nominal_Exploratory.csv"), row.names = FALSE)
+  }
+
+  differential_threshold_definitions <- data.frame(
+    Tier = c("Current primary", "P-value", "FDR/padj", "Nominal/exploratory"),
+    OutputFile = c(
+      "Differential_Peaks.csv",
+      "Differential_Peaks_Pvalue.csv",
+      "Differential_Peaks_FDR.csv",
+      ifelse(
+        (atac_significance_mode == "pvalue" && identical(format_threshold(atac_nominal_p_cutoff), format_threshold(atac_primary_p_cutoff))),
+        "not written when identical to Differential_Peaks.csv",
+        "Differential_Peaks_Nominal_Exploratory.csv"
+      )
+    ),
+    Threshold = c(
+      primary_diff_peak_label(),
+      primary_pvalue_diff_peak_label(),
+      paste0("FDR <= ", format_threshold(atac_diff_fdr_cutoff)),
+      nominal_diff_peak_label()
+    ),
+    DownstreamUse = c(
+      "Primary project result set; all ATAC downstream modules use PrimaryDiffPeak.",
+      "Fixed p-value layer, retained independently of the selected primary mode.",
+      "Fixed multiple-testing-controlled layer, retained independently of the selected primary mode.",
+      "Exploratory-only support; do not use alone for strong conclusions."
+    ),
+    stringsAsFactors = FALSE
+  )
+  write.csv(
+    differential_threshold_definitions,
+    step_table_file("Step5", "Differential_Threshold_Definitions.csv"),
+    row.names = FALSE
+  )
+} else {
+  report_status("INFO", "Skipping DiffBind differential analysis; module 5 is using a standardized existing comparison table.")
+}
+```
+
+```{r advanced_diff_plots, fig.width=8, fig.height=6}
+unlink(vapply(c("Volcano_Plot", "Scatter_Plot_DiffPeaks", "Top_DiffPeaks_Heatmap"),
+              function(x) step_table_file("Step5", paste0(x, "_Skipped_State.csv")), character(1)))
+# --- 高级图表 3: 差异 Peak 火山图 (Volcano Plot) ---
+if(nrow(all_res_df) > 0) {
+  volcano_df <- all_res_df %>%
+    mutate(
+      PlotP = SelectedSignificanceValue,
+      logP = -log10(pmax(PlotP, 1e-300))
+    )
+  diff_class_colors <- pal_named(
+    `Not significant` = viz_pal$neutral_mid
+  )
+  diff_class_colors[primary_diff_class_label()] <- pal_pick(viz_pal$accent["warm"])
+
+  p_volcano <- ggplot(volcano_df, aes(x = Fold, y = logP, color = DiffPeakClass)) +
+    geom_point(alpha = 0.75, size = 1.8) +
+    scale_color_manual(values = diff_class_colors) +
+    theme_atac_classic(base_size = 12) +
+    labs(title="Volcano Plot of Differential Peaks", 
+         subtitle=paste("Primary threshold:", primary_diff_peak_label()),
+         x="Log2 Fold Change", 
+         y=paste0("-Log10 ", ifelse(atac_significance_column == "pvalue", "p-value", "FDR/padj"))) +
+    geom_vline(xintercept=c(-atac_diff_log2fc_cutoff, atac_diff_log2fc_cutoff), linetype="dashed") +
+    geom_hline(yintercept=-log10(if(atac_significance_column == "pvalue") atac_primary_p_cutoff else atac_diff_fdr_cutoff), linetype="dashed")
+  
+  if(emit_light_plots) {
+    print(p_volcano)
+    save_gg_dual(step_plot_file("Step5", "Volcano_Plot.pdf"), p_volcano, width = 8, height = 6)
+  }
+
+  # --- 高级图表 3.1: 差异 Peak 散点图 (Scatter Plot) ---
+  # 复用差异表时没有 DiffBind 对象，因此从标准化表中的样本 count 列直接绘图。
+  if(!exists("counts_norm") || !is.data.frame(counts_norm) || nrow(counts_norm) == 0) {
+    if(exists("atac_dba") && !is.null(atac_dba)) {
+      counts_norm <- dba.peakset(atac_dba, bRetrieve=TRUE, DataType=DBA_DATA_FRAME)
+    } else {
+      counts_norm <- build_counts_norm_from_diff_table(all_res_df)
+    }
+  }
+  if((!is.data.frame(counts_norm) || nrow(counts_norm) == 0 ||
+      length(diff_sample_count_columns(counts_norm)) < 2) &&
+     exists("consensus_cpm_count_matrix") && is.data.frame(consensus_cpm_count_matrix) &&
+     nrow(consensus_cpm_count_matrix) > 0) {
+    counts_norm <- consensus_cpm_count_matrix
+    report_status("INFO", "Checking upstream CPM intervals for exact agreement with tested peaks; mismatched consensus intervals will not enter differential plots.")
+  }
+
+  counts_norm <- normalize_diffbind_count_ids(counts_norm)
+  sample_cols <- diff_sample_count_columns(counts_norm)
+  tested_ids <- all_res_df$peak_id_join
+  matched_count_ids <- intersect(counts_norm$peak_id_join, tested_ids)
+  save_step_table(data.frame(
+    TestedPeakCount = length(tested_ids), CountPeakCount = nrow(counts_norm),
+    ExactCoordinateMatches = length(matched_count_ids),
+    CoordinateSystem = "1-based closed; chromosome prefix canonicalized",
+    EvidenceRole = "Only exactly matched tested intervals enter differential plots"
+  ), "Step5", "Differential_Count_Coordinate_Match.csv")
+  counts_norm <- if(length(matched_count_ids) == length(tested_ids)) {
+    counts_norm[counts_norm$peak_id_join %in% tested_ids, , drop = FALSE]
+  } else {
+    data.frame()
+  }
+  sample_cols <- diff_sample_count_columns(counts_norm)
+  if(nrow(counts_norm) > 0) save_step_table(counts_norm, "Step5", "DiffBind_Normalized_Counts.csv")
+
+  if(length(sample_cols) > 0) {
+    for(nm in sample_cols) counts_norm[[nm]] <- suppressWarnings(as.numeric(counts_norm[[nm]]))
+  }
+
+  baseline_cols <- sample_cols[sample_group(sample_cols) == baseline_group]
+  treatment_cols <- sample_cols[sample_group(sample_cols) == treatment_group]
+
+  if(nrow(counts_norm) > 0 && length(baseline_cols) > 0 && length(treatment_cols) > 0 && "peak_id_join" %in% colnames(counts_norm)) {
+    counts_norm$Mean_Baseline <- rowMeans(counts_norm[, baseline_cols, drop = FALSE], na.rm = TRUE)
+    counts_norm$Mean_Treatment <- rowMeans(counts_norm[, treatment_cols, drop = FALSE], na.rm = TRUE)
+
+    scatter_data <- counts_norm %>%
+      dplyr::select(peak_id_join, Mean_Baseline, Mean_Treatment) %>%
+      left_join(
+        all_res_df %>% dplyr::select(peak_id_join, pvalue, FDR, Fold, PvalueDiffPeak, FDRDiffPeak, PrimaryDiffPeak, NominalDiffPeak, DiffPeakClass),
+        by = "peak_id_join"
+      )
+
+    scatter_data <- scatter_data %>%
+      mutate(
+        Significance = case_when(
+          PrimaryDiffPeak & Fold > 0 ~ "primaryUp",
+          PrimaryDiffPeak & Fold < 0 ~ "primaryDown",
+          TRUE ~ "nonSig"
+        ),
+        Significance = factor(Significance, levels = c("nonSig", "primaryDown", "primaryUp"))
+      )
+
+    p_scatter <- ggplot(scatter_data, aes(x = log2(Mean_Baseline + 1), y = log2(Mean_Treatment + 1), color = Significance)) +
+      geom_point(alpha = 0.72, size = 1.4) +
+      scale_color_manual(values = pal_named(
+        primaryUp = viz_pal$group[treatment_group],
+        primaryDown = viz_pal$group[baseline_group],
+        nonSig = viz_pal$neutral_mid
+      )) +
+      geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = viz_pal$neutral["dark"]) +
+      labs(
+        title = paste("Scatter Plot of Differential Peaks (", treatment_group, " vs ", baseline_group, ")", sep = ""),
+        x = paste0("Log2(Mean ", baseline_group, " Normalized Counts + 1)"),
+        y = paste0("Log2(Mean ", treatment_group, " Normalized Counts + 1)")
+      ) +
+      theme_atac_classic(base_size = 12)
+
+    if(emit_light_plots) {
+      print(p_scatter)
+      save_gg_dual(step_plot_file("Step5", "Scatter_Plot_DiffPeaks.pdf"), p_scatter, width = 8, height = 8)
+    }
+
+    top_heatmap_ids <- res_df %>%
+      arrange(pvalue, FDR, desc(abs(Fold))) %>%
+      slice_head(n = 100) %>%
+      pull(peak_id_join)
+
+    heatmap_df <- counts_norm %>%
+      dplyr::select(peak_id, peak_id_join, all_of(sample_cols)) %>%
+      filter(peak_id_join %in% top_heatmap_ids)
+
+    if(nrow(heatmap_df) > 1) {
+      write.csv(heatmap_df, step_table_file("Step5", "Top_DiffPeaks_Sample_Matrix.csv"), row.names = FALSE)
+      if(emit_light_plots) {
+        heatmap_mat <- as.matrix(heatmap_df[, sample_cols, drop = FALSE])
+        rownames(heatmap_mat) <- heatmap_df$peak_id
+        heatmap_mat <- t(scale(t(log2(heatmap_mat + 1))))
+        heatmap_mat[is.na(heatmap_mat)] <- 0
+
+        sample_anno <- data.frame(
+          Group = factor(sample_group(sample_cols), levels = group_levels),
+          row.names = sample_cols
+        )
+
+        draw_pheatmap_dual(
+          step_plot_file("Step5", "Top_DiffPeaks_Heatmap.pdf"),
+          width = 8,
+          height = 10,
+          pheatmap(
+            heatmap_mat,
+            cluster_rows = TRUE,
+            cluster_cols = FALSE,
+            annotation_col = sample_anno,
+            annotation_colors = list(Group = viz_pal$group),
+            color = viz_pal$heat_meth,
+            show_rownames = FALSE,
+            fontsize_col = 10
+          )
+        )
+      }
+    } else {
+      write_skipped_state(
+        "Step5",
+        "Top_DiffPeaks_Heatmap",
+        paste("Fewer than two primary differential peaks have exact matched count intervals under", primary_diff_peak_label(), "."),
+        clear_plot_files = "Top_DiffPeaks_Heatmap.pdf"
+      )
+    }
+  } else {
+    write_skipped_state(
+      "Step5",
+      "Scatter_Plot_DiffPeaks",
+      "Sample counts on the exact tested DiffBind intervals were unavailable; raw consensus regions cannot substitute for summit-centred test intervals.",
+      clear_plot_files = "Scatter_Plot_DiffPeaks.pdf"
+    )
+    write_skipped_state(
+      "Step5",
+      "Top_DiffPeaks_Heatmap",
+      "Sample counts on the exact tested DiffBind intervals were unavailable for the heatmap.",
+      clear_plot_files = "Top_DiffPeaks_Heatmap.pdf"
+    )
+  }
+} else {
+  write_skipped_state(
+    "Step5",
+    "Volcano_Plot",
+    "No DiffBind sites were available for volcano plotting.",
+    clear_plot_files = "Volcano_Plot.pdf"
+  )
+}
+
+# --- 高级图表 4: 差异 Peak 的 Venn 图 (Venn Diagram) ---
+# 展示 Reference 和 Comparison 组特有及共有的 Peak
+# 提取两组的共有 Peak (Consensus peaks)
+if(exists("atac_dba") && !is.null(atac_dba) && !atac_primary_require_fc) {
+  tryCatch(
+    draw_base_plot_dual(
+      step_plot_file("Step5", "DiffPeaks_Venn.pdf"),
+      width = 8,
+      height = 6,
+      dba.plotVenn(atac_dba, contrast = 1, bDB = TRUE, bGain = TRUE, bLoss = TRUE, bAll = FALSE,
+                   th = if(atac_significance_mode == "pvalue") atac_primary_p_cutoff else atac_diff_fdr_cutoff,
+                   bUsePval = atac_significance_mode == "pvalue", method = DBA_DESEQ2)
+    ),
+    error = function(e) {
+      handle_nonfatal(paste("DiffBind Venn plot failed:", e$message), step = "Step5")
+      write_skipped_state(
+        "Step5",
+        "DiffPeaks_Venn",
+        paste("DiffBind Venn plot failed:", e$message),
+        clear_plot_files = "DiffPeaks_Venn.pdf"
+      )
+    }
+  )
+} else {
+  write_skipped_state(
+    "Step5",
+    "DiffPeaks_Venn",
+    "DiffBind object unavailable or the primary FC gate is enabled; dba.plotVenn does not accept the required FC filter. Table-derived plots use the actual primary set.",
+    clear_plot_files = "DiffPeaks_Venn.pdf"
+  )
+}
+```
+
+### 3.1 Direction-stratified chromatin context
+
+把差异 peak 按 comparison-open 和 reference-open 两个方向拆开，比较它们对应的功能区域、到 TSS 的距离和 peak 宽度。
+
+```{r direction_stratified_context, fig.width=12, fig.height=8}
+direction_context_df <- data.frame()
+direction_plot_files <- c(
+  "Directional_Chromatin_Context.pdf",
+  "Directional_Annotation_Composition.pdf",
+  "Directional_DistToTSS.pdf",
+  "Directional_TSS_Density.pdf",
+  "Directional_Peak_Width.pdf",
+  "Directional_Peak_Width_Ridge.pdf"
+)
+
+if(nrow(res_df) > 0) {
+  res_df_step3 <- res_df %>%
+    mutate(
+      seqnames = ensure_ucsc_seqnames(seqnames),
+      peak_id = paste(seqnames, start, end, sep = ":"),
+      peak_id_join = canonical_peak_id(seqnames, start, end)
+    )
+
+  diff_gr_step3 <- GRanges(
+    seqnames = res_df_step3$seqnames,
+    ranges = IRanges(start = res_df_step3$start, end = res_df_step3$end)
+  )
+  diff_gr_step3 <- keep_primary_chromosomes(diff_gr_step3)
+
+  if(length(diff_gr_step3) > 0) {
+    diff_anno_step3 <- tryCatch(
+      annotatePeak(diff_gr_step3, TxDb = txdb, tssRegion = c(-2000, 2000), annoDb = "org.Mm.eg.db"),
+      error = function(e) {
+        handle_nonfatal(paste("Direction-stratified context annotation failed:", e$message), step = "Step5")
+        NULL
+      }
+    )
+
+    if(!is.null(diff_anno_step3)) {
+      direction_context_df <- as.data.frame(diff_anno_step3)
+      if("SYMBOL" %in% colnames(direction_context_df) && !"geneSymbol" %in% colnames(direction_context_df)) {
+        colnames(direction_context_df)[colnames(direction_context_df) == "SYMBOL"] <- "geneSymbol"
+      }
+      direction_context_df <- direction_context_df %>%
+        mutate(
+          seqnames = ensure_ucsc_seqnames(seqnames),
+          peak_id = paste(seqnames, start, end, sep = ":"),
+          peak_id_join = canonical_peak_id(seqnames, start, end)
+        ) %>%
+        left_join(
+          res_df_step3 %>% dplyr::select(peak_id_join, Fold, FDR, pvalue),
+          by = "peak_id_join"
+        ) %>%
+        mutate(
+          Direction = direction_factor(Fold),
+          FeatureGroup = factor(derive_feature_layer(annotation), levels = feature_layer_levels),
+          PeakWidth = end - start + 1,
+          DistToTSSKb = distanceToTSS / 1000
+        ) %>%
+        filter(Direction %in% c(reference_open_label, comparison_open_label))
+
+      save_step_table(direction_context_df, "Step5", "Directional_Chromatin_Context.csv")
+
+      if(nrow(direction_context_df) == 0) {
+        direction_feature_summary <- data.frame()
+        direction_tss_summary <- data.frame()
+        save_step_table(direction_feature_summary, "Step5", "Directional_Feature_Summary.csv")
+        save_step_table(direction_tss_summary, "Step5", "Directional_Context_Summary.csv")
+        write_skipped_state(
+          "Step5",
+          "Directional_Chromatin_Context",
+          paste("Differential peak annotation completed, but no peaks could be assigned to", comparison_open_label, "or", reference_open_label, "after coordinate matching."),
+          clear_plot_files = direction_plot_files
+        )
+      } else {
+        direction_feature_summary <- direction_context_df %>%
+          count(Direction, FeatureGroup, name = "PeakCount") %>%
+          group_by(Direction) %>%
+          mutate(Fraction = PeakCount / sum(PeakCount)) %>%
+          ungroup() %>%
+          arrange(Direction, desc(Fraction))
+        save_step_table(direction_feature_summary, "Step5", "Directional_Feature_Summary.csv")
+
+        direction_tss_summary <- direction_context_df %>%
+          group_by(Direction) %>%
+          summarise(
+            PeakCount = n(),
+            MedianDistToTSSKb = median(DistToTSSKb, na.rm = TRUE),
+            MedianPeakWidth = median(PeakWidth, na.rm = TRUE),
+            .groups = "drop"
+          )
+        save_step_table(direction_tss_summary, "Step5", "Directional_Context_Summary.csv")
+        save_step_table(
+          direction_context_df %>% dplyr::select(peak_id, Direction, FeatureGroup, DistToTSSKb, PeakWidth, Fold, FDR),
+          "Step5",
+          "Directional_Context_Long.csv"
+        )
+
+        if(should_render_plots()) {
+          direction_peak_colors <- stats::setNames(
+            c(viz_pal$de[reference_open_label], viz_pal$de[comparison_open_label], viz_pal$de["Neutral"]),
+            c(reference_open_label, comparison_open_label, "Neutral")
+          )
+
+          p_direction_context <- ggplot(direction_feature_summary, aes(x = Direction, y = Fraction, fill = FeatureGroup)) +
+            geom_col(width = 0.72, color = viz_pal$neutral["light"]) +
+            scale_fill_manual(values = resolve_named_colors(feature_layer_levels, viz_pal$feature, fallback_colors = viz_pal$feature_accent)) +
+            scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+            theme_atac_classic(base_size = 12) +
+            labs(
+              title = "Direction-stratified chromatin context",
+              subtitle = paste(comparison_open_label, "vs", reference_open_label, "differential peaks"),
+              x = NULL,
+              y = "Fraction of differential peaks",
+              fill = "Feature group"
+            )
+          save_plot_pdf(p_direction_context, step_plot_file("Step5", "Directional_Chromatin_Context.pdf"), width = 8, height = 6)
+          save_plot_pdf(p_direction_context, step_plot_file("Step5", "Directional_Annotation_Composition.pdf"), width = 8, height = 6)
+
+          p_direction_tss <- ggplot(direction_context_df, aes(x = DistToTSSKb, fill = Direction, color = Direction)) +
+            geom_density(alpha = 0.22, linewidth = 0.9) +
+            xlim(-100, 100) +
+            scale_fill_manual(values = direction_peak_colors) +
+            scale_color_manual(values = direction_peak_colors) +
+            theme_atac_classic(base_size = 12) +
+            labs(
+              title = "Distance to TSS by accessibility direction",
+              x = "Distance to TSS (kb)",
+              y = "Density"
+            )
+          save_plot_pdf(p_direction_tss, step_plot_file("Step5", "Directional_DistToTSS.pdf"), width = 8, height = 6)
+          save_plot_pdf(p_direction_tss, step_plot_file("Step5", "Directional_TSS_Density.pdf"), width = 8, height = 6)
+
+          if(requireNamespace("ggridges", quietly = TRUE)) {
+            p_direction_width <- ggplot(direction_context_df, aes(x = PeakWidth, y = Direction, fill = Direction, color = Direction)) +
+              ggridges::geom_density_ridges(alpha = 0.35, scale = 1.05, linewidth = 0.9, rel_min_height = 0.01) +
+              scale_fill_manual(values = direction_peak_colors) +
+              scale_color_manual(values = direction_peak_colors) +
+              theme_atac_classic(base_size = 12, legend = "none") +
+              labs(
+                title = "Peak width ridge profile by accessibility direction",
+                x = "Peak width (bp)",
+                y = NULL
+              )
+          } else {
+            p_direction_width <- ggplot(direction_context_df, aes(x = PeakWidth, color = Direction, fill = Direction)) +
+              geom_density(alpha = 0.2, linewidth = 0.95) +
+              facet_wrap(~Direction, ncol = 1, scales = "free_y") +
+              scale_fill_manual(values = direction_peak_colors) +
+              scale_color_manual(values = direction_peak_colors) +
+              theme_atac_classic(base_size = 12, legend = "none") +
+              labs(
+                title = "Peak width density by accessibility direction",
+                x = "Peak width (bp)",
+                y = "Density"
+              )
+          }
+          save_plot_pdf(p_direction_width, step_plot_file("Step5", "Directional_Peak_Width.pdf"), width = 7, height = 6)
+          save_plot_pdf(p_direction_width, step_plot_file("Step5", "Directional_Peak_Width_Ridge.pdf"), width = 8, height = 6)
+        }
+      }
+    } else {
+      write_skipped_state(
+        "Step5",
+        "Directional_Chromatin_Context",
+        "Differential peak annotation failed for direction-stratified context.",
+        clear_plot_files = direction_plot_files
+      )
+    }
+  } else {
+    write_skipped_state(
+      "Step5",
+      "Directional_Chromatin_Context",
+      paste("No primary-chromosome differential peaks passed", primary_diff_peak_label(), "."),
+      clear_plot_files = direction_plot_files
+    )
+  }
+} else {
+  write_skipped_state(
+    "Step5",
+    "Directional_Chromatin_Context",
+    "No differential peaks detected.",
+    clear_plot_files = direction_plot_files
+  )
+}
+```
+
+```{r save_diffbind_state, include=FALSE}
+save_state(
+  "05_differential_accessibility_state.rds",
+  c(
+    "sampleSheet", "atac_dba", "counts_norm", "count_mat", "log_counts",
+    "pca_res", "pca_df", "var_explained", "dba_report_all",
+    "all_res_df", "dba_res", "res_df", "pvalue_res_df", "fdr_res_df", "nominal_res_df",
+    "edger_report_all", "edger_res_df", "method_concordance_tbl", "method_sensitivity_summary",
+    "scatter_data", "direction_context_df", "direction_feature_summary",
+    "direction_tss_summary", "diff_peak_source_audit_tbl"
+  )
+)
+```

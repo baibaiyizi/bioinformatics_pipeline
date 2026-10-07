@@ -2,6 +2,8 @@
 
 这是 `ai_research` 的可审计 E/W/rho/C 运行入口。普通任务可直接调用 Codex 的 `ai_research` agent；需要 working memory、receipt、恢复、失败定位、冻结 gate 和自动 champion 晋升时使用本目录。
 
+公开方法学习库使用 `/home/h1028/workspace/sci_learning/ai/`；`doctor`核对该目录的索引。角色注册仍在 `~/.codex/agents/`。学习资料、项目运行状态和正式memory champion是三个不同层次，移动资料不会晋升候选。
+
 ## 安装
 
 ```bash

@@ -1,0 +1,9 @@
+..................                                                       [100%]
+=============================== warnings summary ===============================
+tests/test_contract.py::test_replicated_planted_effect_and_direction
+tests/test_contract.py::test_replicated_planted_effect_and_direction
+  /home/h1028/workspace/sc/Mus/PFOS/.venv/lib/python3.13/site-packages/pydeseq2/dds.py:822: UserWarning: The dispersion trend curve fitting did not converge. Switching to a mean-based dispersion trend.
+    self._fit_parametric_dispersion_trend(vst)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+18 passed, 2 warnings in 107.26s (0:01:47)

@@ -1,0 +1,8 @@
+command	exit_code	new_paths	status
+run_rmd.sh --help	0	0	PASS
+run_rmd.sh --list	0	0	PASS
+run_rmd.sh --dry-run --modules 08 09	0	0	PASS
+run_rmd.sh --check	0	0	PASS
+sports.sh --help	0	0	PASS
+sports.sh --dry-run	0	0	PASS
+sports.sh --check	1	0	PASS

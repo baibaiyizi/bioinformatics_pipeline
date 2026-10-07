@@ -1,0 +1,3 @@
+library_id	biological_sample_id	unit_type	condition	sample_batch	chemistry	matrix	r1	r2	i1
+control_library	unknown	unknown	control	unknown	auto	inputs/control_raw.h5ad			
+case_library	unknown	unknown	case	unknown	auto	inputs/case_raw.h5ad			

@@ -14,3 +14,7 @@ python -m unittest discover -s tests -v
 - `sample_column` 必须存在；下游 DE/DA 以样本 pseudobulk 为默认推断单位。
 - TF-IDF、LSI 和联合表示是细胞级表征，不产生额外生物学重复。
 - MuData/MultiVI 是可选后续层；未安装 `mudata/scvi-tools` 或没有 GPU 时会明确记录，不伪装成已经完成整合。
+
+## 2026-09-29 模板复核
+
+现有 2 项 unittest 通过：count-level 小数据闭环、paired barcode 错配拒绝。原始 fragments/FASTQ 上游与 MultiVI 未执行；embedding 不产生独立生物学重复。本轮保留现有接口与能力范围。

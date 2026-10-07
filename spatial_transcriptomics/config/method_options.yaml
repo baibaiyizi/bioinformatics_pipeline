@@ -1,4 +1,5 @@
-# Optional method shelf for Spatial/model.
+# 参考目录：本文件不控制 runner 执行；列举方法不代表已实现。
+# Non-executable method reference catalogue.
 # The executable default pipeline reads spatial_config.yaml. This file records
 # heavier or platform-specific branches that can be enabled per project.
 

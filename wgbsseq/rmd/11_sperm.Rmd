@@ -6,8 +6,7 @@
 # 1. 印记控制区域 (ICR) 甲基化
 # 2. 转座子亚家族深度分析
 # 3. 精子发生关键基因启动子甲基化
-# 4. 全基因组低甲基化趋势检验
-# 5. CpG 密度分层差异甲基化模式
+# 通用全局甲基化、染色体差异和 CGI-context 分析已分别移至 Step 2/4/7。
 
 sperm_plot_dir <- "result/11_sperm/plots/1"
 sperm_table_dir <- "result/11_sperm/tables/1"
@@ -78,25 +77,10 @@ ensure_obj_cpg_loaded()
 # 使用 Geneimprint / MouseBook 已知的 ICR 列表进行分析。
 message("⏳ [1] 印记控制区域 (ICR) 甲基化分析...")
 
-# 小鼠已知 ICR 列表默认内置；如果 config$sperm_icr_file 存在，则优先读取外部 TSV。
+# ICR 坐标仅使用显式提供且已核验的 GRCm39 TSV。
 # 参考来源: https://www.geneimprint.com/ 和 Proudhon et al., 2012
-default_mouse_icr_regions <- tibble::tribble(
-  ~ICR_name,        ~chr,    ~start,     ~end,    ~imprinted_gene, ~parental_origin,
-  "Igf2r_ICR",      "chr17", 12632738,  12634520, "Igf2r",          "Maternal",
-  "H19_ICR",        "chr7",  149777550, 149778550, "H19",           "Paternal",
-  "Kcnq1ot1_ICR",   "chr7",  143194550, 143195550, "Kcnq1ot1",     "Paternal",
-  "Peg3_ICR",       "chr7",  6700380,   6702380,  "Peg3",           "Paternal",
-  "Snrpn_ICR",      "chr7",  59686770,  59688770, "Snrpn",          "Paternal",
-  "Gnas_ICR",       "chr2",  174470820, 174472820, "Gnas",          "Paternal",
-  "Grb10_ICR",      "chr11", 11938430,  11940430,  "Grb10",         "Maternal",
-  "Rasgrf1_ICR",    "chr9",  88928450,  88930450,  "Rasgrf1",       "Paternal",
-  "Plagl1_ICR",     "chr10", 12804690,  12806690,  "Plagl1",        "Paternal",
-  "Mest_ICR",       "chr6",  30658520,  30660520,  "Mest",           "Paternal",
-  "Nnat_ICR",       "chr2",  157565670, 157567670, "Nnat",          "Paternal",
-  "Impact_ICR",     "chr18", 12432130,  12434130,  "Impact",         "Paternal",
-  "Zdbf2_ICR",      "chr1",  63488690,  63490690,  "Zdbf2",          "Paternal",
-  "Gpr1_ICR",       "chr5",  142342950, 142344950, "Gpr1",         "Paternal"
-)
+if(!nzchar(config$sperm_icr_file) || !file.exists(config$sperm_icr_file)) stop("MISSING: 精子专题必须提供核验过的 WGBS_SPERM_ICR_FILE")
+
 mouse_icr_regions <- if(file.exists(config$sperm_icr_file)) {
   icr_df <- read_tsv(config$sperm_icr_file, show_col_types = FALSE)
   required_icr_cols <- c("ICR_name", "chr", "start", "end", "imprinted_gene", "parental_origin")
@@ -106,7 +90,7 @@ mouse_icr_regions <- if(file.exists(config$sperm_icr_file)) {
   }
   icr_df
 } else {
-  default_mouse_icr_regions
+  stop("MISSING: 精子专题 ICR 文件")
 }
 
 icr_gr <- GRanges(
@@ -488,127 +472,5 @@ if(!is.null(gene_map)) {
   })
 } else {
   message("   ⚠️ 精子发生基因 Symbol 转 ID 失败，跳过")
-}
-```
-
-```{r}
-# ==============================================================================
-# 4 全基因组低甲基化趋势检验
-# ==============================================================================
-# PFOS 暴露可能导致精子全基因组低甲基化。
-message("⏳ [4] 全基因组低甲基化趋势检验...")
-
-# 从 2_qc 已有的 global_meth 获取全基因组甲基化
-if(exists("global_meth")) {
-  # Wilcoxon 检验 (小样本 n=2)
-  if(length(unique(global_meth$Group)) == 2) {
-    g1_meth <- global_meth$Methylation[global_meth$Group == config$group1_name]
-    g2_meth <- global_meth$Methylation[global_meth$Group == config$group2_name]
-
-    hypometh_test <- tryCatch({
-      wilcox.test(g1_meth, g2_meth, alternative = "greater")
-    }, error = function(e) {
-      list(p.value = NA_real_, statistic = NA_real_)
-    })
-
-    hypometh_summary <- tibble(
-      test = "Wilcoxon (one-sided: group1 > group2)",
-      group1_mean = mean(g1_meth, na.rm = TRUE),
-      group2_mean = mean(g2_meth, na.rm = TRUE),
-      diff = mean(g1_meth, na.rm = TRUE) - mean(g2_meth, na.rm = TRUE),
-      pvalue = hypometh_test$p.value,
-      direction = ifelse(mean(g2_meth) < mean(g1_meth), "Hypomethylation in group2", "Hypermethylation in group2")
-    )
-    write_csv(hypometh_summary, file.path(sperm_table_dir, "global_hypomethylation_test.csv"))
-
-    # 按染色体的低甲基化趋势
-    if(exists("meth_raw_dt")) {
-      chr_hypo <- meth_raw_dt %>%
-        mutate(chr_clean = strip_chr_prefix(chr)) %>%
-        filter(chr_clean %in% as.character(1:19) | chr_clean %in% c("X", "Y")) %>%
-        group_by(Sample, Group, chr_clean) %>%
-        summarise(mean_meth = mean(Methylation, na.rm = TRUE), .groups = "drop") %>%
-        group_by(Group, chr_clean) %>%
-        summarise(group_mean_meth = mean(mean_meth, na.rm = TRUE), .groups = "drop") %>%
-        pivot_wider(names_from = Group, values_from = group_mean_meth, names_prefix = "Mean_")
-
-      if(all(c(paste0("Mean_", config$group1_name), paste0("Mean_", config$group2_name)) %in% colnames(chr_hypo))) {
-        chr_hypo <- chr_hypo %>%
-          mutate(
-            diff = .data[[paste0("Mean_", config$group2_name)]] - .data[[paste0("Mean_", config$group1_name)]],
-            direction = ifelse(diff < 0, "Hypomethylated", "Hypermethylated")
-          )
-
-        write_csv(chr_hypo, file.path(sperm_table_dir, "chromosome_hypomethylation.csv"))
-
-        p_chr_hypo <- ggplot(chr_hypo, aes(x = chr_clean, y = diff, fill = direction)) +
-          geom_col(width = 0.7) +
-          scale_fill_manual(values = c("Hypomethylated" = unname(viz_pal$dmr["Hypo"]),
-                                       "Hypermethylated" = unname(viz_pal$dmr["Hyper"]))) +
-          geom_hline(yintercept = 0, linetype = "dashed") +
-          labs(title = "Chromosome-level Methylation Difference",
-               x = "Chromosome", y = group_diff_axis_label, fill = "") +
-          theme_wgbs_bw(base_size = 12)
-
-        ggsave(file.path(sperm_plot_dir, "chromosome_hypomethylation.pdf"), p_chr_hypo, width = 10, height = 5, device = cairo_pdf)
-      }
-    }
-  }
-} else {
-  message("   ⚠️ global_meth 对象不存在，请先运行 2_qc 模块")
-}
-```
-
-```{r}
-# ==============================================================================
-# 5 CpG 密度分层差异甲基化模式
-# ==============================================================================
-# 分析 DMR 在 Island / Shore / Shelf / Open Sea 各层的分布和效应模式。
-message("⏳ [5] CpG 密度分层差异甲基化模式...")
-
-if(exists("dmr_anno_df") && "CGI_context" %in% colnames(dmr_anno_df) && nrow(dmr_anno_df) > 0) {
-  cgi_dmr <- dmr_anno_df %>%
-    filter(!is.na(CGI_context), CGI_context != "") %>%
-    mutate(CGI_context = factor(CGI_context, levels = c("Island", "N_Shore", "S_Shore", "N_Shelf", "S_Shelf", "Open_Sea")))
-
-  if(nrow(cgi_dmr) > 0) {
-    # DMR 数量按 CGI 上下文分布
-    p_cgi_dmr_count <- cgi_dmr %>%
-      count(CGI_context, DMR_type) %>%
-      ggplot(aes(x = CGI_context, y = n, fill = DMR_type)) +
-      geom_col(position = position_dodge(width = 0.8)) +
-      scale_fill_manual(values = viz_pal$dmr) +
-      labs(title = "DMR Count by CpG Density Context", x = "", y = "Count", fill = "") +
-      theme_wgbs_bw(base_size = 12) +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-    ggsave(file.path(sperm_plot_dir, "cgi_context_dmr_count.pdf"), p_cgi_dmr_count, width = 8, height = 5, device = cairo_pdf)
-
-    # 各 CGI 层的甲基化差异分布
-    p_cgi_dmr_effect <- ggplot(cgi_dmr, aes(x = CGI_context, y = diffMethy, fill = DMR_type)) +
-      geom_violin(alpha = 0.35, trim = FALSE, position = position_dodge(width = 0.8)) +
-      geom_boxplot(width = 0.15, outlier.shape = NA, alpha = 0.55, position = position_dodge(width = 0.8)) +
-      scale_fill_manual(values = viz_pal$dmr) +
-      geom_hline(yintercept = 0, linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.5)) +
-      labs(title = "DMR Effect Size by CpG Density Context", x = "", y = group_diff_axis_label, fill = "") +
-      theme_wgbs_bw(base_size = 12) +
-      theme(axis.text.x = element_text(angle = 45, hjust = 1))
-
-    ggsave(file.path(sperm_plot_dir, "cgi_context_dmr_effect.pdf"), p_cgi_dmr_effect, width = 9, height = 6, device = cairo_pdf)
-
-    # 各 CGI 层的统计汇总
-    cgi_dmr_summary <- cgi_dmr %>%
-      group_by(CGI_context, DMR_type) %>%
-      summarise(
-        n = n(),
-        mean_diff = mean(diffMethy, na.rm = TRUE),
-        median_diff = median(diffMethy, na.rm = TRUE),
-        mean_abs_diff = mean(abs(diffMethy), na.rm = TRUE),
-        .groups = "drop"
-      )
-    write_csv(cgi_dmr_summary, file.path(sperm_table_dir, "cgi_context_dmr_summary.csv"))
-  }
-} else {
-  message("   ⚠️ dmr_anno_df 中无 CGI_context 列，请先运行 Step 6 或 7 生成 CGI 注释")
 }
 ```

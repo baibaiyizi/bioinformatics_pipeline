@@ -1,0 +1,814 @@
+{
+  "checks": [
+    {
+      "kind": ".sh",
+      "path": "bulkrnaseq/rnaseq_first.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "bulkrnaseq/rnaseq_second.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "bulkrnaseq/rnaseq_third.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "bulkrnaseq/run_rmd.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "bulkrnaseq/scripts/config.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "bulkrnaseq/scripts/input_contract.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "bulkrnaseq/validation/contract_checks.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "bulkrnaseq/validation/replay_core.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "wgbsseq/examples/synthetic_core/run_example.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "wgbsseq/run_upstream.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "wgbsseq/run_wgbs.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "wgbsseq/scripts/input_audit.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "wgbsseq/scripts/load_config.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "bulkatacseq/run_rmd.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "bulkatacseq/run_upstream.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "bulkatacseq/scripts/input_audit.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "bulkatacseq/scripts/load_config.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "bulkatacseq/scripts/run_counts.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_beta.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_enrichment.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_networks.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_velocity.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_velocity_model.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/source_annotation.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/source_plotting.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "scrnaseq/run_scrna.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/__init__.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/__main__.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/analysis.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/annotation.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/audit.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/cellranger.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/cli.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/config.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/descriptive.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/eligibility.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/fixtures.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/inference.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/inputs.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/pipeline.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/plotting.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/qc.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/reporting.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/runtime.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/tests/conftest.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/tests/test_contract.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "smallrnaseq/run_rmd.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "smallrnaseq/scripts/load_config.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "smallrnaseq/scripts/make_fixture.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "smallrnaseq/scripts/preflight.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "smallrnaseq/sports.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "metabolomics/metabo_first.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "metabolomics/metabo_second.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "metabolomics/run.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "spatial_transcriptomics/run_spatial.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "spatial_transcriptomics/scripts/run_rmd.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "spatial_transcriptomics/scripts/spatial_pipeline.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "spatial_transcriptomics/tests/test_descriptive_contract.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "singlecell_multiome/scripts/run_multiome.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "singlecell_multiome/tests/test_multiome.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "spatial_metabolomics/scripts/run_spatial_metabolomics.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "spatial_metabolomics/tests/test_spatial_metabolomics.py",
+      "status": "PASS"
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/01_main_setup.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/02_selection.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/03_qc.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/04_pca.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/05_de.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/06_enrichment.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/07_go.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/08_gsea.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/09_gsva.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/10_tf_regulator.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/11_ppi.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/12_wgcna.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/13_apa.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/14_der.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/15_splicing.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/16_immune.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/17_pathway_activity.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/18_circle.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/generate_result_report.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/import_counts.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/rmats_direction.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/rmd/run_module.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/validation/direction_checks.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkrnaseq/validation/generate_counts_fixture.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/10_browser.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/11_sperm.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/1_setup.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/2_qc.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/3_dmr.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/4_dmroverview.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/5_enrichment.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/6_genomecontext.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/7_regulatory.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/8_multiomics.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/9_degfocused.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/figure_contract.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbsseq/rmd/generate_result_report.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/01_main_setup.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/02_project_inventory.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/03_atac_qc.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/04_peak_catalog_annotation.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/05_differential_accessibility.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/06_genome_tracks.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/07_peak_gene_enrichment.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/08_motif_activity.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/09_rna_multiomics.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/10_footprinting_tf_evidence.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/11_wgbs_integration.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/12_tf_gene_network.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/13_conservation_gc.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/14_machine_learning.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/15_keygenes_locus_reports.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/16_export_summary_manifest.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/generate_result_report.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/rmd/significance_helpers.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/scripts/run_counts.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "bulkatacseq/scripts/run_module.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/examples/mii/aging_marker_concordance.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/examples/mii/endosirna_literature.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/examples/serum/paired_process_qc.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/rmd/01_setup.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/rmd/02_single_group.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/rmd/03_pca.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/rmd/04_sncRNA_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/rmd/05_tsrna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/rmd/06_rsrna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/rmd/07_mirna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/rmd/08_pirna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/rmd/09_endosirna.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/scripts/render_summary.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/scripts/run_module.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "metabolomics/R/metabo_core.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "metabolomics/R/template_contract.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "metabolomics/pipeline.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/01_main_setup.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/02_qc_overview.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/03_spatial_domains.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/04_deconvolution_review.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/05_neighborhood_communication.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/06_segment_programs.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/07_multi_sample_summary.Rmd",
+      "status": "PASS",
+      "error": ""
+    }
+  ],
+  "syntax_pass": 144,
+  "syntax_fail": 0,
+  "external_source_files_checked": 265,
+  "external_source_changes": [],
+  "preexisting_dirty_file_preserved": true,
+  "provenance_external_files_checked": 92,
+  "provenance_errors": [],
+  "git_diff_check": 0,
+  "git_diff_errors": ""
+}

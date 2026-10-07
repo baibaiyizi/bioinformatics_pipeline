@@ -1,0 +1,34 @@
+[second] requested steps : 1:validate 2:merge_selected 3:contrast 4:deseq2 5:merge_de_results
+[second] run order       : 1:validate 2:merge_selected 3:contrast 4:deseq2 5:merge_de_results
+[second] force           : 0
+[second] skip DESeq2     : false
+[second] Step 1/5: validate selected samples and inputs
+[second] samples file : /tmp/bulk template smoke 5tnnzid_/project/4.DE_analysis/samples.txt
+[second] matrix file  : /tmp/bulk template smoke 5tnnzid_/project/3.Merge_result/genes.counts.matrix
+[second] de results   : /tmp/bulk template smoke 5tnnzid_/project/4.DE_analysis/DE_results
+[second] dry run      : 0
+[second] selected samples:
+  - control	C1
+  - control	C2
+  - treatment	T1
+  - treatment	T2
+converting counts to integer mode
+[second] Step 3/5: 写入 DE 对比 treatment vs control
+[second] Rscript: /home/h1028/miniconda3/bin/Rscript
+[second] Step 4/5: 运行内嵌 DESeq2
+[second]   矩阵: /tmp/bulk template smoke 5tnnzid_/project/3.Merge_result/genes.counts.matrix
+[second]   样本: /tmp/bulk template smoke 5tnnzid_/project/4.DE_analysis/samples.txt
+[second]   对比: treatment vs control
+[second]   输出: /tmp/bulk template smoke 5tnnzid_/project/4.DE_analysis/DESeq2.0929230454.dir
+converting counts to integer mode
+-- note: fitType='parametric', but the dispersion trend was not well captured by the
+   function: y = a/x + b, and a local regression fit was automatically substituted.
+   specify fitType='local' or 'mean' to avoid this message next time.
+null device 
+          1 
+null device 
+          1 
+[second] DE: 合并 DE 结果
+[second]   合并结果: /tmp/bulk template smoke 5tnnzid_/project/4.DE_analysis/DE_results
+[second]   总行数  : 501
+[second] 完成: 1:validate 2:merge_selected 3:contrast 4:deseq2 5:merge_de_results

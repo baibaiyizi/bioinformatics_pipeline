@@ -1,0 +1,17 @@
+{
+  "execution_level": "synthetic_methylKit_to_DSS_DMR_annotation_report",
+  "project": "/tmp/final-wgbsseq numeric's m9433f9u/project",
+  "input_CpGs_per_sample": 300,
+  "sample_n": 4,
+  "biological_n": {
+    "control": 2,
+    "treated": 2
+  },
+  "DMRs": 1,
+  "DMR_direction": "treated - control",
+  "DMR_diffMethy": 0.6000000000000015,
+  "FASTQ_alignment_methylation_extraction": "not_run",
+  "dmrseq": "SKIPPED_DISABLED",
+  "optional_modules": "not_run",
+  "reference_annotation": "synthetic_GTF_fixture_not_real_reference"
+}

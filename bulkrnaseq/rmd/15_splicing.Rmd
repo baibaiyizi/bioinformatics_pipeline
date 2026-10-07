@@ -17,6 +17,10 @@ Step 15 结果目录按分析层次拆分为 6 组：`01_event_level`、`02_gene
 ## 15.1 事件层输入与标准化
 
 ```{r}
+source(file.path(Sys.getenv("RNASEQ_RMD_DIR", unset = "rmd"), "rmats_direction.R"))
+rmats_direction <- read_rmats_direction(rmats_dir, selected_samples_path, group1_label, group2_label)
+# PSI 列的重复次序由真实 rMATS b1/b2 元数据决定，不按 samples.txt 的行次序猜测。
+sample_name_info <- list(group1 = rmats_direction$group1_samples, group2 = rmats_direction$group2_samples)
 ensure_module_result_layout("15_splicing")
 
 event_types <- c("SE", "A5SS", "A3SS", "RI", "MXE")
@@ -107,6 +111,8 @@ ensure_columns <- function(tbl, defaults) {
 
 load_rmats_table <- function(target_file, event_type, count_mode) {
   rmats_df <- read.delim(target_file, check.names = FALSE, stringsAsFactors = FALSE)
+  rmats_df$source_row_index <- seq_len(nrow(rmats_df))
+  rmats_df <- orient_rmats_table(rmats_df, rmats_direction)
   rmats_df <- filter_primary_chr_df(rmats_df)
   rmats_df$event_type <- event_type
   rmats_df$count_mode <- count_mode
@@ -131,16 +137,15 @@ load_rmats_table <- function(target_file, event_type, count_mode) {
     if ("adj.P.Val" %in% colnames(rmats_df)) suppressWarnings(as.numeric(rmats_df$adj.P.Val)) else NA_real_
   )
   rmats_df$event_pvalue[is.na(rmats_df$event_pvalue)] <- 1
-  rmats_df$IncLevelDifference[is.na(rmats_df$IncLevelDifference)] <- 0
-  rmats_df$psi_group1_mean <- if ("IncLevel1" %in% colnames(rmats_df)) vapply(rmats_df$IncLevel1, mean_numeric_string, numeric(1)) else NA_real_
-  rmats_df$psi_group2_mean <- if ("IncLevel2" %in% colnames(rmats_df)) vapply(rmats_df$IncLevel2, mean_numeric_string, numeric(1)) else NA_real_
-  rmats_df$abs_delta_psi <- abs(rmats_df$IncLevelDifference)
+  rmats_df$psi_group1_mean <- if ("psi_group1_values" %in% colnames(rmats_df)) vapply(rmats_df$psi_group1_values, mean_numeric_string, numeric(1)) else NA_real_
+  rmats_df$psi_group2_mean <- if ("psi_group2_values" %in% colnames(rmats_df)) vapply(rmats_df$psi_group2_values, mean_numeric_string, numeric(1)) else NA_real_
+  rmats_df$abs_delta_psi <- abs(rmats_df$delta_psi)
   # 保留当前项目 rMATS nominal pvalue < 0.05 + |delta PSI| >= 0.1 口径；
   # 更严格汇报时建议同时筛选 rMATS FDR < 0.05。
-  rmats_df$significant_as <- rmats_df$event_pvalue < 0.05 & rmats_df$abs_delta_psi >= 0.1
+  rmats_df$significant_as <- is.finite(rmats_df$event_pvalue) & rmats_df$event_pvalue < 0.05 & is.finite(rmats_df$delta_psi) & rmats_df$abs_delta_psi >= 0.1
   rmats_df$splice_direction <- dplyr::case_when(
     !rmats_df$significant_as ~ "ns",
-    rmats_df$IncLevelDifference > 0 ~ paste0("higher_in_", group2_label),
+    rmats_df$delta_psi > 0 ~ paste0("higher_in_", group2_label),
     TRUE ~ paste0("higher_in_", group1_label)
   )
 
@@ -417,7 +422,7 @@ if (nrow(rmats_combined) == 0) {
 
   write_csv_safe(rmats_file_index, step10_event_table_path("15_0_rMATS_file_index.csv"), row.names = FALSE)
   write_csv_safe(rmats_combined, step10_event_table_path("15_1_rMATS_all_events.csv"), row.names = FALSE)
-  write_csv_compat(rmats_sig, step10_event_table_path("15_2_significant_rMATS_events.csv"), row.names = FALSE)
+
 }
 ```
 
@@ -425,6 +430,16 @@ if (nrow(rmats_combined) == 0) {
 
 ```{r}
 if (nrow(rmats_combined) > 0) {
+  count_mode_colors <- resolve_named_colors(
+    c(JC = unname(viz_pal$accent["teal"]), JCEC = unname(viz_pal$accent["purple"])),
+    rmats_combined$count_mode
+  )
+  event_type_colors <- resolve_named_colors(viz_pal$accent, rmats_combined$event_type)
+  splice_direction_colors <- c(
+    setNames(group1_color, paste0("higher_in_", group1_label)),
+    setNames(group2_color, paste0("higher_in_", group2_label)),
+    ns = unname(viz_pal$neutral["mid"])
+  )
   rmats_summary <- rmats_combined %>%
     group_by(event_type, count_mode) %>%
     summarise(
@@ -438,12 +453,13 @@ if (nrow(rmats_combined) > 0) {
 
   rmats_event_summary <- prepend_metadata_columns(rmats_summary, list(summary_type = "event_count"))
   write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
-  write_csv_compat(rmats_summary, step10_event_table_path("15_3_rMATS_event_summary.csv"), row.names = FALSE)
+
 
   event_barplot <- ggplot(rmats_summary, aes(x = event_type, y = significant_events, fill = count_mode)) +
     geom_col(position = "dodge", width = 0.7) +
-    labs(title = "显著 AS 事件数量", x = "Event type", y = "Significant events") +
-    theme_rnaseq_minimal()
+    scale_fill_manual(values = count_mode_colors) +
+    labs(title = "Significant alternative-splicing events", x = "Event type", y = "Significant events") +
+    theme_rnaseq_publication()
   save_plot_versions(event_barplot, step10_event_plot_path("15_4_rMATS_event_barplot.pdf"), width = 8, height = 5)
 
   direction_summary <- rmats_sig %>%
@@ -454,29 +470,38 @@ if (nrow(rmats_combined) > 0) {
     prepend_metadata_columns(direction_summary, list(summary_type = "direction_count"))
   )
   write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
-  write_csv_compat(direction_summary, step10_event_table_path("15_4b_rMATS_direction_summary.csv"), row.names = FALSE)
+
 
   direction_plot <- ggplot(direction_summary, aes(x = event_type, y = event_count, fill = splice_direction)) +
     geom_col(position = "stack", width = 0.7) +
     facet_wrap(~ count_mode) +
-    labs(title = "显著 AS 事件方向分布", x = "Event type", y = "Event count") +
-    theme_rnaseq_minimal()
+    scale_fill_manual(values = resolve_named_colors(splice_direction_colors, direction_summary$splice_direction)) +
+    labs(title = "Direction of significant alternative-splicing events", x = "Event type", y = "Event count") +
+    theme_rnaseq_publication()
   save_plot_versions(direction_plot, step10_event_plot_path("15_4c_rMATS_direction_barplot.pdf"), width = 10, height = 5)
 
-  delta_scatter <- ggplot(rmats_combined, aes(x = IncLevelDifference, y = -log10(event_pvalue + 1e-300), color = event_type)) +
+  rmats_plot_tbl <- rmats_combined
+  rmats_plot_tbl$figure_significance <- figure_significance_values(
+    rmats_plot_tbl,
+    pvalue_candidates = "event_pvalue",
+    fdr_candidates = "event_fdr"
+  )
+  delta_scatter <- ggplot(rmats_plot_tbl, aes(x = delta_psi, y = -log10(figure_significance + 1e-300), color = event_type)) +
     geom_point(alpha = 0.6, size = 1.3) +
     geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
     geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed") +
     facet_wrap(~ count_mode) +
-    labs(title = "rMATS 事件显著性分布", x = "Delta PSI", y = "-log10(PValue)") +
-    theme_rnaseq_bw()
+    scale_color_manual(values = event_type_colors) +
+    labs(title = "rMATS event significance", x = paste0("Delta PSI (", rmats_direction$contrast, ")"), y = figure_significance_axis_label()) +
+    theme_rnaseq_publication()
   save_plot_versions(delta_scatter, step10_event_plot_path("15_5_rMATS_deltaPSI_scatter.pdf"), width = 11, height = 6)
 
-  delta_violin <- ggplot(rmats_sig, aes(x = event_type, y = IncLevelDifference, fill = count_mode)) +
+  delta_violin <- ggplot(rmats_sig, aes(x = event_type, y = delta_psi, fill = count_mode)) +
     geom_violin(trim = TRUE, scale = "width", alpha = 0.7) +
     geom_boxplot(width = 0.15, outlier.size = 0.3, position = position_dodge(width = 0.9)) +
-    labs(title = "显著 AS 事件 delta PSI 分布", x = "Event type", y = "Delta PSI") +
-    theme_rnaseq_minimal()
+    scale_fill_manual(values = count_mode_colors) +
+    labs(title = "Delta PSI distribution of significant AS events", x = "Event type", y = paste0("Delta PSI (", rmats_direction$contrast, ")")) +
+    theme_rnaseq_publication()
   save_plot_versions(delta_violin, step10_event_plot_path("15_5b_rMATS_deltaPSI_violin.pdf"), width = 9, height = 5)
 
   top_rmats_events <- rmats_sig %>%
@@ -489,6 +514,8 @@ if (nrow(rmats_combined) > 0) {
       PValue = event_pvalue,
       FDR = event_fdr,
       IncLevelDifference,
+      delta_psi,
+      delta_psi_contrast,
       abs_delta_psi,
       event_priority,
       splice_direction,
@@ -496,7 +523,7 @@ if (nrow(rmats_combined) > 0) {
       de_pvalue
     ) %>%
     slice_head(n = 50)
-  write_csv_compat(top_rmats_events, step10_event_table_path("15_6_top_rMATS_events.csv"), row.names = FALSE)
+
 }
 ```
 
@@ -509,10 +536,10 @@ if (nrow(rmats_combined) > 0) {
   if (all(c("JC", "JCEC") %in% unique(rmats_combined$count_mode))) {
     jc_tbl <- rmats_sig %>%
       filter(count_mode == "JC") %>%
-      dplyr::select(event_key, event_type, gene_label, jc_delta_psi = IncLevelDifference, jc_pvalue = event_pvalue, jc_fdr = event_fdr, jc_direction = splice_direction)
+      dplyr::select(event_key, event_type, gene_label, jc_delta_psi = delta_psi, jc_pvalue = event_pvalue, jc_fdr = event_fdr, jc_direction = splice_direction)
     jcec_tbl <- rmats_sig %>%
       filter(count_mode == "JCEC") %>%
-      dplyr::select(event_key, event_type, gene_label, jcec_delta_psi = IncLevelDifference, jcec_pvalue = event_pvalue, jcec_fdr = event_fdr, jcec_direction = splice_direction)
+      dplyr::select(event_key, event_type, gene_label, jcec_delta_psi = delta_psi, jcec_pvalue = event_pvalue, jcec_fdr = event_fdr, jcec_direction = splice_direction)
 
     concordance_tbl <- inner_join(jc_tbl, jcec_tbl, by = c("event_key", "event_type", "gene_label")) %>%
       mutate(
@@ -542,14 +569,14 @@ if (nrow(rmats_combined) > 0) {
       prepend_metadata_columns(concordance_summary, list(summary_type = "JC_JCEC_concordance"))
     )
     write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
-    write_csv_compat(concordance_summary, step10_event_table_path("15_6c_JC_JCEC_concordance_summary.csv"), row.names = FALSE)
+
 
     concordance_plot <- ggplot(concordance_tbl, aes(x = jc_delta_psi, y = jcec_delta_psi, color = event_type)) +
       geom_point(alpha = 0.55, size = 1.2) +
       geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
       scale_color_manual(values = resolve_named_colors(viz_pal$accent, concordance_tbl$event_type)) +
-      labs(title = "JC 与 JCEC 的 delta PSI 一致性", x = "JC delta PSI", y = "JCEC delta PSI") +
-      theme_rnaseq_bw()
+      labs(title = "Delta PSI concordance between JC and JCEC", x = paste0("JC delta PSI (", rmats_direction$contrast, ")"), y = paste0("JCEC delta PSI (", rmats_direction$contrast, ")")) +
+      theme_rnaseq_publication()
     save_plot_versions(concordance_plot, step10_event_plot_path("15_6d_JC_JCEC_deltaPSI_concordance.pdf"), width = 8.5, height = 6)
 
     high_confidence_events <- concordance_tbl %>%
@@ -557,14 +584,14 @@ if (nrow(rmats_combined) > 0) {
       mutate(
         count_mode = "JC_and_JCEC",
         PValue = pmin(jc_pvalue, jcec_pvalue),
-        IncLevelDifference = ifelse(abs(jcec_delta_psi) >= abs(jc_delta_psi), jcec_delta_psi, jc_delta_psi),
-        abs_delta_psi = abs(IncLevelDifference),
+        delta_psi = ifelse(abs(jcec_delta_psi) >= abs(jc_delta_psi), jcec_delta_psi, jc_delta_psi),
+        abs_delta_psi = abs(delta_psi),
         splice_direction = ifelse(abs(jcec_delta_psi) >= abs(jc_delta_psi), jcec_direction, jc_direction)
       ) %>%
       arrange(PValue, desc(abs_delta_psi))
   }
 
-  write_csv_compat(high_confidence_events, step10_event_table_path("15_6e_high_confidence_AS_events.csv"), row.names = FALSE)
+
 
   de_sig_ids <- unique(de_result$ensembl_id[de_result$direction != "ns"])
   das_ids <- unique(rmats_sig$gene_id_clean[!is.na(rmats_sig$gene_id_clean) & rmats_sig$gene_id_clean != ""])
@@ -583,13 +610,13 @@ if (nrow(rmats_combined) > 0) {
     prepend_metadata_columns(overlap_summary, list(summary_type = "DE_DAS_overlap"))
   )
   write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
-  write_csv_compat(overlap_summary, step10_event_table_path("15_7_DE_DAS_overlap_summary.csv"), row.names = FALSE)
+
 
   overlap_plot <- ggplot(overlap_summary, aes(x = category, y = count, fill = category)) +
     geom_col(width = 0.7) +
     scale_fill_manual(values = viz_pal$overlap) +
-    labs(title = "差异表达与差异剪切重叠", x = NULL, y = "Gene count") +
-    theme_rnaseq_minimal() +
+    labs(title = "Differential expression and alternative-splicing overlap", x = NULL, y = "Gene count") +
+    theme_rnaseq_publication() +
     theme(legend.position = "none")
   save_plot_versions(overlap_plot, step10_event_plot_path("15_8_DE_DAS_overlap_barplot.pdf"), width = 7, height = 4.5)
 }
@@ -603,25 +630,7 @@ if (nrow(rmats_combined) > 0) {
     filter(count_mode == preferred_count_mode) %>%
     distinct(event_key, .keep_all = TRUE)
 
-  infer_group_sample_names <- function(event_tbl) {
-    n1 <- if ("IncLevel1" %in% colnames(event_tbl) && nrow(event_tbl) > 0) {
-      max(vapply(event_tbl$IncLevel1, function(x) length(split_numeric_string(x)), integer(1)), 0)
-    } else {
-      0
-    }
-    n2 <- if ("IncLevel2" %in% colnames(event_tbl) && nrow(event_tbl) > 0) {
-      max(vapply(event_tbl$IncLevel2, function(x) length(split_numeric_string(x)), integer(1)), 0)
-    } else {
-      0
-    }
-    group1_names <- sample_name_info$group1
-    group2_names <- sample_name_info$group2
-    if (length(group1_names) != n1) group1_names <- paste0(group1_label, "_", seq_len(n1))
-    if (length(group2_names) != n2) group2_names <- paste0(group2_label, "_", seq_len(n2))
-    list(group1 = group1_names, group2 = group2_names)
-  }
-
-  sample_name_map <- infer_group_sample_names(dsfa_source)
+  sample_name_map <- sample_name_info
   min_group_n <- min(length(sample_name_map$group1), length(sample_name_map$group2))
   dsfa_min_freq_diff <- if (is.finite(min_group_n) && min_group_n > 0) 1 / min_group_n else 0.34
 
@@ -636,8 +645,8 @@ if (nrow(rmats_combined) > 0) {
 
   dsfa_event_table <- dsfa_source %>%
     mutate(
-      group1_freq_obj = purrr::map(IncLevel1, calc_binary_freq),
-      group2_freq_obj = purrr::map(IncLevel2, calc_binary_freq),
+      group1_freq_obj = purrr::map(psi_group1_values, calc_binary_freq),
+      group2_freq_obj = purrr::map(psi_group2_values, calc_binary_freq),
       group1_included = purrr::map_int(group1_freq_obj, "included"),
       group1_total = purrr::map_int(group1_freq_obj, "total"),
       group2_included = purrr::map_int(group2_freq_obj, "included"),
@@ -683,19 +692,32 @@ if (nrow(rmats_combined) > 0) {
     arrange(best_dsfa_pvalue, desc(max_abs_freq_diff))
 
   write_csv_safe(dsfa_event_table, step10_event_table_path("15_8b_DSFA_event_table.csv"), row.names = FALSE)
-  write_csv_compat(dsfa_sig_events, step10_event_table_path("15_8c_significant_DSFA_events.csv"), row.names = FALSE)
+
   write_csv_safe(dsfa_gene_burden, step10_event_table_path("15_8d_DSFA_gene_burden.csv"), row.names = FALSE)
 
   if (nrow(dsfa_event_table) > 0) {
-    dsfa_scatter_plot <- dsfa_event_table %>%
-      mutate(dsfa_status = ifelse(significant_dsfa, "significant", "ns")) %>%
-      ggplot(aes(x = freq_diff, y = -log10(dsfa_pvalue + 1e-300), color = dsfa_status)) +
+    dsfa_plot_tbl <- dsfa_event_table
+    dsfa_plot_tbl$figure_significance <- figure_significance_values(
+      dsfa_plot_tbl,
+      pvalue_candidates = "dsfa_pvalue",
+      fdr_candidates = "dsfa_fdr"
+    )
+    dsfa_scatter_plot <- dsfa_plot_tbl %>%
+      mutate(
+        dsfa_status = ifelse(
+          is.finite(figure_significance) & figure_significance < 0.05 &
+            is.finite(freq_diff) & abs(freq_diff) >= dsfa_min_freq_diff,
+          "significant",
+          "ns"
+        )
+      ) %>%
+      ggplot(aes(x = freq_diff, y = -log10(figure_significance + 1e-300), color = dsfa_status)) +
       geom_point(alpha = 0.65, size = 1.2) +
       geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
       geom_vline(xintercept = c(-dsfa_min_freq_diff, dsfa_min_freq_diff), linetype = "dashed") +
       scale_color_manual(values = viz_pal$sig_status) +
-      labs(title = "DSFA frequency-difference landscape", x = paste0("Included frequency difference (", group2_label, " - ", group1_label, ")"), y = "-log10(PValue)") +
-      theme_rnaseq_bw()
+      labs(title = "DSFA frequency-difference landscape", x = paste0("Included frequency difference (", group2_label, " - ", group1_label, ")"), y = figure_significance_axis_label()) +
+      theme_rnaseq_publication()
     save_plot_versions(dsfa_scatter_plot, step10_event_plot_path("15_8e_DSFA_frequency_scatter.pdf"), width = 8.5, height = 6)
   }
 
@@ -711,14 +733,14 @@ if (nrow(rmats_combined) > 0) {
       prepend_metadata_columns(dsfa_type_summary, list(summary_type = "DSFA_event_type"))
     )
     write_csv_safe(rmats_event_summary, step10_event_table_path("15_rMATS_event_summary.csv"), row.names = FALSE)
-    write_csv_compat(dsfa_type_summary, step10_event_table_path("15_8f_DSFA_event_type_summary.csv"), row.names = FALSE)
+
 
     dsfa_bar_plot <- ggplot(dsfa_type_summary, aes(x = reorder(event_type, event_count), y = event_count, fill = event_type)) +
       geom_col(width = 0.75) +
       coord_flip() +
       scale_fill_manual(values = resolve_named_colors(viz_pal$accent, dsfa_type_summary$event_type)) +
       labs(title = "DSFA event-type burden", x = NULL, y = "Significant DSFA events") +
-      theme_rnaseq_minimal() +
+      theme_rnaseq_publication() +
       theme(legend.position = "none")
     save_plot_versions(dsfa_bar_plot, step10_event_plot_path("15_8g_DSFA_event_type_burden.pdf"), width = 7.5, height = 5)
 
@@ -738,7 +760,7 @@ if (nrow(rmats_combined) > 0) {
         sample_names <- c(sample_name_map$group1, sample_name_map$group2)
         freq_mat <- matrix(NA_real_, nrow = nrow(event_tbl), ncol = length(sample_names), dimnames = list(event_tbl$event_key, sample_names))
         for (i in seq_len(nrow(event_tbl))) {
-          vals <- c(split_numeric_string(event_tbl$IncLevel1[i]), split_numeric_string(event_tbl$IncLevel2[i]))
+          vals <- c(split_rmats_psi(event_tbl$psi_group1_values[i]), split_rmats_psi(event_tbl$psi_group2_values[i]))
           if (length(vals) > 0) {
             freq_mat[i, seq_len(min(length(vals), ncol(freq_mat)))] <- as.integer(vals[seq_len(min(length(vals), ncol(freq_mat)))] >= 0.5)
           }
@@ -799,7 +821,7 @@ if (nrow(rmats_sig) > 0) {
     ) %>%
     arrange(desc(priority), best_event_pvalue)
 
-  write_csv_compat(as_gene_priority, step10_gene_table_path("15_9_DAS_gene_priority_table.csv"), row.names = FALSE)
+
 
   save_das_gene_burden_plot(
     as_gene_priority,
@@ -834,7 +856,7 @@ if (nrow(rmats_combined) > 0) {
         priority = -log10(P.Value + 1e-300) * ifelse(is.finite(FDR), pmax(1 - FDR, 0.001), 1)
       ) %>%
       arrange(P.Value, FDR)
-    write_csv_compat(deu_gene_priority, step10_gene_table_path("15_28b_DEU_gene_priority_table.csv"), row.names = FALSE)
+
 
     deu_overlap_summary <- data.frame(
       category = c("DEU_only", "DE_only", "DE_and_DEU"),
@@ -847,34 +869,46 @@ if (nrow(rmats_combined) > 0) {
     )
     write.csv(deu_overlap_summary, step10_integr_table_path("15_28_DE_DEU_overlap_summary.csv"), row.names = FALSE)
 
-    top_deu_genes_plot <- exon_gene_simes %>%
-      filter(is.finite(P.Value)) %>%
-      arrange(P.Value, FDR) %>%
+    exon_gene_plot_tbl <- exon_gene_simes
+    exon_gene_plot_tbl$figure_significance <- figure_significance_values(
+      exon_gene_plot_tbl,
+      pvalue_candidates = "P.Value",
+      fdr_candidates = "FDR"
+    )
+    top_deu_genes_plot <- exon_gene_plot_tbl %>%
+      filter(is.finite(figure_significance)) %>%
+      arrange(figure_significance, FDR, P.Value) %>%
       slice_head(n = 20) %>%
       mutate(
         gene_label = factor(gene_id_clean, levels = rev(unique(gene_id_clean))),
-        significant = ifelse(significant_deu, "significant", "ns")
+        significant = ifelse(figure_significance < 0.05, "significant", "ns")
       ) %>%
-      ggplot(aes(x = gene_label, y = -log10(P.Value + 1e-300), fill = significant)) +
+      ggplot(aes(x = gene_label, y = -log10(figure_significance + 1e-300), fill = significant)) +
       geom_col(width = 0.75) +
       coord_flip() +
       scale_fill_manual(values = viz_pal$sig_status) +
-      labs(title = "Top genes from exon-usage validation", x = NULL, y = "-log10(PValue)") +
-      theme_rnaseq_minimal() +
+      labs(title = "Top genes from exon-usage validation", x = NULL, y = figure_significance_axis_label()) +
+      theme_rnaseq_publication() +
       theme(legend.position = "none")
     save_plot_versions(top_deu_genes_plot, step10_gene_plot_path("15_29_exon_usage_top_genes.pdf"), width = 8.5, height = 6)
   }
 
   if (nrow(exon_exon_results) > 0) {
-    exon_scatter_plot <- exon_exon_results %>%
-      filter(is.finite(P.Value), is.finite(logFC)) %>%
-      mutate(significant = ifelse(significant_exon, "significant", "ns")) %>%
-      ggplot(aes(x = logFC, y = -log10(P.Value + 1e-300), color = significant)) +
+    exon_plot_tbl <- exon_exon_results
+    exon_plot_tbl$figure_significance <- figure_significance_values(
+      exon_plot_tbl,
+      pvalue_candidates = "P.Value",
+      fdr_candidates = "FDR"
+    )
+    exon_scatter_plot <- exon_plot_tbl %>%
+      filter(is.finite(figure_significance), is.finite(logFC)) %>%
+      mutate(significant = ifelse(figure_significance < 0.05, "significant", "ns")) %>%
+      ggplot(aes(x = logFC, y = -log10(figure_significance + 1e-300), color = significant)) +
       geom_point(alpha = 0.55, size = 1.2) +
       geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
       scale_color_manual(values = viz_pal$sig_status) +
-      labs(title = "Exon-usage validation at exon level", x = "Exon logFC", y = "-log10(PValue)") +
-      theme_rnaseq_bw()
+      labs(title = "Exon-usage validation at exon level", x = "Exon logFC", y = figure_significance_axis_label()) +
+      theme_rnaseq_publication()
     save_plot_versions(exon_scatter_plot, step10_gene_plot_path("15_30_exon_usage_exon_scatter.pdf"), width = 8.5, height = 6)
   }
 
@@ -1162,24 +1196,18 @@ if (nrow(rmats_combined) > 0) {
   }
 
   write_csv_safe(as_gene_evidence, step10_integr_table_path("15_splicing_gene_evidence.csv"), row.names = FALSE)
-  write_csv_compat(as_gene_membership, step10_integr_table_path("15_31_gene_method_membership.csv"), row.names = FALSE)
-  write_csv_compat(as_gene_evidence, step10_integr_table_path("15_32_as_gene_evidence_table.csv"), row.names = FALSE)
-  write_csv_compat(top_as_candidates, step10_integr_table_path("15_32b_top_as_candidates.csv"), row.names = FALSE)
+
+
+
 
   build_psi_matrix_step6 <- function(event_df) {
-    if (!all(c("IncLevel1", "IncLevel2") %in% colnames(event_df)) || nrow(event_df) == 0) {
+    if (!all(c("psi_group1_values", "psi_group2_values") %in% colnames(event_df)) || nrow(event_df) == 0) {
       return(NULL)
     }
-    n1 <- max(vapply(event_df$IncLevel1, function(x) length(split_numeric_string(x)), integer(1)), 0)
-    n2 <- max(vapply(event_df$IncLevel2, function(x) length(split_numeric_string(x)), integer(1)), 0)
-    group1_names <- sample_name_info$group1
-    group2_names <- sample_name_info$group2
-    if (length(group1_names) != n1) group1_names <- paste0(group1_label, "_", seq_len(n1))
-    if (length(group2_names) != n2) group2_names <- paste0(group2_label, "_", seq_len(n2))
-    sample_names <- c(group1_names, group2_names)
+    sample_names <- c(sample_name_info$group1, sample_name_info$group2)
     psi_mat <- matrix(NA_real_, nrow = nrow(event_df), ncol = length(sample_names), dimnames = list(event_df$event_key, sample_names))
     for (i in seq_len(nrow(event_df))) {
-      vals <- c(split_numeric_string(event_df$IncLevel1[i]), split_numeric_string(event_df$IncLevel2[i]))
+      vals <- c(split_rmats_psi(event_df$psi_group1_values[i]), split_rmats_psi(event_df$psi_group2_values[i]))
       if (length(vals) > 0) {
         psi_mat[i, seq_len(min(length(vals), ncol(psi_mat)))] <- vals[seq_len(min(length(vals), ncol(psi_mat)))]
       }
@@ -1206,14 +1234,14 @@ if (nrow(rmats_combined) > 0) {
 
     psi_pca_plot <- ggplot(psi_pca_df, aes(PC1, PC2, color = group, label = sample)) +
       geom_point(size = 3.2) +
-      geom_text_repel(size = 3, show.legend = FALSE) +
+      geom_text_repel(size = rnaseq_figure_text_size, show.legend = FALSE) +
       scale_color_manual(values = group_colors) +
       labs(
         title = "PSI-level PCA of top AS events",
         x = paste0("PC1 (", round(100 * summary(psi_pca)$importance[2, 1], 1), "%)"),
         y = paste0("PC2 (", round(100 * summary(psi_pca)$importance[2, 2], 1), "%)")
       ) +
-      theme_rnaseq_bw()
+      theme_rnaseq_publication()
     save_plot_versions(psi_pca_plot, step10_event_plot_path("15_33_PSI_sample_pca.pdf"), width = 8.5, height = 6)
 
     psi_cor <- cor(psi_imputed, use = "pairwise.complete.obs")
@@ -1221,25 +1249,31 @@ if (nrow(rmats_combined) > 0) {
     psi_cor_df$correlation <- as.vector(psi_cor)
     psi_cor_plot <- ggplot(psi_cor_df, aes(sample_x, sample_y, fill = correlation)) +
       geom_tile(color = viz_pal$neutral["light"]) +
-      geom_text(aes(label = sprintf("%.2f", correlation)), size = 3) +
+      geom_text(aes(label = sprintf("%.2f", correlation)), size = rnaseq_figure_text_size) +
       scale_fill_heatmap_diverging(midpoint = 0.5, limits = c(-1, 1)) +
       labs(title = "PSI sample correlation heatmap", x = NULL, y = NULL, fill = "Pearson r") +
-      theme_rnaseq_minimal() +
+      theme_rnaseq_publication() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
     save_plot_versions(psi_cor_plot, step10_event_plot_path("15_34_PSI_sample_correlation_heatmap.pdf"), width = 7.5, height = 6.5)
   }
 
-  event_type_scatter <- rmats_combined %>%
-    filter(is.finite(IncLevelDifference), is.finite(event_pvalue)) %>%
-    mutate(significant = ifelse(significant_as, "significant", "ns")) %>%
-    ggplot(aes(x = IncLevelDifference, y = -log10(event_pvalue + 1e-300), color = significant)) +
+  event_type_scatter <- rmats_plot_tbl %>%
+    filter(is.finite(delta_psi), is.finite(figure_significance)) %>%
+    mutate(
+      significant = ifelse(
+        figure_significance < 0.05 & abs(delta_psi) >= 0.1,
+        "significant",
+        "ns"
+      )
+    ) %>%
+    ggplot(aes(x = delta_psi, y = -log10(figure_significance + 1e-300), color = significant)) +
     geom_point(alpha = 0.55, size = 1.1) +
     geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
     geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed") +
     facet_grid(event_type ~ count_mode, scales = "free_y") +
     scale_color_manual(values = viz_pal$sig_status) +
-    labs(title = "Event-type stratified AS significance landscape", x = "Delta PSI", y = "-log10(PValue)") +
-    theme_rnaseq_bw(base_size = viz_style$compact_size)
+    labs(title = "Event-type stratified AS significance landscape", x = paste0("Delta PSI (", rmats_direction$contrast, ")"), y = figure_significance_axis_label()) +
+    theme_rnaseq_publication(base_size = viz_style$compact_size)
   save_plot_versions(event_type_scatter, step10_event_plot_path("15_35_event_type_faceted_scatter.pdf"), width = 11, height = 9)
 
   if (nrow(as_gene_membership) > 0) {
@@ -1258,14 +1292,17 @@ if (nrow(rmats_combined) > 0) {
         primary = step10_integr_plot_path("15_31_DE_DAS_DEU_IS_APA_DER_upset.pdf"),
         width = 11,
         height = 6,
-        expr = UpSetR::upset(
+        expr = print(UpSetR::upset(
           upset_input,
           nsets = length(active_sets),
           keep.order = TRUE,
           sets = active_sets,
           mb.ratio = c(0.6, 0.4),
-          order.by = "freq"
-        )
+          order.by = "freq",
+          sets.bar.color = unname(viz_pal$upset["sets"]),
+          main.bar.color = unname(viz_pal$upset["main"]),
+          text.scale = c(1, 0.875, 1, 0.875, 1, 0.875)
+        ), newpage = FALSE)
       )
     }
   }
@@ -1292,7 +1329,7 @@ if (nrow(rmats_combined) > 0) {
       coord_flip() +
       scale_fill_manual(values = viz_pal$method_count) +
       labs(title = "Integrated AS evidence ranking", x = NULL, y = "Evidence score", fill = "Method count") +
-      theme_rnaseq_minimal()
+      theme_rnaseq_publication()
     save_plot_versions(evidence_rank_plot, step10_integr_plot_path("15_32c_integrated_as_evidence_ranking.pdf"), width = 9, height = 9)
   }
 
@@ -1347,8 +1384,9 @@ if (nrow(rmats_combined) > 0) {
     if (nrow(evidence_scatter_df) > 0) {
       joint_scatter <- ggplot(evidence_scatter_df, aes(x = de_log2FoldChange, y = pmax(max_abs_delta_psi, max_abs_exon_logFC, max_abs_dIF, max_abs_delta_PAU, max_abs_der_effect), color = method_group, size = pmax(method_count, 1))) +
         geom_point(alpha = 0.75) +
+        scale_color_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent, viz_pal$neutral["mid"]), evidence_scatter_df$method_group)) +
         labs(title = "Joint DE-DAS-DEU-IS-APA-DER evidence landscape", x = "Gene log2FC", y = "Max effect size", color = "Evidence class", size = "Method count") +
-        theme_rnaseq_bw()
+        theme_rnaseq_publication()
       save_plot_versions(joint_scatter, step10_integr_plot_path("15_38_DE_DAS_DEU_IS_APA_DER_joint_scatter.pdf"), width = 9, height = 6)
 
       ribbon_tbl <- evidence_scatter_df %>%
@@ -1363,7 +1401,7 @@ if (nrow(rmats_combined) > 0) {
         geom_tile(color = viz_pal$neutral["light"]) +
         scale_fill_heatmap_binary() +
         labs(title = "Top candidate evidence summary", x = NULL, y = NULL, fill = "Present") +
-        theme_rnaseq_minimal()
+        theme_rnaseq_publication()
       save_plot_versions(ribbon_plot, step10_integr_plot_path("15_39_top_candidate_evidence_summary.pdf"), width = 8, height = 8.5)
     }
   }
@@ -1378,33 +1416,18 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
     filter(count_mode == preferred_count_mode) %>%
     arrange(event_pvalue, desc(abs_delta_psi))
 
-  guess_sample_names <- function(event_df) {
-    n1 <- if ("IncLevel1" %in% colnames(event_df) && nrow(event_df) > 0) {
-      max(vapply(event_df$IncLevel1, function(x) length(split_numeric_string(x)), integer(1)), 0)
-    } else 0
-    n2 <- if ("IncLevel2" %in% colnames(event_df) && nrow(event_df) > 0) {
-      max(vapply(event_df$IncLevel2, function(x) length(split_numeric_string(x)), integer(1)), 0)
-    } else 0
-
-    group1_names <- sample_name_info$group1
-    group2_names <- sample_name_info$group2
-    if (length(group1_names) != n1) group1_names <- paste0(group1_label, "_", seq_len(n1))
-    if (length(group2_names) != n2) group2_names <- paste0(group2_label, "_", seq_len(n2))
-    c(group1_names, group2_names)
-  }
-
   build_psi_matrix <- function(event_df) {
-    if (!all(c("IncLevel1", "IncLevel2") %in% colnames(event_df)) || nrow(event_df) == 0) {
+    if (!all(c("psi_group1_values", "psi_group2_values") %in% colnames(event_df)) || nrow(event_df) == 0) {
       return(NULL)
     }
-    sample_names <- guess_sample_names(event_df)
+    sample_names <- c(sample_name_info$group1, sample_name_info$group2)
     if (length(sample_names) == 0) {
       return(NULL)
     }
-    heatmap_labels <- paste0(event_df$gene_label, " | ", event_df$event_type, " | dPSI=", sprintf("%.2f", event_df$IncLevelDifference))
+    heatmap_labels <- paste0(event_df$gene_label, " | ", event_df$event_type, paste0(" | dPSI (", rmats_direction$contrast, ")="), sprintf("%.2f", event_df$delta_psi))
     psi_mat <- matrix(NA_real_, nrow = nrow(event_df), ncol = length(sample_names), dimnames = list(heatmap_labels, sample_names))
     for (i in seq_len(nrow(event_df))) {
-      psi_vals <- c(split_numeric_string(event_df$IncLevel1[i]), split_numeric_string(event_df$IncLevel2[i]))
+      psi_vals <- c(split_rmats_psi(event_df$psi_group1_values[i]), split_rmats_psi(event_df$psi_group2_values[i]))
       if (length(psi_vals) > 0) {
         psi_mat[i, seq_len(min(length(psi_vals), ncol(psi_mat)))] <- psi_vals[seq_len(min(length(psi_vals), ncol(psi_mat)))]
       }
@@ -1486,15 +1509,12 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
     slice_head(n = 10) %>%
     ungroup() %>%
     mutate(integrated_priority = event_priority * ifelse(!is.na(de_direction) & de_direction != "ns", 1.5, 1))
-  write_csv_compat(top_events_by_type, step10_gene_table_path("15_16_top_events_by_type.csv"), row.names = FALSE)
+
 
   top_heatmap_events <- preferred_sig_events %>% slice_head(n = 30)
   psi_mat <- build_psi_matrix(top_heatmap_events)
   if (!is.null(psi_mat) && nrow(psi_mat) >= 2) {
     sample_groups <- c(rep(group1_label, length(sample_name_info$group1)), rep(group2_label, length(sample_name_info$group2)))
-    if (length(sample_groups) != ncol(psi_mat)) {
-      sample_groups <- c(rep(group1_label, floor(ncol(psi_mat) / 2)), rep(group2_label, ceiling(ncol(psi_mat) / 2)))
-    }
     psi_ha <- heatmap_group_annotation(sample_groups, palette = group_colors)
     save_base_pdf_versions(
       primary = step10_gene_plot_path("15_17_top_AS_event_PSI_heatmap.pdf"),
@@ -1561,8 +1581,7 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
 
       source_df <- read.delim(source_file, check.names = FALSE)
       source_df_processed <- load_rmats_table(source_file, one_event_type, one_mode)
-      source_df_processed$row_index__ <- seq_len(nrow(source_df_processed))
-      matched_row_idx <- source_df_processed$row_index__[source_df_processed$event_key == one_row$event_key[[1]]]
+      matched_row_idx <- source_df_processed$source_row_index[source_df_processed$event_key == one_row$event_key[[1]]]
       if (length(matched_row_idx) == 0) next
 
       mode_dir <- file.path(sashimi_output_dir, one_mode, one_event_type)
@@ -1586,6 +1605,8 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
         gene_label = one_row$gene_label[[1]],
         event_pvalue = one_row$event_pvalue[[1]],
         IncLevelDifference = one_row$IncLevelDifference[[1]],
+        delta_psi = one_row$delta_psi[[1]],
+        delta_psi_contrast = rmats_direction$contrast,
         abs_delta_psi = one_row$abs_delta_psi[[1]],
         event_priority = one_row$event_priority[[1]],
         source_file = source_file,
@@ -1599,8 +1620,10 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
     sashimi_manifest <- bind_rows(sashimi_manifest)
     write.csv(sashimi_manifest, step10_visual_table_path("15_18_sashimi_manifest.csv"), row.names = FALSE)
 
-    group1_bams <- normalizePath(file.path("1.Mapping", paste0(sample_name_info$group1, ".bam")), mustWork = FALSE)
-    group2_bams <- normalizePath(file.path("1.Mapping", paste0(sample_name_info$group2, ".bam")), mustWork = FALSE)
+    sashimi_b1_samples <- if (rmats_direction$b1_group == group1_label) sample_name_info$group1 else sample_name_info$group2
+    sashimi_b2_samples <- if (rmats_direction$b2_group == group2_label) sample_name_info$group2 else sample_name_info$group1
+    group1_bams <- normalizePath(file.path("1.Mapping", paste0(sashimi_b1_samples, ".bam")), mustWork = FALSE)
+    group2_bams <- normalizePath(file.path("1.Mapping", paste0(sashimi_b2_samples, ".bam")), mustWork = FALSE)
     sashimi_cmd <- detect_sashimi_cmd()
 
     sashimi_commands <- sashimi_manifest %>%
@@ -1613,9 +1636,9 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
           paste(group2_bams, collapse = ","),
           event_type,
           event_file,
-          group1_label,
-          group2_label,
-          rna_sashimi_color_string,
+          rmats_direction$b1_group,
+          rmats_direction$b2_group,
+          paste(unname(rna_group_palette[c(rmats_direction$b1_group, rmats_direction$b2_group)]), collapse = ","),
           output_dir
         )
       )
@@ -1719,18 +1742,41 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
 
     candidate_splicing_regulators <- splicing_regulator_tbl %>%
       filter(!is.na(log2FoldChange), !is.na(pvalue))
-    write_csv_compat(candidate_splicing_regulators, step10_gene_table_path("15_21_candidate_splicing_regulators.csv"), row.names = FALSE)
+
 
     if (nrow(candidate_splicing_regulators) > 0) {
-      label_tbl <- candidate_splicing_regulators %>% slice_head(n = 15)
-      splicing_regulator_plot <- ggplot(candidate_splicing_regulators, aes(x = log2FoldChange, y = -log10(pvalue + 1e-300), color = candidate_status)) +
+      candidate_splicing_plot_tbl <- candidate_splicing_regulators %>%
+        left_join(
+          de_result %>% dplyr::select(gene_id, padj) %>% distinct(gene_id, .keep_all = TRUE),
+          by = "gene_id"
+        )
+      candidate_splicing_plot_tbl$figure_significance <- figure_significance_values(
+        candidate_splicing_plot_tbl,
+        pvalue_candidates = "pvalue",
+        fdr_candidates = "padj"
+      )
+      candidate_splicing_plot_tbl <- candidate_splicing_plot_tbl %>%
+        mutate(
+          figure_is_splicing_de = is.finite(figure_significance) & figure_significance < de_pvalue_cutoff &
+            is.finite(log2FoldChange) & abs(log2FoldChange) >= de_log2fc_cutoff,
+          figure_candidate_status = case_when(
+            figure_is_splicing_de & has_das ~ "DE_and_DAS_splicing",
+            figure_is_splicing_de ~ "DE_splicing",
+            has_das ~ "DAS_splicing",
+            TRUE ~ "Background_splicing"
+          ),
+          figure_priority = -log10(figure_significance + 1e-300) * pmax(abs(log2FoldChange), 0.001) * ifelse(has_das, 1.5, 1)
+        ) %>%
+        arrange(desc(figure_priority), figure_significance)
+      label_tbl <- candidate_splicing_plot_tbl %>% slice_head(n = 15)
+      splicing_regulator_plot <- ggplot(candidate_splicing_plot_tbl, aes(x = log2FoldChange, y = -log10(figure_significance + 1e-300), color = figure_candidate_status)) +
         geom_point(size = 2, alpha = 0.8) +
         geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
         geom_vline(xintercept = c(-0.58, 0.58), linetype = "dashed") +
-        geom_text_repel(data = label_tbl, aes(label = SYMBOL), size = 3, show.legend = FALSE) +
+        geom_text_repel(data = label_tbl, aes(label = SYMBOL), size = rnaseq_figure_text_size, show.legend = FALSE) +
         scale_color_manual(values = viz_pal$candidate_status) +
-        labs(title = "剪切调控候选基因概览", x = "Gene log2FC", y = "-log10(PValue)") +
-        theme_rnaseq_bw()
+        labs(title = "Candidate splicing regulators", x = "Gene log2FC", y = figure_significance_axis_label()) +
+        theme_rnaseq_publication()
       save_plot_versions(splicing_regulator_plot, step10_gene_plot_path("15_22_splicing_regulator_volcano.pdf"), width = 8.5, height = 6)
 
       top_splicing_ids <- candidate_splicing_regulators %>%
@@ -1775,7 +1821,7 @@ if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
   write.csv(isoform_switch_isoforms, step10_isoform_table_path("15_41_significant_switch_isoforms.csv"), row.names = FALSE)
   write.csv(isoform_switch_summary, step10_isoform_table_path("15_42_switch_summary.csv"), row.names = FALSE)
   write.csv(isoform_consequence_summary, step10_isoform_table_path("15_43_consequence_summary.csv"), row.names = FALSE)
-  write_csv_compat(isoform_switch_pairs, step10_isoform_table_path("15_44_representative_switch_pairs.csv"), row.names = FALSE)
+
 
   if (nrow(isoform_switch_genes) > 0) {
     isoform_gene_rank <- isoform_switch_genes %>%
@@ -1795,7 +1841,7 @@ if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
       coord_flip() +
       scale_fill_heatmap_sequential() +
       labs(title = "Top isoform-switch genes", x = NULL, y = "Switch priority", fill = "Max |dIF|") +
-      theme_rnaseq_minimal()
+      theme_rnaseq_publication()
     save_plot_versions(isoform_gene_plot, step10_isoform_plot_path("15_45_isoform_switch_gene_ranking.pdf"), width = 8.5, height = 6)
   }
 
@@ -1812,7 +1858,7 @@ if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
       geom_vline(xintercept = c(-0.1, 0.1), linetype = "dashed") +
       scale_color_manual(values = viz_pal$sig_status) +
       labs(title = "Isoform switch significance landscape", x = "dIF", y = "-log10(switch q-value)") +
-      theme_rnaseq_bw()
+      theme_rnaseq_publication()
     save_plot_versions(isoform_scatter, step10_isoform_plot_path("15_46_isoform_switch_isoform_scatter.pdf"), width = 8.5, height = 6)
   }
 
@@ -1861,12 +1907,12 @@ if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
     count = c(nrow(isoform_switch_genes), nrow(isoform_switch_isoforms), nrow(isoform_switch_pairs)),
     stringsAsFactors = FALSE
   )
-  write_csv_compat(isoform_summary_tbl, step10_isoform_table_path("15_48_isoform_switch_summary_table.csv"), row.names = FALSE)
+
   isoform_summary_plot <- ggplot(isoform_summary_tbl, aes(x = metric, y = count, fill = metric)) +
     geom_col(width = 0.7) +
     scale_fill_manual(values = resolve_named_colors(viz_pal$accent, isoform_summary_tbl$metric)) +
     labs(title = "Isoform switch summary", x = NULL, y = "Count") +
-    theme_rnaseq_minimal() +
+    theme_rnaseq_publication() +
     theme(legend.position = "none")
   save_plot_versions(isoform_summary_plot, step10_isoform_plot_path("15_48_isoform_switch_summary_barplot.pdf"), width = 7.5, height = 4.5)
 
@@ -1897,7 +1943,7 @@ if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
       coord_flip() +
       scale_fill_heatmap_sequential() +
       labs(title = "Isoform switch consequence summary", x = NULL, y = "Count") +
-      theme_rnaseq_minimal() +
+      theme_rnaseq_publication() +
       theme(legend.position = "none")
     save_plot_versions(consequence_plot, step10_isoform_plot_path("15_49_isoform_consequence_summary_barplot.pdf"), width = 8.5, height = 6)
   }
@@ -1956,11 +2002,13 @@ if (nrow(as_gene_priority) > 0 && nrow(module_df_annotated) > 0) {
       arrange(pvalue, desc(fold_enrichment))
 
     write.csv(das_module_enrichment, step10_integr_table_path("15_24_DAS_module_enrichment.csv"), row.names = FALSE)
-    das_module_plot <- ggplot(das_module_enrichment, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = das_gene_count, color = -log10(pvalue + 1e-300))) +
+    das_module_plot_tbl <- das_module_enrichment
+    das_module_plot_tbl$figure_significance <- figure_significance_values(das_module_plot_tbl)
+    das_module_plot <- ggplot(das_module_plot_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = das_gene_count, color = -log10(figure_significance + 1e-300))) +
       geom_point(alpha = 0.9) +
       scale_color_heatmap_sequential() +
-      labs(title = "DAS 与共表达模块整合", x = "Module-trait correlation", y = NULL, size = "DAS genes", color = "-log10(pvalue)") +
-      theme_rnaseq_bw()
+      labs(title = "DAS integration with co-expression modules", x = "Module-trait correlation", y = NULL, size = "DAS genes", color = figure_significance_axis_label()) +
+      theme_rnaseq_publication()
     save_plot_versions(
       das_module_plot,
       primary = step10_integr_plot_path("15_25_DAS_module_enrichment_bubble.pdf"),
@@ -2068,11 +2116,13 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0 && nrow(as_gene_
 
     write.csv(module_deu_enrichment, step10_integr_table_path("15_50_Module_DEU_Enrichment.csv"), row.names = FALSE)
 
-    module_deu_plot <- ggplot(module_deu_enrichment, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = deu_gene_count, color = -log10(pvalue + 1e-300))) +
+    module_deu_plot_tbl <- module_deu_enrichment
+    module_deu_plot_tbl$figure_significance <- figure_significance_values(module_deu_plot_tbl)
+    module_deu_plot <- ggplot(module_deu_plot_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = deu_gene_count, color = -log10(figure_significance + 1e-300))) +
       geom_point(alpha = 0.85) +
       scale_color_heatmap_sequential() +
-      labs(title = "模块-分组相关性与 DEU 富集整合", x = "Module-trait correlation", y = NULL, size = "DEU genes", color = "-log10(pvalue)") +
-      theme_rnaseq_bw()
+      labs(title = "Module-trait correlation and DEU enrichment", x = "Module-trait correlation", y = NULL, size = "DEU genes", color = figure_significance_axis_label()) +
+      theme_rnaseq_publication()
     save_plot_versions(
       module_deu_plot,
       primary = step10_integr_plot_path("15_51_Module_DEU_Enrichment_Bubble.pdf"),
@@ -2111,11 +2161,13 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0 && nrow(as_gene_
 
     write.csv(module_is_enrichment, step10_integr_table_path("15_52_Module_IS_Enrichment.csv"), row.names = FALSE)
 
-    module_is_plot <- ggplot(module_is_enrichment, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = is_gene_count, color = -log10(pvalue + 1e-300))) +
+    module_is_plot_tbl <- module_is_enrichment
+    module_is_plot_tbl$figure_significance <- figure_significance_values(module_is_plot_tbl)
+    module_is_plot <- ggplot(module_is_plot_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = is_gene_count, color = -log10(figure_significance + 1e-300))) +
       geom_point(alpha = 0.85) +
       scale_color_heatmap_sequential() +
-      labs(title = "模块-分组相关性与 Isoform Switch 富集整合", x = "Module-trait correlation", y = NULL, size = "IS genes", color = "-log10(pvalue)") +
-      theme_rnaseq_bw()
+      labs(title = "Module-trait correlation and isoform-switch enrichment", x = "Module-trait correlation", y = NULL, size = "IS genes", color = figure_significance_axis_label()) +
+      theme_rnaseq_publication()
     save_plot_versions(
       module_is_plot,
       primary = step10_integr_plot_path("15_53_Module_IS_Enrichment_Bubble.pdf"),
@@ -2155,8 +2207,9 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0 && nrow(as_gene_
 
   module_evidence_plot <- ggplot(module_evidence_long, aes(x = module_trait_correlation, y = reorder(module_label, module_trait_correlation), size = gene_count, color = evidence_type)) +
     geom_point(alpha = 0.85) +
-    labs(title = "模块层面的 DE/DAS/DEU/IS 证据总览", x = "Module-trait correlation", y = NULL, size = "Gene count", color = "Evidence") +
-    theme_rnaseq_bw()
+    scale_color_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), module_evidence_long$evidence_type)) +
+    labs(title = "Module-level DE, DAS, DEU, and isoform-switch evidence", x = "Module-trait correlation", y = NULL, size = "Gene count", color = "Evidence") +
+    theme_rnaseq_publication()
   save_plot_versions(
     module_evidence_plot,
     primary = step10_integr_plot_path("15_55_Module_MultiEvidence_Bubble.pdf"),
@@ -2193,6 +2246,7 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0 && nrow(as_gene_
 
 ```{r}
 splicing_state <- list(
+  rmats_direction = rmats_direction,
   as_gene_priority = as_gene_priority,
   as_gene_membership = as_gene_membership,
   dsfa_sig_ids = unique(stats::na.omit(dsfa_sig_ids)),
@@ -2210,6 +2264,9 @@ saveRDS(splicing_state, cache_15_splicing_state_path)
 
 splicing_manifest <- data.frame(
   key = c(
+    "delta_psi_contrast",
+    "rmats_b1_group",
+    "rmats_b2_group",
     "cache_path",
     "as_gene_priority_rows",
     "as_gene_membership_rows",
@@ -2221,6 +2278,9 @@ splicing_manifest <- data.frame(
     "der_sig_ids_n"
   ),
   value = c(
+    rmats_direction$contrast,
+    rmats_direction$b1_group,
+    rmats_direction$b2_group,
     cache_15_splicing_state_path,
     nrow(as_gene_priority),
     nrow(as_gene_membership),

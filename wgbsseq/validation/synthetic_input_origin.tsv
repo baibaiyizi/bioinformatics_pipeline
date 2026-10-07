@@ -1,0 +1,3 @@
+input_layer	origin	execution
+CpG_methylKit	synthetic_300_loci_4_samples	fixture_loaded
+FASTQ_alignment_extraction	none	not_run

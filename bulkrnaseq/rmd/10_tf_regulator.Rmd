@@ -37,7 +37,7 @@ load_dorothea_regulon <- function() {
     filter(!is.na(tf), tf != "", !is.na(target), target != "", is.finite(mor))
 }
 
-pkg_state <- try_install_and_load(c("decoupleR", "dorothea"), bioc = TRUE)
+pkg_state <- try_require_and_load(c("decoupleR", "dorothea"), bioc = TRUE)
 if (!isTRUE(pkg_state$ok)) {
   tf_status <- data.frame(step = "dependency", status = "skipped", detail = paste(pkg_state$messages, collapse = " | "), stringsAsFactors = FALSE)
 } else if (nrow(tf_expr_mat) < 100 || ncol(tf_expr_mat) < 4) {
@@ -59,20 +59,7 @@ if (!isTRUE(pkg_state$ok)) {
         minsize = 5
       )
     }, error = function(e) {
-      message("VIPER failed, fallback to ULM: ", conditionMessage(e))
-      tryCatch({
-        decoupleR::run_ulm(
-          mat = tf_expr_mat,
-          network = tf_regulon,
-          .source = "tf",
-          .target = "target",
-          .mor = "mor",
-          minsize = 5
-        )
-      }, error = function(e2) {
-        message("ULM fallback failed: ", conditionMessage(e2))
-        data.frame()
-      })
+      stop("VIPER 执行失败: ", conditionMessage(e))
     })
 
     if (nrow(tf_activity_long) > 0) {
@@ -128,26 +115,49 @@ if (nrow(tf_activity_diff) > 0) {
     setNames(group2_color, paste0("higher_in_", group2_label)),
     ns = unname(viz_pal$neutral["mid"])
   )
-  tf_volcano <- tf_activity_diff %>%
-    mutate(neg_log10_p = -log10(dplyr::coalesce(P.Value, 1) + 1e-300)) %>%
-    ggplot(aes(x = logFC, y = neg_log10_p, color = direction)) +
+  tf_plot_tbl <- tf_activity_diff
+  tf_plot_tbl$figure_significance <- figure_significance_values(
+    tf_plot_tbl,
+    pvalue_candidates = "P.Value",
+    fdr_candidates = "adj.P.Val"
+  )
+  tf_plot_tbl <- tf_plot_tbl %>%
+    mutate(
+      neg_log10_p = -log10(dplyr::coalesce(figure_significance, 1) + 1e-300),
+      figure_direction = case_when(
+        !is.finite(figure_significance) | figure_significance >= 0.05 ~ "ns",
+        logFC > 0 ~ paste0("higher_in_", group2_label),
+        logFC < 0 ~ paste0("higher_in_", group1_label),
+        TRUE ~ "ns"
+      )
+    )
+  tf_volcano <- tf_plot_tbl %>%
+    ggplot(aes(x = logFC, y = neg_log10_p, color = figure_direction)) +
     geom_point(alpha = 0.75, size = 2) +
     geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = viz_pal$neutral["dark"]) +
-    scale_color_manual(values = resolve_named_colors(tf_direction_colors, unique(tf_activity_diff$direction))) +
-    labs(title = "TF activity differential analysis", x = paste0(group2_label, " - ", group1_label, " activity logFC"), y = "-log10(pvalue)") +
-    theme_rnaseq_bw()
+    scale_color_manual(
+      values = resolve_named_colors(tf_direction_colors, unique(tf_plot_tbl$figure_direction)),
+      labels = function(x) sub("^higher_in_", "Higher in ", x),
+      name = "Direction"
+    ) +
+    labs(title = "TF activity differential analysis", x = paste0(group2_label, " - ", group1_label, " activity logFC"), y = figure_significance_axis_label()) +
+    theme_rnaseq_publication()
   save_plot_versions(tf_volcano, "result/10_tf_regulator/10_3_TF_activity_volcano.pdf", width = 8.5, height = 6)
 
-  top_tf <- tf_activity_diff %>%
-    arrange(P.Value, desc(abs(logFC))) %>%
+  top_tf <- tf_plot_tbl %>%
+    arrange(figure_significance, desc(abs(logFC))) %>%
     slice_head(n = 30) %>%
     mutate(tf = factor(tf, levels = rev(tf)))
-  tf_bar <- ggplot(top_tf, aes(x = tf, y = logFC, fill = direction)) +
+  tf_bar <- ggplot(top_tf, aes(x = tf, y = logFC, fill = figure_direction)) +
     geom_col(width = 0.75) +
     coord_flip() +
-    scale_fill_manual(values = resolve_named_colors(tf_direction_colors, unique(top_tf$direction))) +
+    scale_fill_manual(
+      values = resolve_named_colors(tf_direction_colors, unique(top_tf$figure_direction)),
+      labels = function(x) sub("^higher_in_", "Higher in ", x),
+      name = "Direction"
+    ) +
     labs(title = "Top TF activity changes", x = NULL, y = paste0(group2_label, " - ", group1_label, " activity logFC")) +
-    theme_rnaseq_minimal()
+    theme_rnaseq_publication()
   save_plot_versions(tf_bar, "result/10_tf_regulator/10_4_Top_TF_activity_barplot.pdf", width = 8.5, height = 7)
 }
 
@@ -172,10 +182,10 @@ if (nrow(tf_activity_diff) > 0 && nrow(tf_regulon) > 0) {
 write.csv(tf_target_edges, "result/10_tf_regulator/10_5_Top_TF_target_edges.csv", row.names = FALSE)
 
 if (nrow(tf_target_edges) > 0) {
-  ig_state <- try_install_and_load("igraph", bioc = FALSE)
+  ig_state <- try_require_and_load("igraph", bioc = FALSE)
   if (isTRUE(ig_state$ok)) {
     g <- igraph::graph_from_data_frame(tf_target_edges %>% transmute(from = tf, to = target, mor = mor), directed = TRUE)
-    set.seed(1)
+    set.seed(rnaseq_random_seed)
     coords <- as.data.frame(igraph::layout_with_fr(g))
     colnames(coords) <- c("x", "y")
     node_tbl <- data.frame(name = igraph::V(g)$name, coords, stringsAsFactors = FALSE) %>%
@@ -186,13 +196,19 @@ if (nrow(tf_target_edges) > 0) {
     network_plot <- ggplot() +
       geom_segment(data = edge_tbl, aes(x = x_from, y = y_from, xend = x_to, yend = y_to, color = mor > 0), alpha = 0.35) +
       geom_point(data = node_tbl, aes(x = x, y = y, fill = node_type), shape = 21, size = 3.2, color = viz_pal$neutral["dark"]) +
-      ggrepel::geom_text_repel(data = node_tbl, aes(x = x, y = y, label = name), size = 3, max.overlaps = 80) +
+      ggrepel::geom_text_repel(data = node_tbl, aes(x = x, y = y, label = name), size = rnaseq_figure_text_size, max.overlaps = 80) +
       scale_color_manual(values = c(`TRUE` = viz_pal$accent["green"], `FALSE` = viz_pal$accent["warm"]), labels = c(`TRUE` = "activation", `FALSE` = "repression")) +
       scale_fill_manual(values = c(TF = viz_pal$accent["purple"], Target = viz_pal$neutral["light"])) +
       labs(title = "Top TF-target network", x = NULL, y = NULL, color = "MoR", fill = NULL) +
-      theme_void() +
+      theme_rnaseq_void() +
       theme(legend.position = "right")
-    save_plot_versions(network_plot, "result/10_tf_regulator/10_6_Top_TF_target_network.pdf", width = 10, height = 8)
+    save_plot_versions(
+      network_plot,
+      "result/10_tf_regulator/10_6_Top_TF_target_network.pdf",
+      width = 10,
+      height = 8,
+      coordinate_system = "none"
+    )
   }
 }
 ```
@@ -209,37 +225,12 @@ read_activity_matrix_file <- function(path) {
   as.matrix(mat)
 }
 
-first_existing_activity_path <- function(paths) {
-  resolved_paths <- vapply(paths, resolve_existing_path, character(1), preferred = "table")
-  hits <- resolved_paths[file.exists(resolved_paths)]
-  if (length(hits) > 0) {
-    return(hits[[1]])
-  }
-  paths[[1]]
-}
-
-activity_candidates <- vapply(
-  list(
-    hallmark_gsva = c(
-      file.path(result_09_dir, "09_1_Hallmark_GSVA_matrix.tsv"),
-      file.path(result_09_dir, "17_1_Hallmark_GSVA_matrix.tsv")
-    ),
-    kegg_gsva = c(
-      file.path(result_09_dir, "09_2_KEGG_GSVA_matrix.tsv"),
-      file.path(result_09_dir, "17_2_KEGG_GSVA_matrix.tsv")
-    ),
-    reactome_gsva = c(
-      file.path(result_09_dir, "09_3_Reactome_GSVA_matrix.tsv"),
-      file.path(result_09_dir, "17_3_Reactome_GSVA_matrix.tsv")
-    ),
-    hallmark_activity = file.path(result_17_dir, "17_1_Hallmark_activity_matrix.tsv"),
-    kegg_activity = file.path(result_17_dir, "17_2_KEGG_activity_matrix.tsv"),
-    reactome_activity = file.path(result_17_dir, "17_3_Reactome_activity_matrix.tsv")
-  ),
-  first_existing_activity_path,
-  character(1)
+activity_paths <- c(
+  mouse_mh_gsva = file.path(result_09_dir, "09_1_Mouse_MH_GSVA_matrix.tsv"),
+  mouse_kegg_gsva = file.path(result_09_dir, "09_2_Mouse_KEGG_GSVA_matrix.tsv"),
+  mouse_reactome_gsva = file.path(result_09_dir, "09_3_Mouse_Reactome_GSVA_matrix.tsv")
 )
-pathway_activity_list <- lapply(activity_candidates, read_activity_matrix_file)
+pathway_activity_list <- lapply(activity_paths, read_activity_matrix_file)
 pathway_activity_list <- pathway_activity_list[vapply(pathway_activity_list, nrow, integer(1)) > 0]
 tf_pathway_cor_long <- data.frame()
 

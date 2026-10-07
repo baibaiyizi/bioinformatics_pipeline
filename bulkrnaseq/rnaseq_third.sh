@@ -14,9 +14,10 @@ set -euo pipefail
 
 # ---------- A. 项目目录、输入与输出 ----------
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${ROOT_DIR}/scripts/config.sh"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 FIRST_SCRIPT="${ROOT_DIR}/rnaseq_first.sh"
-READS_INFO="${ROOT_DIR}/rawdata/reads_info.txt"
+READS_INFO="${RNASEQ_SAMPLES_TSV}"
 FASTQC_DIR="${ROOT_DIR}/fastqc"
 MERGE_DIR="${ROOT_DIR}/3.Merge_result"
 DE_DIR="${ROOT_DIR}/4.DE_analysis"
@@ -35,19 +36,15 @@ ISOFORM_RESULTS_DIR="${ISOFORM_RESULTS_DIR:-${ISOFORM_SWITCH_DIR}/results}"
 AS_INTEGRATED_DIR="${AS_INTEGRATED_DIR:-${POST_TX_DIR}/integrated}"
 
 # ---------- B. 参考文件、工具与矩阵输入 ----------
-REFERENCE_DIR="${REFERENCE_DIR:-/home/h1028/workspace/reference/GRCm39}"
+REFERENCE_DIR="${REFERENCE_DIR:-${REFERENCE_DIR}}"
 GTF_FILE="${GTF_FILE:-}"
 GENOME_FASTA="${GENOME_FASTA:-}"
-SALMON_BIN="${SALMON_BIN:-/home/h1028/miniconda3/bin/salmon}"
+SALMON_BIN="${SALMON_BIN:-salmon}"
 
 # 未显式指定时，使用 base 环境中的 R 4.5.1。
 resolve_rscript_bin() {
     if [[ -n "${RSCRIPT_BIN:-}" ]]; then
         printf '%s' "${RSCRIPT_BIN}"
-        return 0
-    fi
-    if [[ -x "/home/h1028/miniconda3/bin/Rscript" ]]; then
-        printf '%s' "/home/h1028/miniconda3/bin/Rscript"
         return 0
     fi
     command -v Rscript 2>/dev/null || printf '%s' Rscript
@@ -61,7 +58,7 @@ MATRIX_FILE="${MERGE_DIR}/genes.counts.matrix"
 DE_RESULTS_FILE="${DE_DIR}/DE_results"
 
 # ---------- C. 文库方向开关（与 rnaseq_first.sh 共用） ----------
-# liver 默认是链非特异性；该开关会统一派生 rMATS、exon-usage 和 APA 参数。
+# 建库方向由配置声明；该开关会统一派生 rMATS、exon-usage 和 APA 参数。
 RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS:-unstranded}"
 
 # ---------- D. 运行、资源与模块开关 ----------
@@ -69,10 +66,10 @@ RNASEQ_LIBRARY_STRANDEDNESS="${RNASEQ_LIBRARY_STRANDEDNESS:-unstranded}"
 THREADS="${THREADS:-8}"                    # 并行线程数。
 FORCE="${FORCE:-0}"                        # 1：忽略已有输出并重跑；链设定修正后重跑必须设为 1。
 DRY_RUN="${DRY_RUN:-0}"                    # 1：仅打印计划命令，不执行任何分析。
-RNASEQ_THIRD_SKIP_DE="${RNASEQ_THIRD_SKIP_DE:-${RNASEQ_SECOND_SKIP_DE:-true}}"  # true：跳过 DE，复用已有 DE_results。
-RNASEQ_THIRD_SKIP_POST="${RNASEQ_THIRD_SKIP_POST:-${RNASEQ_SECOND_SKIP_AS:-false}}"  # true：跳过全部转录后调控模块。
-RNASEQ_THIRD_METHODS="${RNASEQ_THIRD_METHODS:-${RNASEQ_SECOND_AS_METHODS:-rmats,exon_usage,isoform_switch}}"  # 常规模块，逗号分隔。
-RNASEQ_THIRD_EXTRA_METHODS="${RNASEQ_THIRD_EXTRA_METHODS:-${RNASEQ_SECOND_EXTRA_METHODS:-apa,der}}"  # 可选扩展模块，逗号分隔。
+RNASEQ_THIRD_SKIP_DE="${RNASEQ_THIRD_SKIP_DE:-true}"  # true：跳过 DE，复用已有 DE_results。
+RNASEQ_THIRD_SKIP_POST="${RNASEQ_THIRD_SKIP_POST:-false}"  # true：跳过全部转录后调控模块。
+RNASEQ_THIRD_METHODS="${RNASEQ_THIRD_METHODS-rmats}"  # 常规模块，逗号分隔。
+RNASEQ_THIRD_EXTRA_METHODS="${RNASEQ_THIRD_EXTRA_METHODS-}"  # 可选扩展模块，逗号分隔。
 FIG_PNG_DPI="${FIG_PNG_DPI:-300}"          # 输出 PNG 分辨率。
 THIRD_HEARTBEAT_INTERVAL="${THIRD_HEARTBEAT_INTERVAL:-120}"  # 长任务日志心跳间隔（秒）。
 
@@ -89,7 +86,7 @@ RMATS_NOVELSS="${RMATS_NOVELSS:-false}"     # true：纳入新剪接位点。
 RMATS_INDIVIDUAL_COUNTS="${RMATS_INDIVIDUAL_COUNTS:-true}"  # true：输出每个重复的计数。
 RMATS_EXECUTOR="${RMATS_EXECUTOR:-auto}"    # auto：自动选择本地或容器执行方式。
 RMATS_IMAGE="${RMATS_IMAGE:-quay.io/biocontainers/rmats:4.3.0--py310ha9d9618_5}"  # 容器执行时使用的镜像。
-RMATS_BIND_ROOT="${RMATS_BIND_ROOT:-/home/h1028/workspace}"  # 容器运行时挂载的工作区根目录。
+RMATS_BIND_ROOT="${RMATS_BIND_ROOT:-${ROOT_DIR}}"  # 容器运行时挂载的工作区根目录。
 
 # ---------- F. 转录本、APA 与 DER 参数开关 ----------
 TRANSCRIPT_FASTA="${TRANSCRIPT_FASTA:-${ISOFORM_REF_DIR}/transcripts.fa}"
@@ -110,8 +107,8 @@ DER_CUTOFF="${DER_CUTOFF:-5}"
 DER_GENOME_STYLE="${DER_GENOME_STYLE:-auto}"
 
 # ---------- G. 图形颜色开关 ----------
-COLOR_WT="${COLOR_WT:-#A1C9F4}"
-COLOR_PFOS="${COLOR_PFOS:-#FF9F9B}"
+COLOR_GROUP1="${COLOR_GROUP1:-#A1C9F4}"
+COLOR_GROUP2="${COLOR_GROUP2:-#FF9F9B}"
 COLOR_UP="${COLOR_UP:-#FF9F9B}"
 COLOR_DOWN="${COLOR_DOWN:-#A1C9F4}"
 COLOR_SIG="${COLOR_SIG:-#FF9F9B}"
@@ -281,6 +278,7 @@ Options:
   --steps LIST       Run selected steps. LIST can be comma- or space-separated.
   --list             Show available steps.
   --dry-run          Print planned commands without running heavy tools.
+  --preflight        只读检查配置、样本表与必要输入。
   --force            Re-run completed outputs.
   --threads N        Override THREADS/RMATS_THREADS for this run.
   --skip-de          Reuse existing ${DE_RESULTS_FILE}.
@@ -482,18 +480,6 @@ resolve_bin() {
         command -v "${cmd_name}"
         return 0
     fi
-    local candidate
-    for candidate in \
-        "/home/h1028/miniconda3/bin/${cmd_name}" \
-        /home/h1028/miniconda3/envs/*/bin/"${cmd_name}" \
-        /home/h1028/.conda/envs/*/bin/"${cmd_name}" \
-        "/usr/local/bin/${cmd_name}" \
-        "/usr/bin/${cmd_name}"
-    do
-        [[ -x "${candidate}" ]] || continue
-        printf '%s' "${candidate}"
-        return 0
-    done
     return 1
 }
 
@@ -508,25 +494,10 @@ is_true() {
     esac
 }
 
-normalize_group() {
-    printf '%s' "$1" | sed -E 's/([._-]?[Ll]iver)$//'
-}
+normalize_group() { printf '%s' "$1"; }
 
-discover_gtf() {
-    [[ -d "${REFERENCE_DIR}" ]] || die "未找到参考目录: ${REFERENCE_DIR}"
-    if [[ -z "${GTF_FILE}" ]]; then
-        GTF_FILE="$(find "${REFERENCE_DIR}" -maxdepth 1 -type f -name 'Mus_musculus.GRCm39*.gtf' | sort | head -1)"
-    fi
-    [[ -n "${GTF_FILE}" && -f "${GTF_FILE}" ]] || die "未找到 GTF 注释文件，请设置 GTF_FILE 或检查 ${REFERENCE_DIR}"
-}
-
-discover_genome_fasta() {
-    [[ -d "${REFERENCE_DIR}" ]] || die "未找到参考目录: ${REFERENCE_DIR}"
-    if [[ -z "${GENOME_FASTA}" ]]; then
-        GENOME_FASTA="$(find "${REFERENCE_DIR}" -maxdepth 1 -type f \( -name 'Mus_musculus.GRCm39*.dna*.fa' -o -name '*.fa' -o -name '*.fasta' \) | sort | head -1)"
-    fi
-    [[ -n "${GENOME_FASTA}" && -f "${GENOME_FASTA}" ]] || die "未找到 genome FASTA，请设置 GENOME_FASTA 或检查 ${REFERENCE_DIR}"
-}
+discover_gtf() { [[ -s "${GTF_FILE}" ]] || die "MISSING GTF_FILE: ${GTF_FILE}"; }
+discover_genome_fasta() { [[ -s "${GENOME_FASTA}" ]] || die "MISSING GENOME_FASTA: ${GENOME_FASTA}"; }
 
 require_r_packages() {
     local label="$1"
@@ -548,36 +519,7 @@ EOF
 }
 
 resolve_clean_fastq() {
-    local sample="$1"
-    local mate="$2"
-    local raw_path=""
-    local fallback="${FASTQC_DIR}/${sample}_${mate}.fastq.gz"
-
-    if [[ -f "${READS_INFO}" ]]; then
-        raw_path="$(
-            awk -F'\t' -v sample="${sample}" -v mate="${mate}" '
-                NR == 1 {
-                    for (i = 1; i <= NF; i++) {
-                        header[$i] = i
-                    }
-                    next
-                }
-                header["sample"] > 0 && $header["sample"] == sample {
-                    idx = (mate == "1" ? header["raw_fq1"] : header["raw_fq2"])
-                    if (idx > 0) {
-                        print $idx
-                    }
-                    exit
-                }
-            ' "${READS_INFO}"
-        )"
-    fi
-
-    if [[ -n "${raw_path}" ]]; then
-        printf '%s\n' "${FASTQC_DIR}/$(basename "${raw_path}")"
-    else
-        printf '%s\n' "${fallback}"
-    fi
+    printf '%s/%s_%s.fastq.gz\n' "${FASTQC_DIR}" "$1" "$2"
 }
 
 show_selected_samples() {
@@ -585,7 +527,7 @@ show_selected_samples() {
 }
 
 get_group_order() {
-    awk 'NF >= 2 && $1 !~ /^#/ {if (!seen[$1]++) print $1}' "${SAMPLES_FILE}"
+    printf '%s\n' "${RNASEQ_GROUP1}" "${RNASEQ_GROUP2}"
 }
 
 read_selected_sample_names() {
@@ -981,12 +923,13 @@ dev.off()
 
 summary_path <- file.path(out_dir, paste0(prefix, ".summary.txt"))
 summary_lines <- c(
+  "screening_interpretation\texploratory_nominal_p",
   sprintf("contrast\t%s_vs_%s", group2, group1),
   sprintf("sampleA\t%s", group2),
   sprintf("sampleB\t%s", group1),
   sprintf("n_genes\t%s", nrow(result_df)),
   sprintf("pvalue_lt_0.05\t%s", sum(!is.na(result_df$pvalue) & result_df$pvalue < 0.05)),
-  sprintf("pvalue_lt_0.05_and_abs_log2fc_ge_0.58\t%s", sum(!is.na(result_df$pvalue) & result_df$pvalue < 0.05 & !is.na(result_df$log2FoldChange) & abs(result_df$log2FoldChange) >= 0.58))
+  sprintf("pvalue_lt_0.05_and_abs_log2fc_ge_configured\t%s", sum(!is.na(result_df$pvalue) & result_df$pvalue < 0.05 & !is.na(result_df$log2FoldChange) & abs(result_df$log2FoldChange) >= as.numeric(Sys.getenv("RNASEQ_DE_LOG2FC_CUTOFF", "1"))))
 )
 writeLines(summary_lines, summary_path)
 
@@ -997,7 +940,7 @@ summary_if_lines <- c(
   sprintf("n_genes\t%s", nrow(result_if_df)),
   sprintf("pvalue_lt_0.05\t%s", sum(!is.na(result_if_df$pvalue) & result_if_df$pvalue < 0.05)),
   sprintf("padj_lt_0.05\t%s", sum(!is.na(result_if_df$padj) & result_if_df$padj < 0.05)),
-  sprintf("padj_lt_0.05_and_abs_log2fc_ge_0.58\t%s", sum(!is.na(result_if_df$padj) & result_if_df$padj < 0.05 & !is.na(result_if_df$log2FoldChange) & abs(result_if_df$log2FoldChange) >= 0.58))
+  sprintf("padj_lt_0.05_and_abs_log2fc_ge_configured\t%s", sum(!is.na(result_if_df$padj) & result_if_df$padj < 0.05 & !is.na(result_if_df$log2FoldChange) & abs(result_if_df$log2FoldChange) >= as.numeric(Sys.getenv("RNASEQ_DE_LOG2FC_CUTOFF", "1"))))
 )
 writeLines(summary_if_lines, summary_if_path)
 EOF
@@ -1477,7 +1420,8 @@ run_rmats() {
         return
     fi
     if ! method_enabled "rmats"; then
-        die "当前第三阶段要求完整后转录流程，但 RNASEQ_THIRD_METHODS=${RNASEQ_THIRD_METHODS} 未包含 rmats"
+        log "skipped: rMATS 未启用"
+        return 0
     fi
 
     discover_gtf
@@ -1877,7 +1821,7 @@ run_isoform_switch() {
     log "  fastq dir    : ${FASTQC_DIR}"
     log "  genome fasta : ${GENOME_FASTA}"
     log "  transcript   : ${TRANSCRIPT_FASTA}"
-    SALMON_BIN="$(resolve_bin "${SALMON_BIN}" salmon)" || die "未找到命令: salmon。请设置 SALMON_BIN 或确认 /home/h1028/miniconda3/bin/salmon 可用。"
+    SALMON_BIN="$(resolve_bin "${SALMON_BIN}" salmon)" || die "未找到命令: salmon。请设置 SALMON_BIN 或确认 salmon 可用。"
     log "  salmon bin   : ${SALMON_BIN}"
     log "  salmon index : ${SALMON_INDEX}"
     log "  results dir  : ${ISOFORM_RESULTS_DIR}"
@@ -3136,6 +3080,7 @@ EOF
 }
 
 run_post_tx_summary() {
+    if ! method_enabled rmats; then log "skipped: 联合剪接汇总需要已启用 rMATS"; return 0; fi
     if is_true "${RNASEQ_THIRD_SKIP_POST}"; then
         return
     fi
@@ -3174,6 +3119,8 @@ integrated_dir <- args[[6]]
 de_file <- args[[7]]
 group1 <- args[[8]]
 group2 <- args[[9]]
+source(file.path(Sys.getenv("RNASEQ_ROOT_DIR"), "rmd/rmats_direction.R"))
+rmats_direction <- read_rmats_direction(rmats_dir, file.path(Sys.getenv("RNASEQ_ROOT_DIR"), "4.DE_analysis/samples.txt"), group1, group2)
 
 options(scipen = 999)
 suppressPackageStartupMessages({
@@ -3259,6 +3206,7 @@ find_rmats_file <- function(base_dir, event_type, count_mode) {
 
 load_rmats_table <- function(target_file, event_type, count_mode) {
   rmats_df <- read.delim(target_file, check.names = FALSE, stringsAsFactors = FALSE)
+  rmats_df <- orient_rmats_table(rmats_df, rmats_direction)
   rmats_df$event_type <- event_type
   rmats_df$count_mode <- count_mode
   rmats_df$source_file <- normalizePath(target_file, mustWork = FALSE)
@@ -3282,15 +3230,14 @@ load_rmats_table <- function(target_file, event_type, count_mode) {
     if ("adj.P.Val" %in% colnames(rmats_df)) suppressWarnings(as.numeric(rmats_df$adj.P.Val)) else NA_real_
   )
   rmats_df$event_pvalue[is.na(rmats_df$event_pvalue)] <- 1
-  rmats_df$IncLevelDifference[is.na(rmats_df$IncLevelDifference)] <- 0
-  rmats_df$psi_group1_mean <- if ("IncLevel1" %in% colnames(rmats_df)) vapply(rmats_df$IncLevel1, mean_numeric_string, numeric(1)) else NA_real_
-  rmats_df$psi_group2_mean <- if ("IncLevel2" %in% colnames(rmats_df)) vapply(rmats_df$IncLevel2, mean_numeric_string, numeric(1)) else NA_real_
-  rmats_df$abs_delta_psi <- abs(rmats_df$IncLevelDifference)
+  rmats_df$psi_group1_mean <- if ("psi_group1_values" %in% colnames(rmats_df)) vapply(rmats_df$psi_group1_values, mean_numeric_string, numeric(1)) else NA_real_
+  rmats_df$psi_group2_mean <- if ("psi_group2_values" %in% colnames(rmats_df)) vapply(rmats_df$psi_group2_values, mean_numeric_string, numeric(1)) else NA_real_
+  rmats_df$abs_delta_psi <- abs(rmats_df$delta_psi)
   # 保留当前项目 rMATS nominal pvalue < 0.05 + |delta PSI| >= 0.1 口径；更严格汇报时建议同时筛选 rMATS FDR < 0.05。
-  rmats_df$significant_as <- rmats_df$event_pvalue < 0.05 & rmats_df$abs_delta_psi >= 0.1
+  rmats_df$significant_as <- is.finite(rmats_df$event_pvalue) & rmats_df$event_pvalue < 0.05 & is.finite(rmats_df$delta_psi) & rmats_df$abs_delta_psi >= 0.1
   rmats_df$splice_direction <- dplyr::case_when(
     !rmats_df$significant_as ~ "ns",
-    rmats_df$IncLevelDifference > 0 ~ paste0("higher_in_", group2),
+    rmats_df$delta_psi > 0 ~ paste0("higher_in_", group2),
     TRUE ~ paste0("higher_in_", group1)
   )
 
@@ -3504,7 +3451,7 @@ direction_summary <- rmats_sig %>%
 write.csv(direction_summary, file.path(integrated_dir, "rmats_direction_summary.csv"), row.names = FALSE)
 
 top_events <- rmats_sig %>%
-  transmute(event_type, count_mode, gene_id_clean, gene_label, event_label, PValue = event_pvalue, FDR = event_fdr, IncLevelDifference, abs_delta_psi, event_priority, splice_direction, de_log2FoldChange, de_pvalue) %>%
+  transmute(event_type, count_mode, gene_id_clean, gene_label, event_label, PValue = event_pvalue, FDR = event_fdr, IncLevelDifference, delta_psi, delta_psi_contrast, abs_delta_psi, event_priority, splice_direction, de_log2FoldChange, de_pvalue) %>%
   head(50)
 write.csv(top_events, file.path(integrated_dir, "top_rmats_events.csv"), row.names = FALSE)
 
@@ -3512,12 +3459,12 @@ high_confidence_events <- rmats_sig %>% filter(count_mode == preferred_count_mod
 if (all(c("JC", "JCEC") %in% unique(rmats_combined$count_mode))) {
   jc_events <- rmats_combined %>%
     filter(count_mode == "JC") %>%
-    transmute(event_key, event_type, gene_id_clean, gene_label, event_label, jc_pvalue = event_pvalue, jc_fdr = event_fdr, jc_delta_psi = IncLevelDifference, jc_sig = significant_as, jc_direction = splice_direction) %>%
+    transmute(event_key, event_type, gene_id_clean, gene_label, event_label, jc_pvalue = event_pvalue, jc_fdr = event_fdr, jc_delta_psi = delta_psi, jc_sig = significant_as, jc_direction = splice_direction) %>%
     arrange(jc_pvalue, desc(abs(jc_delta_psi))) %>%
     distinct(event_key, event_type, gene_id_clean, gene_label, event_label, .keep_all = TRUE)
   jcec_events <- rmats_combined %>%
     filter(count_mode == "JCEC") %>%
-    transmute(event_key, event_type, gene_id_clean, gene_label, event_label, jcec_pvalue = event_pvalue, jcec_fdr = event_fdr, jcec_delta_psi = IncLevelDifference, jcec_sig = significant_as, jcec_direction = splice_direction) %>%
+    transmute(event_key, event_type, gene_id_clean, gene_label, event_label, jcec_pvalue = event_pvalue, jcec_fdr = event_fdr, jcec_delta_psi = delta_psi, jcec_sig = significant_as, jcec_direction = splice_direction) %>%
     arrange(jcec_pvalue, desc(abs(jcec_delta_psi))) %>%
     distinct(event_key, event_type, gene_id_clean, gene_label, event_label, .keep_all = TRUE)
   concordance <- inner_join(jc_events, jcec_events, by = c("event_key", "event_type", "gene_id_clean", "gene_label", "event_label"), relationship = "one-to-one") %>%
@@ -3532,8 +3479,8 @@ if (all(c("JC", "JCEC") %in% unique(rmats_combined$count_mode))) {
     mutate(
       count_mode = "JC_and_JCEC",
       PValue = pmin(jc_pvalue, jcec_pvalue),
-      IncLevelDifference = ifelse(abs(jcec_delta_psi) >= abs(jc_delta_psi), jcec_delta_psi, jc_delta_psi),
-      abs_delta_psi = abs(IncLevelDifference),
+      delta_psi = ifelse(abs(jcec_delta_psi) >= abs(jc_delta_psi), jcec_delta_psi, jc_delta_psi),
+      abs_delta_psi = abs(delta_psi),
       splice_direction = ifelse(abs(jcec_delta_psi) >= abs(jc_delta_psi), jcec_direction, jc_direction)
     ) %>%
     arrange(PValue, desc(abs_delta_psi))
@@ -3830,6 +3777,7 @@ main() {
     fi
 
     configure_library_strandedness
+    "${PYTHON_BIN:-python3}" "${ROOT_DIR}/scripts/input_contract.py" validate
     resolve_run_order "${REQUESTED_STEPS[@]}"
     REQUESTED_STEPS_LABEL="$(format_steps "${REQUESTED_STEPS[@]}")"
     RUN_ORDER_LABEL="$(format_steps "${RUN_ORDER[@]}")"

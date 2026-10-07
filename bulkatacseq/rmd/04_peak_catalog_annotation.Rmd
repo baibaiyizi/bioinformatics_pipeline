@@ -1,0 +1,606 @@
+# Module 04. Peak catalog 与注释
+
+## Peak 注释概览
+
+对每个样本的 Peak 进行基因组注释（Promoter, Exon, Intron, Intergenic 等）。
+
+```{r peak_context_cache_gate, include=FALSE}
+if(isTRUE(reuse_step_tables) && file.exists(cache_04_peak_context_path)) {
+  load_state("04_peak_context.rds", env = globalenv(), required = TRUE)
+  cache_has_project_peak_schema <- exists("sample_peak_feature_summary") &&
+    exists("macs2_peak_signal_df") &&
+    exists("deeptools_profile_summary")
+  if(isTRUE(cache_has_project_peak_schema)) {
+    report_status(
+      "INFO",
+      paste(
+        "Reusing cached peak context for module 4:",
+        cache_04_peak_context_path,
+        "(set ATAC_REUSE_STEP_TABLES=false to recompute)"
+      )
+    )
+    knitr::knit_exit()
+  }
+  report_status("WARN", "Existing peak context cache lacks the current sample-level peak schema; recomputing module 4.")
+}
+```
+
+```{r annotation_plot, fig.width=10, fig.height=6}
+# 读取 Peak 并注释
+# 由于参考基因组可能使用 Ensembl 格式 (1, 2...) 而 TxDb 使用 UCSC 格式 (chr1, chr2...)，需要转换
+read_and_fix_peak <- function(file) {
+  peak <- readPeakFile(file)
+  # 如果染色体名不以 chr 开头，则添加 chr 前缀
+  if(!any(grepl("^chr", seqlevels(peak)))) {
+    new_seqlevels <- paste0("chr", seqlevels(peak))
+    # 修正线粒体: chrMT -> chrM
+    new_seqlevels <- sub("chrMT", "chrM", new_seqlevels)
+    seqlevels(peak) <- new_seqlevels
+  }
+  
+  # 仅保留标准染色体 (chr1-19, chrX, chrY)
+  standard_chr <- paste0("chr", c(1:19, "X", "Y"))
+  peak <- peak[seqnames(peak) %in% standard_chr]
+  seqlevels(peak) <- seqlevelsInUse(peak)
+  
+  return(peak)
+}
+
+peaks_list <- lapply(peak_files, read_and_fix_peak)
+
+# --- 按 reads_info 定义的组别合并 Peak ---
+peaks_by_group <- stats::setNames(lapply(group_levels, function(group_name) {
+  group_samples <- sample_manifest$sample[sample_manifest$group == group_name]
+  group_peak_list <- peaks_list[group_samples]
+  if(length(group_peak_list) == 0) return(GenomicRanges::GRanges())
+  reduce(do.call(c, unname(group_peak_list)))
+}), group_levels)
+
+# 按组别注释
+peakAnnoList <- lapply(peaks_list, annotatePeak, TxDb=txdb, 
+                       tssRegion=c(-2000, 2000), verbose=FALSE, 
+                       annoDb="org.Mm.eg.db")
+
+peakAnnoByGroup <- lapply(peaks_by_group, annotatePeak, TxDb=txdb, 
+                          tssRegion=c(-2000, 2000), verbose=FALSE, 
+                          annoDb="org.Mm.eg.db")
+
+# 按组别汇总 feature 注释，并沿用 WGBS 报告的 feature 配色
+annotation_by_group_df <- bind_rows(lapply(names(peakAnnoByGroup), function(group_name) {
+  as.data.frame(peakAnnoByGroup[[group_name]]) %>%
+    transmute(
+      Group = group_name,
+      annotation,
+      annotation_simple = normalize_feature_label(annotation)
+    )
+}))
+write.csv(annotation_by_group_df, step_table_file("Step4", "Peak_Annotation_Detail_By_Group.csv"), row.names = FALSE)
+
+annotation_summary <- annotation_by_group_df %>%
+  dplyr::count(Group, annotation_simple, name = "PeakCount") %>%
+  mutate(
+    Group = factor(Group, levels = group_levels),
+    annotation_simple = factor(annotation_simple, levels = feature_levels_main)
+  ) %>%
+  group_by(Group) %>%
+  mutate(Fraction = PeakCount / sum(PeakCount)) %>%
+  ungroup() %>%
+  arrange(Group, annotation_simple)
+
+write.csv(annotation_summary, step_table_file("Step4", "Peak_Annotation_Summary.csv"), row.names = FALSE)
+
+feature_cols <- resolve_named_colors(
+  feature_levels_main,
+  viz_pal$feature,
+  fallback_colors = viz_pal$feature_accent,
+  default_color = viz_pal$neutral_mid
+)
+
+p_anno <- ggplot(annotation_summary, aes(x = Group, y = Fraction, fill = annotation_simple)) +
+  geom_col(width = 0.62, color = scales::alpha(viz_pal$neutral_dark, 0.2)) +
+  scale_fill_manual(values = feature_cols, drop = FALSE, name = "Feature") +
+  scale_y_continuous(labels = scales::label_percent(accuracy = 1), expand = expansion(mult = c(0, 0.02))) +
+  theme_atac_classic(base_size = 13) +
+  labs(
+    title = "Peak Annotation Composition by Group",
+    subtitle = "Feature colors follow the template palette",
+    x = NULL,
+    y = "Peak fraction"
+  )
+
+if(emit_light_plots) {
+  save_gg_dual(step_plot_file("Step4", "Peak_Annotation_Barplot.pdf"), p_anno, width = 10, height = 6)
+  print(p_anno)
+}
+
+# --- 新增: Peak 宽度分布分析 (ATAC 特异性 QC) ---
+# ATAC peaks 通常 < 500bp，呈现核小体缺失特征
+# 按组别统计 Peak 宽度
+peak_widths_df <- data.frame(
+  Sample = rep(samples, sapply(peaks_list, length)),
+  Width = unlist(lapply(peaks_list, width))
+)
+# 添加组别信息
+peak_widths_df$Group <- sample_group(peak_widths_df$Sample)
+write.csv(peak_widths_df, step_table_file("Step4", "Peak_Length_By_Sample.csv"), row.names = FALSE)
+
+sample_peak_length_summary <- peak_widths_df %>%
+  group_by(Sample, Group) %>%
+  summarise(
+    PeakCount = n(),
+    MedianLength = median(Width, na.rm = TRUE),
+    MeanLength = mean(Width, na.rm = TRUE),
+    PctLengthLE500 = mean(Width <= 500, na.rm = TRUE) * 100,
+    .groups = "drop"
+  ) %>%
+  arrange(match(Sample, samples))
+write.csv(sample_peak_length_summary, step_table_file("Step4", "Peak_Length_Summary_By_Sample.csv"), row.names = FALSE)
+
+# 按组别合并绘制
+peak_widths_by_group <- data.frame(
+  Group = rep(names(peaks_by_group), lengths(peaks_by_group)),
+  Width = unlist(lapply(peaks_by_group, width))
+) %>%
+  mutate(Group = factor(Group, levels = group_levels))
+write.csv(peak_widths_by_group, step_table_file("Step4", "Peak_Width_By_Group.csv"), row.names = FALSE)
+
+p_width <- ggplot(peak_widths_by_group, aes(x=Width, fill=Group)) +
+  geom_histogram(bins=50, alpha=0.7, position="identity") +
+  geom_vline(xintercept=500, linetype="dashed", color=viz_pal$neutral_dark) +
+  annotate("text", x=550, y=Inf, label="Typical ATAC peak\n<500bp", 
+           vjust=2, hjust=0, color=viz_pal$neutral_dark) +
+  facet_wrap(~Group, ncol=2) +
+  xlim(0, 1500) +
+  scale_fill_manual(values = viz_pal$group) +
+  theme_atac_classic(base_size = 12, legend = "none") +
+  labs(title="Peak Width Distribution by Group",
+       subtitle="ATAC-seq peaks are typically narrow (<500bp)",
+       x="Peak Width (bp)", y="Count")
+
+if(emit_light_plots) {
+  save_gg_dual(
+    p_width,
+    file = step_plot_file("Step4", "Peak_Width_Distribution.pdf"),
+    width = 10,
+    height = 6
+  )
+  print(p_width)
+}
+
+# 统计 median width by group
+width_stats <- aggregate(Width ~ Group, peak_widths_by_group, median)
+write.csv(width_stats, step_table_file("Step4", "Peak_Width_Summary.csv"), row.names = FALSE)
+cat("\nMedian Peak Widths by Group:\n")
+print(width_stats)
+```
+
+```{r peak_sample_distributions, fig.width=12, fig.height=8}
+sample_peak_annotation_df <- bind_rows(lapply(names(peakAnnoList), function(sample_name) {
+  anno_df <- as.data.frame(peakAnnoList[[sample_name]])
+  if(nrow(anno_df) == 0) return(data.frame())
+  anno_df %>%
+    transmute(
+      Sample = sample_name,
+      Group = sample_group(sample_name),
+      annotation,
+      annotation_simple = normalize_feature_label(annotation),
+      geneId = if("geneId" %in% colnames(anno_df)) geneId else NA_character_,
+      geneSymbol = if("SYMBOL" %in% colnames(anno_df)) SYMBOL else if("geneSymbol" %in% colnames(anno_df)) geneSymbol else NA_character_,
+      distanceToTSS = if("distanceToTSS" %in% colnames(anno_df)) distanceToTSS else NA_real_
+    )
+}))
+
+sample_peak_feature_summary <- sample_peak_annotation_df %>%
+  count(Sample, Group, annotation_simple, name = "PeakCount") %>%
+  group_by(Sample) %>%
+  mutate(Fraction = PeakCount / sum(PeakCount)) %>%
+  ungroup() %>%
+  mutate(
+    Sample = factor(Sample, levels = samples),
+    annotation_simple = factor(annotation_simple, levels = feature_levels_main)
+  ) %>%
+  arrange(Sample, annotation_simple)
+
+write.csv(sample_peak_annotation_df, step_table_file("Step4", "Peak_Annotation_By_Sample.csv"), row.names = FALSE)
+write.csv(sample_peak_feature_summary, step_table_file("Step4", "Peak_Feature_Composition_By_Sample.csv"), row.names = FALSE)
+
+read_macs2_peak_xls <- function(sample_name) {
+  xls_file <- file.path(work_dir, "03peaks", paste0(sample_name, "_peaks.xls"))
+  if(!file.exists(xls_file)) return(data.frame())
+  peak_tbl <- tryCatch(
+    read.delim(xls_file, comment.char = "#", stringsAsFactors = FALSE, check.names = FALSE),
+    error = function(e) data.frame()
+  )
+  if(nrow(peak_tbl) == 0) return(data.frame())
+  for(required_col in c("chr", "start", "end", "length", "pileup", "fold_enrichment", "-log10(pvalue)", "-log10(qvalue)")) {
+    if(!required_col %in% colnames(peak_tbl)) peak_tbl[[required_col]] <- NA
+  }
+  peak_tbl %>%
+    transmute(
+      Sample = sample_name,
+      Group = sample_group(sample_name),
+      chr = chr,
+      start = suppressWarnings(as.integer(start)),
+      end = suppressWarnings(as.integer(end)),
+      length = suppressWarnings(as.numeric(length)),
+      pileup = suppressWarnings(as.numeric(pileup)),
+      fold_enrichment = suppressWarnings(as.numeric(fold_enrichment)),
+      neg_log10_pvalue = suppressWarnings(as.numeric(.data[["-log10(pvalue)"]])),
+      neg_log10_qvalue = suppressWarnings(as.numeric(.data[["-log10(qvalue)"]]))
+    )
+}
+
+macs2_peak_signal_df <- bind_rows(lapply(samples, read_macs2_peak_xls))
+if(nrow(macs2_peak_signal_df) > 0) {
+  write.csv(macs2_peak_signal_df, step_table_file("Step4", "MACS2_Peak_Signal_By_Sample.csv"), row.names = FALSE)
+  macs2_peak_signal_summary <- macs2_peak_signal_df %>%
+    group_by(Sample, Group) %>%
+    summarise(
+      PeakCount = n(),
+      MedianPileup = median(pileup, na.rm = TRUE),
+      MeanPileup = mean(pileup, na.rm = TRUE),
+      MedianFoldEnrichment = median(fold_enrichment, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  arrange(match(Sample, samples))
+  write.csv(macs2_peak_signal_summary, step_table_file("Step4", "MACS2_Peak_Signal_Summary_By_Sample.csv"), row.names = FALSE)
+}
+
+p_sample_peak_length <- ggplot(peak_widths_df, aes(x = Width, fill = Group, color = Group)) +
+  geom_density(alpha = 0.2, linewidth = 0.9) +
+  facet_wrap(~Sample, ncol = 2, scales = "free_y") +
+  coord_cartesian(xlim = c(0, 1500)) +
+  scale_fill_manual(values = viz_pal$group, drop = FALSE) +
+  scale_color_manual(values = viz_pal$group, drop = FALSE) +
+  theme_atac_classic(base_size = 12) +
+  labs(title = "Peak length distribution by sample", x = "Peak length (bp)", y = "Density")
+
+p_sample_peak_feature <- ggplot(sample_peak_feature_summary, aes(x = Sample, y = Fraction, fill = annotation_simple)) +
+  geom_col(width = 0.72, color = scales::alpha(viz_pal$neutral_dark, 0.2)) +
+  scale_fill_manual(values = feature_cols, drop = FALSE, name = "Feature") +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+  theme_atac_classic(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Peak feature composition by sample", x = NULL, y = "Peak fraction")
+
+if(emit_light_plots) {
+  save_plot_pdf(p_sample_peak_length, step_plot_file("Step4", "Peak_Length_Distribution_By_Sample.pdf"), width = 12, height = 8)
+  save_plot_pdf(p_sample_peak_feature, step_plot_file("Step4", "Peak_Feature_Composition_By_Sample.pdf"), width = 10, height = 6)
+  print(p_sample_peak_length)
+  print(p_sample_peak_feature)
+}
+
+if(nrow(macs2_peak_signal_df) > 0 && emit_light_plots) {
+  p_macs2_peak_signal <- ggplot(macs2_peak_signal_df, aes(x = log10(pileup + 1), fill = Group, color = Group)) +
+    geom_density(alpha = 0.2, linewidth = 0.9) +
+    facet_wrap(~Sample, ncol = 2, scales = "free_y") +
+    scale_fill_manual(values = viz_pal$group, drop = FALSE) +
+    scale_color_manual(values = viz_pal$group, drop = FALSE) +
+    theme_atac_classic(base_size = 12) +
+    labs(title = "MACS2 peak signal distribution by sample", x = "log10(MACS2 pileup + 1)", y = "Density")
+  save_plot_pdf(p_macs2_peak_signal, step_plot_file("Step4", "MACS2_Peak_Signal_Distribution_By_Sample.pdf"), width = 12, height = 8)
+  print(p_macs2_peak_signal)
+} else if(nrow(macs2_peak_signal_df) == 0) {
+  write_skipped_state("Step4", "MACS2_Peak_Signal", "No MACS2 peaks.xls files were available for peak-signal distribution.")
+}
+```
+
+```{r upset_plot, fig.width=10, fig.height=6}
+# --- 高级图表: UpSet Plot 展示 Peak 重叠 ---
+
+# 定义一个共有区域集合 (将所有 Peak 合并并 reduce)
+all_peaks <- Reduce(c, peaks_list)
+all_peaks <- reduce(all_peaks)
+
+# 按组别展示重叠 (Reference vs Comparison)
+overlap_by_group <- sapply(peaks_by_group, function(p) {
+  ov <- findOverlaps(all_peaks, p)
+  res <- rep(0, length(all_peaks))
+  res[queryHits(ov)] <- 1
+  return(res)
+})
+overlap_by_group_df <- as.data.frame(overlap_by_group)
+write.csv(overlap_by_group_df, step_table_file("Step4", "Peak_Overlap_Membership.csv"), row.names = FALSE)
+
+# 绘制按组别的 UpSet Plot
+draw_upset_dual(
+  step_plot_file("Step4", "Peak_UpSet.pdf"),
+  width = 8,
+  height = 6,
+  upset(
+    overlap_by_group_df,
+    sets = colnames(overlap_by_group_df),
+    order.by = "freq",
+    main.bar.color = viz_pal$upset_main,
+    sets.bar.color = viz_pal$upset_sets,
+    text.scale = c(1.3, 1.3, 1, 1, 2, 1.5)
+  )
+)
+
+# 在 Rmd 中显示
+upset(overlap_by_group_df, sets = colnames(overlap_by_group_df), order.by = "freq",
+      main.bar.color = viz_pal$upset_main, sets.bar.color = viz_pal$upset_sets,
+      text.scale = c(1.3, 1.3, 1, 1, 2, 1.5))
+
+group_a <- group_levels[1]
+group_b <- group_levels[2]
+group_a_only <- sum(overlap_by_group_df[[group_a]] == 1 & overlap_by_group_df[[group_b]] == 0)
+group_b_only <- sum(overlap_by_group_df[[group_a]] == 0 & overlap_by_group_df[[group_b]] == 1)
+shared <- sum(overlap_by_group_df[[group_a]] == 1 & overlap_by_group_df[[group_b]] == 1)
+write.csv(
+  data.frame(
+    Group1 = group_a,
+    Group2 = group_b,
+    Group1_only = group_a_only,
+    Group2_only = group_b_only,
+    Shared = shared
+  ),
+  step_table_file("Step4", "Peak_Overlap_Summary.csv"),
+  row.names = FALSE
+)
+cat("\n组间 Peak 重叠统计:\n")
+cat(" ", group_a, "特有 Peaks:", group_a_only, "\n")
+cat(" ", group_b, "特有 Peaks:", group_b_only, "\n")
+cat("  共有 Peaks:", shared, "\n")
+```
+
+```{r dist_to_tss, fig.width=10, fig.height=6}
+# 绘制 Peak 距离 TSS 的分布 - 按组别显示
+dist_to_tss_df <- bind_rows(lapply(names(peakAnnoByGroup), function(group_name) {
+  anno_df <- as.data.frame(peakAnnoByGroup[[group_name]])
+  if(!"distanceToTSS" %in% colnames(anno_df)) return(data.frame())
+  data.frame(
+    Group = group_name,
+    distanceToTSS = suppressWarnings(as.numeric(anno_df$distanceToTSS)),
+    stringsAsFactors = FALSE
+  )
+})) %>%
+  filter(!is.na(distanceToTSS)) %>%
+  mutate(distanceToTSS = pmax(pmin(distanceToTSS, 3000), -3000))
+
+write.csv(dist_to_tss_df, step_table_file("Step4", "Peak_DistToTSS_Data.csv"), row.names = FALSE)
+
+p_dist_tss <- ggplot(dist_to_tss_df, aes(x = distanceToTSS, color = Group, fill = Group)) +
+  geom_density(alpha = 0.18, linewidth = 1) +
+  scale_color_manual(values = viz_pal$group) +
+  scale_fill_manual(values = viz_pal$group) +
+  theme_atac_classic(base_size = 12) +
+  labs(
+    title = "Distribution of peaks relative to TSS",
+    x = "Distance to TSS (bp)",
+    y = "Density",
+    color = "Group",
+    fill = "Group"
+  )
+
+save_plot_pdf(p_dist_tss, step_plot_file("Step4", "Peak_DistToTSS.pdf"), width = 10, height = 6)
+print(p_dist_tss)
+```
+
+```{r advanced_peak_plots, fig.width=10, fig.height=8}
+tss_profile_df <- data.frame(
+  Group = character(),
+  position = numeric(),
+  signal = numeric(),
+  baseline = numeric(),
+  signal_fold_over_flank = numeric(),
+  signal_centered = numeric(),
+  signal_zscore = numeric(),
+  stringsAsFactors = FALSE
+)
+
+if(!should_render_plots()) {
+  write_skipped_state(
+    "Step4",
+    "Peak_Advanced_Profile_Plots",
+    "Run profile does not request heavy plots; ChIPseeker covplot and getTagMatrix TSS profile were skipped for report-mode speed.",
+    clear_plot_files = c("Peak_Chrom_Distribution.pdf", "Peak_TSS_Profile.pdf")
+  )
+  write.csv(tss_profile_df, step_table_file("Step4", "Peak_TSS_Profile_Data.csv"), row.names = FALSE)
+} else {
+  # --- 高级图表 1: 染色体分布图 (Covplot) ---
+  group_colors <- viz_pal$group
+
+  p_cov <- covplot(peaks_by_group) +
+    scale_fill_manual(values = group_colors) +
+    scale_color_manual(values = group_colors) +
+    theme_atac_classic(base_size = 12, legend = "top") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1),
+          strip.text.y = element_text(angle = 0)) +
+    ggtitle("Peak Distribution across Chromosomes by Group")
+
+  save_gg_dual(step_plot_file("Step4", "Peak_Chrom_Distribution.pdf"), p_cov, width = 12, height = 12)
+  print(p_cov)
+
+  # --- 高级图表 2: TSS 附近的 Peak 结合谱 (Average Profile) ---
+  promoter <- getPromoters(TxDb=txdb, upstream=2000, downstream=2000)
+  tagMatrixByGroup <- lapply(peaks_by_group, getTagMatrix, windows=promoter)
+
+  tss_profile_df <- bind_rows(lapply(names(tagMatrixByGroup), function(group_name) {
+    mat <- tagMatrixByGroup[[group_name]]
+    if(is.null(mat) || ncol(mat) == 0) return(data.frame())
+    positions <- seq(-2000, 2000, length.out = ncol(mat))
+    raw_signal <- colMeans(mat, na.rm = TRUE)
+    normalized_signal <- normalize_tss_profile(raw_signal, positions = positions, flank_abs_min = 1500)
+    data.frame(
+      Group = group_name,
+      position = positions,
+      signal = raw_signal,
+      baseline = normalized_signal$baseline,
+      signal_fold_over_flank = normalized_signal$signal_fold_over_flank,
+      signal_centered = normalized_signal$signal_centered,
+      signal_zscore = normalized_signal$signal_zscore,
+      stringsAsFactors = FALSE
+    )
+  }))
+
+  write.csv(tss_profile_df, step_table_file("Step4", "Peak_TSS_Profile_Data.csv"), row.names = FALSE)
+
+  p_tss_profile <- ggplot(tss_profile_df, aes(x = position, y = signal_fold_over_flank, color = Group)) +
+    geom_line(linewidth = 1) +
+    geom_hline(yintercept = 1, linetype = "dashed", linewidth = 0.45, color = viz_pal$neutral["dark"]) +
+    scale_color_manual(values = viz_pal$group) +
+    theme_atac_classic(base_size = 12) +
+    labs(
+      title = "Average TSS accessibility profile",
+      subtitle = "Signal is normalized to the mean flanking baseline (|distance| >= 1.5 kb)",
+      x = "Distance to TSS (bp)",
+      y = "Fold over flank baseline",
+      color = "Group"
+    )
+
+  save_plot_pdf(p_tss_profile, step_plot_file("Step4", "Peak_TSS_Profile.pdf"), width = 10, height = 6)
+  print(p_tss_profile)
+}
+```
+
+```{r deeptools_profiles}
+run_deeptools_profiles <- env_bool("ATAC_RUN_DEEPTOOLS_PROFILES", run_profile == "full")
+deeptools_bins <- c(computeMatrix = Sys.which("computeMatrix"), plotProfile = Sys.which("plotProfile"), plotHeatmap = Sys.which("plotHeatmap"))
+deeptools_bw_files <- unname(bigwig_files)
+names(deeptools_bw_files) <- samples
+deeptools_profile_summary <- data.frame()
+
+if(!run_deeptools_profiles) {
+  write_skipped_state(
+    "Step4",
+    "deepTools_Profile",
+    "ATAC_RUN_DEEPTOOLS_PROFILES is false; gene body and peak-center deepTools profiles were not executed.",
+    clear_plot_files = c(
+      "GeneBody_Profile.pdf",
+      "GeneBody_Heatmap.pdf",
+      "PeakCenter_Profile.pdf",
+      "PeakCenter_Heatmap.pdf"
+    )
+  )
+} else if(any(!nzchar(deeptools_bins)) || !all(file.exists(deeptools_bw_files))) {
+  write_skipped_state(
+    "Step4",
+    "deepTools_Profile",
+    paste(
+      "Missing deepTools executables or sample bigWig files.",
+      "computeMatrix=", nzchar(deeptools_bins["computeMatrix"]),
+      "plotProfile=", nzchar(deeptools_bins["plotProfile"]),
+      "plotHeatmap=", nzchar(deeptools_bins["plotHeatmap"]),
+      "bigWigs=", paste(names(deeptools_bw_files)[file.exists(deeptools_bw_files)], collapse = ",")
+    ),
+    clear_plot_files = c(
+      "GeneBody_Profile.pdf",
+      "GeneBody_Heatmap.pdf",
+      "PeakCenter_Profile.pdf",
+      "PeakCenter_Heatmap.pdf"
+    )
+  )
+} else {
+  gene_regions <- genes(txdb)
+  seqlevelsStyle(gene_regions) <- "UCSC"
+  gene_regions <- keep_primary_chromosomes(gene_regions)
+  gene_bed <- as.data.frame(gene_regions) %>%
+    transmute(
+      seqnames = as.character(seqnames),
+      start = pmax(0L, as.integer(start) - 1L),
+      end = as.integer(end),
+      name = if("gene_id" %in% colnames(as.data.frame(gene_regions))) as.character(gene_id) else paste0("Gene_", seq_len(n())),
+      score = 0,
+      strand = as.character(strand)
+    ) %>%
+    filter(!is.na(seqnames), !is.na(start), !is.na(end), end > start)
+
+  peak_center_gr <- if(exists("all_peaks") && length(all_peaks) > 0) {
+    keep_primary_chromosomes(all_peaks)
+  } else {
+    keep_primary_chromosomes(reduce(Reduce(c, peaks_list)))
+  }
+  peak_center_bed <- as.data.frame(peak_center_gr) %>%
+    transmute(
+      seqnames = as.character(seqnames),
+      start = pmax(0L, as.integer(start) - 1L),
+      end = as.integer(end),
+      name = paste0("Peak_", seq_len(n())),
+      score = 0,
+      strand = "."
+    ) %>%
+    filter(!is.na(seqnames), !is.na(start), !is.na(end), end > start)
+
+  gene_bed_file <- step_table_file("Step4", "GeneBody_Regions.bed")
+  peak_bed_file <- step_table_file("Step4", "PeakCenter_Regions.bed")
+  write.table(gene_bed, gene_bed_file, sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+  write.table(peak_center_bed, peak_bed_file, sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+  run_deeptools_set <- function(label, matrix_mode, region_file, matrix_file, profile_pdf, heatmap_pdf) {
+    if(!file.exists(region_file) || file.info(region_file)$size == 0) {
+      return(data.frame(Profile = label, Status = "skipped", Reason = "empty region BED", stringsAsFactors = FALSE))
+    }
+    if(matrix_mode == "scale-regions") {
+      matrix_args <- c(
+        "scale-regions", "-S", unname(deeptools_bw_files), "-R", region_file,
+        "-b", "2000", "-a", "2000", "--missingDataAsZero", "--skipZeros",
+        "-p", "max/2", "-out", matrix_file
+      )
+    } else {
+      matrix_args <- c(
+        "reference-point", "--referencePoint", "center", "-S", unname(deeptools_bw_files), "-R", region_file,
+        "-b", "2000", "-a", "2000", "--missingDataAsZero", "--skipZeros",
+        "-p", "max/2", "-out", matrix_file
+      )
+    }
+    matrix_status <- system2(deeptools_bins["computeMatrix"], matrix_args,
+                             stdout = step_table_file("Step4", paste0(label, "_computeMatrix.log")),
+                             stderr = step_table_file("Step4", paste0(label, "_computeMatrix.err")))
+    if(!identical(matrix_status, 0L) && !identical(matrix_status, 0)) {
+      return(data.frame(Profile = label, Status = "failed", Reason = "computeMatrix failed", stringsAsFactors = FALSE))
+    }
+    profile_status <- system2(deeptools_bins["plotProfile"],
+                              c("-m", matrix_file, "-out", profile_pdf, "--perGroup", "--plotTitle", label),
+                              stdout = step_table_file("Step4", paste0(label, "_plotProfile.log")),
+                              stderr = step_table_file("Step4", paste0(label, "_plotProfile.err")))
+    heatmap_status <- system2(deeptools_bins["plotHeatmap"],
+                              c("-m", matrix_file, "-out", heatmap_pdf, "--plotTitle", label,
+                                "--colorList", paste(unname(viz_pal$heatmap_diverging), collapse = ",")),
+                              stdout = step_table_file("Step4", paste0(label, "_plotHeatmap.log")),
+                              stderr = step_table_file("Step4", paste0(label, "_plotHeatmap.err")))
+    data.frame(
+      Profile = label,
+      Status = ifelse(identical(profile_status, 0L) || identical(profile_status, 0), "profile_ok", "profile_failed"),
+      HeatmapStatus = ifelse(identical(heatmap_status, 0L) || identical(heatmap_status, 0), "heatmap_ok", "heatmap_failed"),
+      Matrix = matrix_file,
+      ProfilePlot = profile_pdf,
+      HeatmapPlot = heatmap_pdf,
+      stringsAsFactors = FALSE
+    )
+  }
+
+  deeptools_profile_summary <- bind_rows(
+    run_deeptools_set(
+      "GeneBody_Profile",
+      "scale-regions",
+      gene_bed_file,
+      step_table_file("Step4", "GeneBody_Matrix.gz"),
+      step_plot_file("Step4", "GeneBody_Profile.pdf"),
+      step_plot_file("Step4", "GeneBody_Heatmap.pdf")
+    ),
+    run_deeptools_set(
+      "PeakCenter_Profile",
+      "reference-point",
+      peak_bed_file,
+      step_table_file("Step4", "PeakCenter_Matrix.gz"),
+      step_plot_file("Step4", "PeakCenter_Profile.pdf"),
+      step_plot_file("Step4", "PeakCenter_Heatmap.pdf")
+    )
+  )
+  save_step_table(deeptools_profile_summary, "Step4", "deepTools_Profile_Summary.csv")
+}
+```
+
+```{r save_peak_context_state, include=FALSE}
+save_state(
+  "04_peak_context.rds",
+  c(
+    "peaks_list", "all_peaks",
+    "annotation_summary", "peak_widths_by_group", "overlap_by_group_df",
+    "dist_to_tss_df", "tss_profile_df",
+    "sample_peak_feature_summary", "macs2_peak_signal_df",
+    "deeptools_profile_summary"
+  )
+)
+```

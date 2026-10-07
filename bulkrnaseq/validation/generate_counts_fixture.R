@@ -1,0 +1,15 @@
+# 重建本轮 500 genes × 4 animals 的合成 counts；需要已有 org.Mm.eg.db。
+args <- commandArgs(trailingOnly=TRUE)
+if (length(args)!=1L) stop('用法：Rscript generate_counts_fixture.R 新临时项目目录')
+root <- normalizePath(args[[1]],mustWork=TRUE)
+if (!requireNamespace('org.Mm.eg.db',quietly=TRUE)) stop('MISSING org.Mm.eg.db；不会安装依赖')
+set.seed(17)
+ids <- head(AnnotationDbi::keys(org.Mm.eg.db::org.Mm.eg.db,keytype='ENSEMBL'),500)
+x <- matrix(rnbinom(2000,mu=100,size=10),ncol=4,dimnames=list(ids,c('C1','C2','T1','T2')))
+x[1:60,3:4] <- x[1:60,3:4]*5
+out <- file.path(root,'rawdata/counts.tsv')
+if (file.exists(out)) stop('拒绝覆盖已有 counts: ',out)
+dir.create(dirname(out),recursive=TRUE,showWarnings=FALSE)
+write.table(x,out,quote=FALSE,sep='\t',col.names=NA)
+write.table(data.frame(sample=c('T2','C1','T1','C2'),group=c('treatment','control','treatment','control'),biological_id=c('animal4','animal1','animal3','animal2'),stage='tissue',eligible='true',raw_fq1='',raw_fq2=''),file.path(root,'config/samples.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
+cat('Generated synthetic counts:',out,'\n')

@@ -1,0 +1,14 @@
+[
+  {
+    "latest_state": "FAILED",
+    "returncode": 1,
+    "report_sha256_unchanged": true,
+    "stdout": "{\"status\": \"PASS_INPUT_CONTRACT\", \"contrast\": \"treated - control\", \"biological_n\": {\"control\": 2, \"treated\": 2}, \"sample_count\": 4, \"significance\": \"exploratory_raw_pvalue\", \"analysis_execution\": \"not_run\"}\nCOUNTS_INPUT_PASS: 500 / 500 peaks; treated - control ; integer fragments\n{\"status\": \"PASS_INPUT_CONTRACT\", \"contrast\": \"treated - control\", \"biological_n\": {\"control\": 2, \"treated\": 2}, \"sample_count\": 4, \"significance\": \"exploratory_raw_pvalue\", \"analysis_execution\": \"not_run\"}\nUNVERIFIED: counts 模块最新状态不是 COMPLETED，拒绝将旧表作为当前报告输入\n"
+  },
+  {
+    "latest_state": "STARTED",
+    "returncode": 1,
+    "report_sha256_unchanged": true,
+    "stdout": "{\"status\": \"PASS_INPUT_CONTRACT\", \"contrast\": \"treated - control\", \"biological_n\": {\"control\": 2, \"treated\": 2}, \"sample_count\": 4, \"significance\": \"exploratory_raw_pvalue\", \"analysis_execution\": \"not_run\"}\nCOUNTS_INPUT_PASS: 500 / 500 peaks; treated - control ; integer fragments\n{\"status\": \"PASS_INPUT_CONTRACT\", \"contrast\": \"treated - control\", \"biological_n\": {\"control\": 2, \"treated\": 2}, \"sample_count\": 4, \"significance\": \"exploratory_raw_pvalue\", \"analysis_execution\": \"not_run\"}\nUNVERIFIED: counts 模块最新状态不是 COMPLETED，拒绝将旧表作为当前报告输入\n"
+  }
+]

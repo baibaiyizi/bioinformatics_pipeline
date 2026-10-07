@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -30,7 +31,7 @@ STEPS = [
     "08_cell_type_annotation",
     "09_deconvolution",
     "10_segment_objects",
-    "11_programs_differential",
+    "11_programs_descriptive",
     "12_neighborhood_communication",
     "13_multi_sample_summary",
     "14_report_index",
@@ -79,7 +80,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "n_pcs": 50,
     },
     "integration": {
-        "method": "harmony_if_available",
+        "method": "none",
         "n_neighbors": 15,
         "leiden_resolution": 0.8,
         "umap_min_dist": 0.3,
@@ -93,11 +94,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "nhood_permutations": 1000,
     },
     "domains": {
+        "method": "expression_spatial_leiden",
         "resolution": 0.8,
         "spatial_weight": 0.25,
         "min_segment_spots": 5,
     },
     "annotation": {
+        "method": "marker_score",
         "min_marker_genes": 2,
         "unknown_margin": 0.05,
     },
@@ -122,10 +125,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "compute_scaled_distance": True,
     },
     "programs": {
+        "method": "nmf",
         "n_components": 12,
         "top_genes_per_program": 50,
-        "de_pvalue_threshold": 0.05,
-        "de_logfc_threshold": 0.25,
     },
     "communication": {
         "cluster_key": "cell_type_pred",
@@ -178,15 +180,21 @@ def deep_update(base: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return DEFAULT_CONFIG
+    if not path.is_file():
+        raise FileNotFoundError(f"MISSING config: {path}")
     try:
         import yaml
     except ImportError as exc:
         raise SystemExit("PyYAML is required to read spatial_config.yaml") from exc
     with path.open("r", encoding="utf-8") as handle:
-        user_config = yaml.safe_load(handle) or {}
-    return deep_update(DEFAULT_CONFIG, user_config)
+        user_config = yaml.safe_load(handle)
+    if not isinstance(user_config, dict) or not user_config:
+        raise ValueError("配置必须是非空映射")
+    config = deep_update(DEFAULT_CONFIG, user_config)
+    for section, methods in {"annotation": {"marker_score"}, "programs": {"nmf"}, "domains": {"expression_spatial_leiden"}, "integration": {"none", "harmony"}, "deconvolution": {"marker_score", "cell2location"}}.items():
+        if config[section]["method"] not in methods:
+            raise ValueError(f"{section}.method 未实现: {config[section]['method']}")
+    return config
 
 
 def load_manifest(path: Path) -> list[dict[str, str]]:
@@ -267,10 +275,10 @@ def read_table(path: Path):
     return pd.read_csv(path, sep=sep, index_col=0)
 
 
-def resolve_input_path(ctx: Context, row: dict[str, str], key: str = "input_path") -> Path:
+def resolve_input_path(ctx: Context, row: dict[str, str], key: str = "input_path") -> Path | None:
     value = row.get(key, "")
     if not value:
-        return Path("")
+        return None
     path = Path(value)
     return path if path.is_absolute() else ctx.project_root / path
 
@@ -283,10 +291,10 @@ def latest_existing(paths: list[Path]) -> Path:
 
 
 def read_adata(path: Path):
-    sc = require_pkg("scanpy")
+    ad = require_pkg("anndata")
     if not path.exists():
         raise SystemExit(f"AnnData file not found: {path}")
-    return sc.read_h5ad(path)
+    return ad.read_h5ad(path)
 
 
 def write_adata(adata, path: Path) -> None:
@@ -310,7 +318,7 @@ def spatial_key(ctx: Context) -> str:
     return ctx.config["project"]["spatial_key"]
 
 
-def step_01_validate_inputs(ctx: Context, step: str) -> None:
+def step_01_validate_inputs(ctx: Context, step: str, *, write: bool = True) -> None:
     rows_out: list[dict[str, Any]] = []
     seen: set[str] = set()
     valid_types = {"visium_dir", "h5ad", "matrix_coords"}
@@ -319,38 +327,55 @@ def step_01_validate_inputs(ctx: Context, step: str) -> None:
         input_type = row.get("input_type", "")
         status = "ok"
         messages: list[str] = []
-        if not sample:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", sample):
             status = "error"
             messages.append("missing sample")
         if sample in seen:
             status = "error"
             messages.append("duplicate sample")
         seen.add(sample)
+        if not row.get(group_key(ctx), "").strip():
+            status = "error"
+            messages.append("missing explicit group")
+        if row.get("organism") and row["organism"] != ctx.config["project"]["organism"]:
+            status = "error"
+            messages.append("manifest organism differs from project")
         if input_type not in valid_types:
             status = "error"
             messages.append(f"input_type must be one of {sorted(valid_types)}")
         if input_type in {"visium_dir", "h5ad"}:
             input_path = resolve_input_path(ctx, row)
-            if not str(input_path) or not input_path.exists():
+            if input_path is None or not input_path.exists():
                 status = "error"
                 messages.append(f"input_path not found: {input_path}")
+        if input_type == "h5ad" and input_path is not None and not input_path.is_file():
+            status = "error"
+            messages.append("h5ad input_path must be a file")
+        if input_type == "visium_dir" and input_path is not None:
+            count = input_path / (row.get("count_file") or ctx.config["input"]["visium_count_file"])
+            if not input_path.is_dir() or not count.is_file():
+                status = "error"
+                messages.append("missing Visium directory/count file")
         if input_type == "matrix_coords":
             for col in ["count_file", "spatial_file"]:
                 p = resolve_input_path(ctx, row, col)
-                if not str(p) or not p.exists():
+                if p is None or not p.is_file():
                     status = "error"
                     messages.append(f"{col} not found: {p}")
         row_out = dict(row)
-        row_out["resolved_input_path"] = str(resolve_input_path(ctx, row))
+        row_out["resolved_input_path"] = str(resolve_input_path(ctx, row) or "")
         row_out["status"] = status
         row_out["message"] = "; ".join(messages)
         rows_out.append(row_out)
 
     outdir = ctx.step_dir(step)
-    write_tsv(outdir / "tables" / "spatial_input_status.tsv", rows_out)
-    write_json(outdir / "tables" / "pipeline_config_resolved.json", ctx.config)
+    if not rows_out:
+        raise ValueError("No active samples")
+    if write:
+        write_tsv(outdir / "tables" / "spatial_input_status.tsv", rows_out)
+        write_json(outdir / "tables" / "pipeline_config_resolved.json", ctx.config)
     if any(row["status"] == "error" for row in rows_out):
-        raise SystemExit(f"Input validation failed. See {outdir / 'tables' / 'spatial_input_status.tsv'}")
+        raise SystemExit("Input validation failed: " + json.dumps(rows_out, ensure_ascii=False))
 
 
 def _add_manifest_metadata(adata, row: dict[str, str]) -> None:
@@ -390,7 +415,6 @@ def _read_matrix_coords(ctx: Context, row: dict[str, str]):
 
 
 def step_02_build_objects(ctx: Context, step: str) -> None:
-    sc = require_pkg("scanpy")
     ad = require_pkg("anndata")
     import numpy as np
 
@@ -401,24 +425,32 @@ def step_02_build_objects(ctx: Context, step: str) -> None:
         sample = row["sample"]
         input_type = row["input_type"]
         if input_type == "visium_dir":
+            sc = require_pkg("scanpy")
             kwargs = {
-                "path": str(resolve_input_path(ctx, row)),
+                "path": str(resolve_input_path(ctx, row) or ""),
                 "count_file": row.get("count_file") or ctx.config["input"]["visium_count_file"],
                 "library_id": row.get("library_id") or sample,
                 "load_images": bool(ctx.config["input"].get("load_images", True)),
             }
-            try:
-                adata = sc.read_visium(**kwargs)
-            except TypeError:
-                kwargs.pop("load_images", None)
-                adata = sc.read_visium(**kwargs)
+            adata = sc.read_visium(**kwargs)
         elif input_type == "h5ad":
-            adata = sc.read_h5ad(resolve_input_path(ctx, row))
+            adata = ad.read_h5ad(resolve_input_path(ctx, row))
         elif input_type == "matrix_coords":
             adata = _read_matrix_coords(ctx, row)
         else:
             raise SystemExit(f"Unsupported input_type: {input_type}")
 
+        matrix = adata.layers["counts"] if "counts" in adata.layers else adata.X
+        values = matrix.data if hasattr(matrix, "tocsr") else np.asarray(matrix)
+        if not np.all(np.isfinite(values)) or np.any(values < 0) or not np.allclose(values, np.rint(values)):
+            raise ValueError(f"{sample}: raw counts must be nonnegative finite integers")
+        if not adata.obs_names.is_unique:
+            raise ValueError(f"{sample}: duplicate spot identifiers")
+        coords = adata.obsm.get(spatial_key(ctx))
+        if coords is None or np.asarray(coords).shape != (adata.n_obs,2) or not np.all(np.isfinite(coords)):
+            raise ValueError(f"{sample}: finite n_spots × 2 spatial coordinates required")
+        adata.X = matrix.copy()
+        adata.layers["counts"] = matrix.copy()
         if ctx.config["input"].get("make_var_names_unique", True):
             adata.var_names_make_unique()
         _add_manifest_metadata(adata, row)
@@ -439,7 +471,7 @@ def step_02_build_objects(ctx: Context, step: str) -> None:
             }
         )
 
-    combined = ad.concat(adatas, join="outer", merge="same", index_unique=None)
+    combined = ad.concat(adatas, join="outer", merge="same", index_unique=None, fill_value=0)
     combined.var_names_make_unique()
     if "counts" not in combined.layers:
         combined.layers["counts"] = combined.X.copy()
@@ -479,7 +511,7 @@ def step_03_qc_filter(ctx: Context, step: str) -> None:
             if len(idx) <= qc_conf["spatial_local_outlier_k"]:
                 continue
             nn = NearestNeighbors(n_neighbors=qc_conf["spatial_local_outlier_k"] + 1).fit(coords[idx])
-            neigh = nn.kneighbors(return_distance=False)[:, 1:]
+            neigh = nn.kneighbors(coords[idx], return_distance=False)[:, 1:]
             local_median = np.median(totals[idx][neigh], axis=1)
             flags = totals[idx] < (local_median * qc_conf["spatial_low_count_ratio"])
             adata.obs.iloc[idx, adata.obs.columns.get_loc("spatial_low_count_outlier")] = flags
@@ -523,20 +555,17 @@ def step_04_normalize_features(ctx: Context, step: str) -> None:
         adata.layers["counts"] = adata.X.copy()
     sc.pp.normalize_total(adata, target_sum=norm["target_sum"])
     sc.pp.log1p(adata)
-    try:
-        sc.pp.highly_variable_genes(
-            adata,
-            flavor=norm["hvg_flavor"],
-            n_top_genes=norm["n_top_genes"],
-            batch_key=sample_key(ctx) if sample_key(ctx) in adata.obs else None,
-        )
-    except Exception:
-        sc.pp.highly_variable_genes(adata, flavor="cell_ranger", n_top_genes=norm["n_top_genes"])
+    sc.pp.highly_variable_genes(adata, flavor=norm["hvg_flavor"], n_top_genes=norm["n_top_genes"],
+                                batch_key=sample_key(ctx) if sample_key(ctx) in adata.obs else None)
     regressors = [c for c in norm.get("regress_out", []) if c in adata.obs.columns]
     if regressors:
         sc.pp.regress_out(adata, regressors)
     sc.pp.scale(adata, max_value=norm["scale_max_value"])
-    sc.tl.pca(adata, n_comps=min(norm["n_pcs"], adata.n_vars - 1), svd_solver="arpack")
+    pca_features = int(adata.var["highly_variable"].sum())
+    n_comps = min(norm["n_pcs"], adata.n_obs - 1, pca_features - 1)
+    if n_comps < 1:
+        raise ValueError("PCA requires at least 2 spots and 2 highly variable genes")
+    sc.tl.pca(adata, n_comps=n_comps, svd_solver="arpack")
     write_adata(adata, ctx.processed_dir() / "all_samples.normalized.h5ad")
     hvg = adata.var.reset_index().rename(columns={"index": "gene"})
     hvg.to_csv(ctx.step_dir(step) / "tables" / "highly_variable_genes.tsv", sep="\t", index=False)
@@ -550,16 +579,14 @@ def step_05_integrate_cluster(ctx: Context, step: str) -> None:
     adata = read_adata(ctx.processed_dir() / "all_samples.normalized.h5ad")
     integ = ctx.config["integration"]
     use_rep = "X_pca"
-    if integ["method"] in {"harmony", "harmony_if_available"} and batch_key(ctx) in adata.obs:
-        try:
-            import scanpy.external as sce
-
-            sce.pp.harmony_integrate(adata, key=batch_key(ctx), basis="X_pca", adjusted_basis="X_pca_harmony")
-            use_rep = "X_pca_harmony"
-        except Exception as exc:
-            if integ["method"] == "harmony":
-                raise
-            adata.uns["harmony_warning"] = str(exc)
+    if integ["method"] == "harmony":
+        if batch_key(ctx) not in adata.obs:
+            raise ValueError("Harmony requires explicit batch metadata")
+        import scanpy.external as sce
+        sce.pp.harmony_integrate(adata, key=batch_key(ctx), basis="X_pca", adjusted_basis="X_pca_harmony")
+        use_rep = "X_pca_harmony"
+    elif integ["method"] != "none":
+        raise ValueError("integration.method must be none or harmony")
     sc.pp.neighbors(adata, n_neighbors=integ["n_neighbors"], use_rep=use_rep)
     sc.tl.umap(adata, min_dist=integ["umap_min_dist"])
     sc.tl.leiden(adata, resolution=integ["leiden_resolution"], key_added="leiden")
@@ -591,10 +618,7 @@ def step_06_spatial_neighbors_stats(ctx: Context, step: str) -> None:
         kwargs["radius"] = sp_conf["radius"]
     else:
         kwargs["n_neighs"] = sp_conf["n_neighs"]
-    try:
-        sq.gr.spatial_neighbors(adata, spatial_key=spatial_key(ctx), library_key=sample_key(ctx), **kwargs)
-    except TypeError:
-        sq.gr.spatial_neighbors(adata, spatial_key=spatial_key(ctx), **kwargs)
+    sq.gr.spatial_neighbors(adata, spatial_key=spatial_key(ctx), library_key=sample_key(ctx), **kwargs)
     cluster_key = "leiden"
     sq.gr.nhood_enrichment(adata, cluster_key=cluster_key, n_perms=sp_conf["nhood_permutations"])
     if "highly_variable" in adata.var:
@@ -663,6 +687,10 @@ def step_08_cell_type_annotation(ctx: Context, step: str) -> None:
     import pandas as pd
 
     adata = read_adata(ctx.integrated_dir() / "all_samples.domains.h5ad")
+    adata.X = adata.layers["counts"].copy()
+    sc.pp.normalize_total(adata, target_sum=ctx.config["normalization"]["target_sum"])
+    adata.uns.pop("log1p", None)
+    sc.pp.log1p(adata)
     markers = load_marker_table(ctx)
     tissue = ctx.config["project"].get("default_tissue", "generic")
     markers = markers[(markers["tissue"].isin(["generic", tissue]))]
@@ -689,16 +717,16 @@ def step_08_cell_type_annotation(ctx: Context, step: str) -> None:
     write_adata(adata, ctx.integrated_dir() / "all_samples.annotated.h5ad")
 
 
-def _run_marker_deconvolution(ctx: Context, adata, outdir: Path) -> None:
+def _export_marker_scores(ctx: Context, adata, outdir: Path) -> None:
     import pandas as pd
 
     score_cols = [c for c in adata.obs.columns if c.startswith("score_")]
     if not score_cols:
-        pd.DataFrame(index=adata.obs_names).to_csv(outdir / "tables" / "cell_abundance_marker_score.tsv", sep="\t")
+        pd.DataFrame(index=adata.obs_names).to_csv(outdir / "tables" / "marker_scores_by_spot.tsv", sep="\t")
         return
     abundance = adata.obs[[sample_key(ctx)] + score_cols].copy()
     abundance.columns = [sample_key(ctx)] + [c.replace("score_", "") for c in score_cols]
-    abundance.to_csv(outdir / "tables" / "cell_abundance_marker_score.tsv", sep="\t")
+    abundance.to_csv(outdir / "tables" / "marker_scores_by_spot.tsv", sep="\t")
 
 
 def _run_cell2location(ctx: Context, adata, outdir: Path) -> None:
@@ -779,12 +807,13 @@ def step_09_deconvolution(ctx: Context, step: str) -> None:
     adata = read_adata(ctx.integrated_dir() / "all_samples.annotated.h5ad")
     method = ctx.config["deconvolution"].get("method", "marker_score")
     if method == "marker_score":
-        _run_marker_deconvolution(ctx, adata, ctx.step_dir(step))
+        _export_marker_scores(ctx, adata, ctx.step_dir(step))
     elif method == "cell2location":
         _run_cell2location(ctx, adata, ctx.step_dir(step))
         adata = read_adata(ctx.deconv_dir() / "all_samples.cell2location.h5ad")
     else:
         raise SystemExit(f"Unsupported deconvolution.method: {method}")
+    write_json(ctx.step_dir(step) / "tables" / "method_status.json", {"method": method, "output_kind": "marker_score_not_abundance" if method == "marker_score" else "estimated_cell_abundance", "cross_sample_inference": "not_implemented"})
     write_adata(adata, ctx.deconv_dir() / "all_samples.deconvolution_ready.h5ad")
 
 
@@ -795,7 +824,7 @@ def _auto_distance(coords) -> float:
     if len(coords) < 3:
         return 0.0
     nn = NearestNeighbors(n_neighbors=2).fit(coords)
-    d = nn.kneighbors(return_distance=True)[0][:, 1]
+    d = nn.kneighbors(coords, return_distance=True)[0][:, 1]
     return float(np.median(d) * 1.5)
 
 
@@ -811,7 +840,7 @@ def step_10_segment_objects(ctx: Context, step: str) -> None:
     seg_conf = ctx.config["segments"]
     source = seg_conf["source_key"]
     if source not in adata.obs:
-        source = "leiden"
+        raise ValueError(f"segments.source_key missing: {source}")
     coords = adata.obsm.get(spatial_key(ctx))
     if coords is None:
         raise SystemExit(f"Missing obsm['{spatial_key(ctx)}'] for segmentation")
@@ -864,10 +893,9 @@ def step_10_segment_objects(ctx: Context, step: str) -> None:
     write_adata(adata, ctx.integrated_dir() / "all_samples.segmented.h5ad")
 
 
-def step_11_programs_differential(ctx: Context, step: str) -> None:
+def step_11_programs_descriptive(ctx: Context, step: str) -> None:
     import numpy as np
     import pandas as pd
-    from scipy import stats
     from sklearn.decomposition import NMF
 
     adata = read_adata(latest_existing([ctx.integrated_dir() / "all_samples.segmented.h5ad", ctx.integrated_dir() / "all_samples.annotated.h5ad"]))
@@ -878,12 +906,27 @@ def step_11_programs_differential(ctx: Context, step: str) -> None:
         genes_mask = pd.Series(False, index=adata.var_names).to_numpy()
     if genes_mask.sum() < 10:
         genes_mask = np.ones(adata.n_vars, dtype=bool)
-    x = sparse_to_dense(adata[:, genes_mask].X)
-    x = np.asarray(x, dtype=float)
-    x[x < 0] = 0
+    if "counts" not in adata.layers:
+        raise ValueError("程序及描述汇总需要原始 counts 层，不能使用 scale 后的 X")
+    counts = adata.layers["counts"]
+    values = counts.data if hasattr(counts, "tocsr") else np.asarray(counts)
+    if not np.all(np.isfinite(values)) or np.any(values < 0) or not np.allclose(values, np.rint(values)):
+        raise ValueError("counts 必须是非负有限整数")
+    totals = np.asarray(counts.sum(axis=1)).ravel()
+    if np.any(totals <= 0):
+        raise ValueError("存在零 counts 的 spot")
+    normalized = sparse_to_dense(counts) * (ctx.config["normalization"]["target_sum"] / totals[:, None])
+    log_expr = np.log1p(normalized)
+    x = log_expr[:, genes_mask]
+    if min(x.shape) < 3:
+        raise ValueError("NMF requires at least 3 spots and 3 genes")
     n_comp = min(int(prog["n_components"]), max(2, min(x.shape) - 1))
     nmf = NMF(n_components=n_comp, init="nndsvda", random_state=ctx.config["project"]["random_seed"], max_iter=500)
     w = nmf.fit_transform(x)
+    write_json(ctx.step_dir(step) / "tables" / "nmf_fit_status.json",
+               {"n_iter": int(nmf.n_iter_), "max_iter": int(nmf.max_iter),
+                "status": "iteration_limit_reached" if nmf.n_iter_ >= nmf.max_iter else "converged",
+                "reconstruction_error": float(nmf.reconstruction_err_)})
     h = nmf.components_
     prog_cols = [f"program_{i+1:02d}" for i in range(n_comp)]
     for i, col in enumerate(prog_cols):
@@ -897,17 +940,25 @@ def step_11_programs_differential(ctx: Context, step: str) -> None:
     write_tsv(ctx.step_dir(step) / "tables" / "nmf_program_top_genes.tsv", top_rows)
     pd.DataFrame(w, index=adata.obs_names, columns=prog_cols).to_csv(ctx.step_dir(step) / "tables" / "nmf_program_scores.tsv", sep="\t")
 
-    if group_key(ctx) in adata.obs and len(adata.obs[group_key(ctx)].dropna().unique()) == 2:
-        groups = list(adata.obs[group_key(ctx)].dropna().unique())
-        de_rows: list[dict[str, Any]] = []
-        matrix = sparse_to_dense(adata.X)
-        for gi, gene in enumerate(adata.var_names):
-            a = matrix[adata.obs[group_key(ctx)].to_numpy() == groups[0], gi]
-            b = matrix[adata.obs[group_key(ctx)].to_numpy() == groups[1], gi]
-            stat = stats.ttest_ind(a, b, equal_var=False, nan_policy="omit")
-            logfc = float(np.mean(b) - np.mean(a))
-            de_rows.append({"gene": gene, "group1": groups[0], "group2": groups[1], "logFC_group2_minus_group1": logfc, "pvalue": float(stat.pvalue)})
-        pd.DataFrame(de_rows).sort_values("pvalue").to_csv(ctx.step_dir(step) / "tables" / "spot_level_de_working.tsv", sep="\t", index=False)
+    # 每个样本仅输出描述汇总；spot 不作为条件比较的独立重复。
+    rows = []
+    program_rows = []
+    for sample in adata.obs[sample_key(ctx)].astype(str).unique():
+        mask = adata.obs[sample_key(ctx)].astype(str).to_numpy() == sample
+        groups = adata.obs.loc[mask, group_key(ctx)].dropna().astype(str).unique()
+        if len(groups) != 1:
+            raise ValueError(f"sample {sample} must map to exactly one group")
+        for j, gene in enumerate(adata.var_names):
+            rows.append({"sample": sample, "group": groups[0], "gene": gene,
+                         "n_spots": int(mask.sum()), "mean_log1p_normalized": float(log_expr[mask,j].mean()),
+                         "sum_raw_counts": float(np.asarray(counts[mask,j].sum()).item())})
+        program_rows.append({"sample": sample, "group": groups[0], "n_spots": int(mask.sum()),
+                             **{col: float(w[mask,i].mean()) for i,col in enumerate(prog_cols)}})
+    write_tsv(ctx.step_dir(step) / "tables" / "sample_expression_descriptive.tsv", rows)
+    write_tsv(ctx.step_dir(step) / "tables" / "sample_program_scores.tsv", program_rows)
+    write_json(ctx.step_dir(step) / "tables" / "inference_status.json",
+               {"cross_sample_inference": "not_implemented", "unit": "sample summary", "pvalues_produced": False,
+                "reason": "spots/sections are not independent biological replicates; no condition test implemented"})
     write_adata(adata, ctx.integrated_dir() / "all_samples.programs.h5ad")
 
 
@@ -919,7 +970,7 @@ def step_12_neighborhood_communication(ctx: Context, step: str) -> None:
     adata = read_adata(latest_existing([ctx.integrated_dir() / "all_samples.programs.h5ad", ctx.integrated_dir() / "all_samples.segmented.h5ad"]))
     key = ctx.config["communication"]["cluster_key"]
     if key not in adata.obs:
-        key = "leiden"
+        raise ValueError(f"communication.cluster_key missing: {key}")
     coords = adata.obsm.get(spatial_key(ctx))
     if coords is None:
         raise SystemExit(f"Missing obsm['{spatial_key(ctx)}'] for communication step")
@@ -930,7 +981,7 @@ def step_12_neighborhood_communication(ctx: Context, step: str) -> None:
         if len(idx) < 3:
             continue
         nn = NearestNeighbors(n_neighbors=min(ctx.config["spatial"]["n_neighs"] + 1, len(idx))).fit(coords[idx])
-        neigh = nn.kneighbors(return_distance=False)[:, 1:]
+        neigh = nn.kneighbors(coords[idx], return_distance=False)[:, 1:]
         for i_local, nbrs in enumerate(neigh):
             a = labels[idx[i_local]]
             for j_local in nbrs:
@@ -961,34 +1012,23 @@ def step_13_multi_sample_summary(ctx: Context, step: str) -> None:
 
 
 def step_14_report_index(ctx: Context, step: str) -> None:
-    lines = [
-        "# Spatial Transcriptomics Result Index",
-        "",
-        "This file is generated by `14_report_index` and lists currently available outputs.",
-        "",
-        "## Modules",
-        "",
-    ]
+    status_file = ctx.result_dir / "step_status.json"
+    states = json.loads(status_file.read_text()) if status_file.exists() else {}
+    lines = ["# 空间转录组结果索引", "", "依据当前输入签名及执行状态生成；文件存在本身不表示步骤完成。", "", "|模块|执行状态|表格|图文件|", "|---|---|---:|---:|"]
     for module in STEPS:
         mdir = ctx.result_dir / module
-        if not mdir.exists():
-            lines.append(f"- `{module}`: not run")
-            continue
+        status = states.get(module, {}).get("status", "not_run")
+        if module == step:
+            status = "completed"
         tables = sorted((mdir / "tables").glob("*")) if (mdir / "tables").exists() else []
         plots = sorted((mdir / "plots").glob("*")) if (mdir / "plots").exists() else []
-        lines.append(f"- `{module}`: {len(tables)} tables, {len(plots)} plot files")
-    lines.extend(
-        [
-            "",
-            "## Interpretation Rules",
-            "",
-            "- Full result tables are preserved before filtered review tables.",
-            "- `pvalue` is the working review significance column unless a module states a stricter corrected-statistic rule.",
-            "- Spatial domain and segment labels are computational labels until reviewed against histology and marker genes.",
-            "- Cell2location/RCTD/SPOTlight/MultiNicheNet outputs should be treated as optional high-compute branches with explicit reference provenance.",
-            "",
-        ]
-    )
+        lines.append(f"|{module}|{status}|{len(tables)}|{len(plots)}|")
+    lines.extend(["", "## 解释边界", "",
+        "- 本流程没有实现正式的条件间推断；第 11 步只输出样本描述，不产生条件 P 值或 logFC。",
+        "- spot、segment、切片均不能替代独立生物学样本。",
+        "- marker score 是表达评分，不能解释为细胞丰度。",
+        "- 空间域和 segment 为计算标签，需要组织学及 marker 审阅。",
+        "- Cell2location 是未在本轮验证的可选分支；RCTD、SPOTlight 等方法未接入本入口。", ""])
     ensure_dir(ctx.result_dir)
     (ctx.result_dir / "README.md").write_text("\n".join(lines), encoding="utf-8")
 
@@ -1004,7 +1044,7 @@ STEP_FUNCTIONS: dict[str, Callable[[Context, str], None]] = {
     "08_cell_type_annotation": step_08_cell_type_annotation,
     "09_deconvolution": step_09_deconvolution,
     "10_segment_objects": step_10_segment_objects,
-    "11_programs_differential": step_11_programs_differential,
+    "11_programs_descriptive": step_11_programs_descriptive,
     "12_neighborhood_communication": step_12_neighborhood_communication,
     "13_multi_sample_summary": step_13_multi_sample_summary,
     "14_report_index": step_14_report_index,
@@ -1013,9 +1053,92 @@ STEP_FUNCTIONS: dict[str, Callable[[Context, str], None]] = {
 
 def build_context(args: argparse.Namespace) -> Context:
     root = Path(args.project_root).resolve()
-    config = load_config(Path(args.config).resolve())
-    manifest = load_manifest(Path(args.manifest).resolve())
+    config_path = Path(args.config)
+    config = load_config(config_path if config_path.is_absolute() else root / config_path)
+    manifest_path = Path(args.manifest or config["paths"]["manifest"])
+    manifest = load_manifest(manifest_path if manifest_path.is_absolute() else root / manifest_path)
     return Context(project_root=root, config=config, manifest=manifest)
+
+
+def bind_run(ctx: Context, *, write: bool) -> None:
+    """A configuration/input change needs a new output tree, not leftover H5ADs."""
+    step_01_validate_inputs(ctx, "01_validate_inputs", write=False)
+    paths = {Path(__file__).resolve()}
+    marker = ctx.path(ctx.config["paths"]["marker_gene_file"])
+    if marker.is_file():
+        paths.add(marker)
+    ref = ctx.config["deconvolution"].get("reference_h5ad")
+    if ref:
+        paths.add(ctx.path(ref))
+    for row in active_rows(ctx):
+        if row["input_type"] == "visium_dir":
+            base = resolve_input_path(ctx, row)
+            paths.add(base / (row.get("count_file") or ctx.config["input"]["visium_count_file"]))
+            if (base / "spatial").is_dir():
+                paths.update(p for p in (base / "spatial").rglob("*") if p.is_file())
+        else:
+            keys = ("input_path",) if row["input_type"] == "h5ad" else ("count_file", "spatial_file")
+            paths.update(resolve_input_path(ctx, row, key) for key in keys)
+    hashes = {}
+    for path in sorted(paths):
+        h = hashlib.sha256()
+        with path.open("rb") as stream:
+            for block in iter(lambda: stream.read(8*1024*1024), b""):
+                h.update(block)
+        hashes[str(path.resolve())] = h.hexdigest()
+    payload = {"config": ctx.config, "manifest": ctx.manifest, "inputs": hashes}
+    signature = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+    target = ctx.result_dir / "run_signature.json"
+    if target.is_file():
+        if json.loads(target.read_text())["signature"] != signature:
+            raise ValueError("STALE: 配置、源码或输入已变；使用新的输出目录/项目副本")
+    else:
+        outputs = [ctx.processed_dir(),ctx.integrated_dir(),ctx.deconv_dir()]
+        existing = [p for folder in outputs if folder.exists() for p in folder.rglob("*.h5ad")]
+        existing += [p for p in ctx.result_dir.glob("*/tables/*") if p.is_file()]
+        if existing:
+            raise ValueError("UNVERIFIED: 已有结果没有输入签名，不能作为本次输入")
+        if write:
+            write_json(target, {"signature": signature, **payload})
+
+
+def execute_step(ctx: Context, step: str) -> None:
+    status_file = ctx.result_dir / "step_status.json"
+    states = json.loads(status_file.read_text()) if status_file.exists() else {}
+    position = STEPS.index(step)
+    # Each alternative set names the producers of files this step may consume.
+    required = {"03_qc_filter": ["02_build_objects"], "04_normalize_features": ["03_qc_filter"],
+                "05_integrate_cluster": ["04_normalize_features"], "06_spatial_neighbors_stats": ["05_integrate_cluster"],
+                "07_spatial_domains": ["05_integrate_cluster"], "08_cell_type_annotation": ["07_spatial_domains"],
+                "09_deconvolution": ["08_cell_type_annotation"], "10_segment_objects": ["08_cell_type_annotation"],
+                "11_programs_descriptive": ["08_cell_type_annotation"],
+                "12_neighborhood_communication": ["11_programs_descriptive", "10_segment_objects"],
+                "13_multi_sample_summary": ["11_programs_descriptive", "10_segment_objects", "08_cell_type_annotation"]}
+    if step != "14_report_index":
+        invalid = [name for name in STEPS[:position] if states.get(name, {}).get("status") in {"failed", "running"}]
+        if invalid:
+            raise ValueError("上游失败或尚未完成，拒绝使用遗留对象: " + ",".join(invalid))
+        producers = required.get(step, [])
+        if producers and not any(states.get(name, {}).get("status") == "completed" for name in producers):
+            raise ValueError("输入生产步骤未完成: " + ",".join(producers))
+    downstream = [name for name in STEPS[position+1:] if states.get(name,{}).get("status") == "completed"]
+    if downstream:
+        raise ValueError("下游已经完成；重跑上游需新输出树，防止复用旧下游: " + ",".join(downstream))
+    ensure_dir(ctx.step_dir(step) / "tables")
+    ensure_dir(ctx.step_dir(step) / "plots")
+    states[step] = {"status":"running"}; write_json(status_file,states)
+    try:
+        STEP_FUNCTIONS[step](ctx, step)
+    except BaseException as exc:
+        states[step] = {"status":"failed", "reason":str(exc)}; write_json(status_file,states)
+        raise
+    states[step] = {"status":"completed"}; write_json(status_file,states)
+
+
+def cmd_check(args: argparse.Namespace) -> None:
+    ctx = build_context(args)
+    bind_run(ctx, write=False)
+    print("PASS inputs; no outputs created")
 
 
 def cmd_list(_: argparse.Namespace) -> None:
@@ -1030,17 +1153,15 @@ def cmd_run_step(args: argparse.Namespace) -> None:
         step = STEPS[int(step) - 1]
     if step not in STEP_FUNCTIONS:
         raise SystemExit(f"Unknown step: {args.step}")
-    ensure_dir(ctx.step_dir(step) / "tables")
-    ensure_dir(ctx.step_dir(step) / "plots")
-    STEP_FUNCTIONS[step](ctx, step)
+    bind_run(ctx, write=True)
+    execute_step(ctx, step)
 
 
 def cmd_run_all(args: argparse.Namespace) -> None:
     ctx = build_context(args)
+    bind_run(ctx, write=True)
     for step in STEPS:
-        ensure_dir(ctx.step_dir(step) / "tables")
-        ensure_dir(ctx.step_dir(step) / "plots")
-        STEP_FUNCTIONS[step](ctx, step)
+        execute_step(ctx, step)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -1048,14 +1169,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     sub = parser.add_subparsers(dest="command", required=True)
     p_list = sub.add_parser("list", help="List pipeline steps")
     p_list.set_defaults(func=cmd_list)
-    for name in ["run-step", "run-all"]:
+    for name in ["run-step", "run-all", "check"]:
         p = sub.add_parser(name)
         p.add_argument("--project-root", default=".")
         p.add_argument("--config", default="config/spatial_config.yaml")
-        p.add_argument("--manifest", default="01rawdata/spatial_info.tsv")
+        p.add_argument("--manifest", default=None)
         if name == "run-step":
             p.add_argument("--step", required=True)
             p.set_defaults(func=cmd_run_step)
+        elif name == "check":
+            p.set_defaults(func=cmd_check)
         else:
             p.set_defaults(func=cmd_run_all)
     return parser.parse_args(argv)

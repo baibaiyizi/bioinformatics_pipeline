@@ -1,0 +1,7 @@
+sample	group	biological_sample_id	run_order
+C1	control	animal_C1	1
+T1	treated	animal_T1	2
+C2	control	animal_C2	3
+T2	treated	animal_T2	4
+C3	control	animal_C3	5
+T3	treated	animal_T3	6

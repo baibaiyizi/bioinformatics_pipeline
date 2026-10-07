@@ -1,0 +1,683 @@
+## Module 07. 差异 Peak 的功能富集分析
+
+对差异 Peak 关联的基因进行 GO 和 KEGG 富集分析。
+
+这一节的逻辑顺序固定为：
+
+1. 差异 peak 注释到基因。
+2. 以配置得到的 comparison-reference 作为主富集口径，并按可及性方向拆分子集。
+3. 构建 peak-derived 背景基因集，保存 GO / KEGG / compareCluster 全量结果表。
+4. 绘图与主要展示固定按原始 `pvalue < 0.05` 临时过滤；缺少原始 pvalue 时标为不可用，不回退校正列。`p.adjust`/qvalue 继续保留为补充诊断。
+5. 最后基于临时过滤结果绘制 barplot、dotplot、treeplot、cnetplot 和 compareCluster 图；若输入不足或无显著条目，则写 skipped-state。
+
+```{r peak_gene_enrichment_cache_gate, include=FALSE}
+if(isTRUE(reuse_step_tables) && file.exists(cache_07_peak_gene_enrichment_state_path)) {
+  load_state("07_peak_gene_enrichment_state.rds", env = globalenv(), required = TRUE)
+  cache_has_group_comparison_enrichment <- exists("diff_anno_df") &&
+    is.data.frame(diff_anno_df) &&
+    nrow(diff_anno_df) > 0 &&
+    exists("gene_membership_tbl") &&
+    is.data.frame(gene_membership_tbl) &&
+    nrow(gene_membership_tbl) > 0 &&
+    exists("go_results") &&
+    exists("kegg_results") &&
+    file.exists(step_table_file("Step7", "Annotated_DiffPeaks.csv")) &&
+    (!isTRUE(atac_enable_liftover_related_gene_annotation) ||
+       file.exists(step_table_file("Step7", "DifferentialPeak_RelatedGenes_liftOver_mm10ToMm39_EnsemblGTF.csv"))) &&
+    file.exists(step_table_file("Step7", "DifferentialPeak_Associated_Genes.csv")) &&
+    file.exists(step_table_file("Step7", "Peak_Gene_Enrichment_Input_Summary.csv"))
+  if(isTRUE(cache_has_group_comparison_enrichment)) {
+    report_status(
+      "INFO",
+      paste(
+        "Reusing cached peak-gene enrichment state for module 7:",
+        cache_07_peak_gene_enrichment_state_path,
+        "(set ATAC_REUSE_STEP_TABLES=false to recompute)"
+      )
+    )
+    knitr::knit_exit()
+  }
+  report_status("WARN", "Existing peak-gene enrichment cache lacks group-comparison enrichment state; recomputing module 7.")
+}
+```
+
+```{r enrichment}
+# 创建 Step7 结果目录
+step6_table_dir <- step_table_dir("Step7")
+step6_plot_dir <- step_plot_dir("Step7")
+
+pfos_entrez <- character(0)
+wt_entrez <- character(0)
+diff_entrez <- character(0)
+all_peaks_genes <- character(0)
+gene_membership_tbl <- data.frame()
+liftover_related_gene_tbl <- data.frame()
+liftover_related_gene_summary_tbl <- data.frame()
+go_results <- list()
+kegg_results <- list()
+ck_go_raw <- NULL
+ck_kegg_raw <- NULL
+
+step5_official_res_df <- read_step_table("Step5", "Differential_Peaks.csv", check.names = FALSE)
+if(nrow(step5_official_res_df) > 0) {
+  step5_official_res_df <- standardize_diff_peak_df(step5_official_res_df)
+  if(!exists("res_df") || !is.data.frame(res_df) || nrow(res_df) < nrow(step5_official_res_df)) {
+    report_status("WARN", "Using Step5 Differential_Peaks.csv as the authoritative module 7 enrichment input.")
+    res_df <- step5_official_res_df
+  }
+}
+
+enrichment_plot_files <- function(prefix) {
+  c(
+    paste0(prefix, "_barplot.pdf"),
+    paste0(prefix, "_dotplot.pdf"),
+    paste0(prefix, "_treeplot.pdf"),
+    paste0(prefix, "_cnetplot.pdf")
+  )
+}
+
+compare_plot_files <- function(prefix) {
+  c(paste0(prefix, "_dotplot.pdf"), paste0(prefix, "_barplot.pdf"))
+}
+
+remove_step6_table <- function(file_name) {
+  unlink(file.path(step6_table_dir, file_name), force = TRUE)
+}
+
+write_enrichment_plot_skip <- function(prefix, reason, compare = FALSE) {
+  write_skipped_state(
+    "Step7",
+    prefix,
+    reason,
+    clear_plot_files = if(compare) compare_plot_files(prefix) else enrichment_plot_files(prefix)
+  )
+}
+
+resolve_ensembl_txdb_sqlite <- function(gtf_file) {
+  candidates <- c(
+    Sys.getenv("ATAC_ENSEMBL_TXDB_SQLITE", unset = ""),
+    sub("\\.gtf$", ".gtf.sqlite", gtf_file),
+    paste0(gtf_file, ".sqlite")
+  )
+  candidates <- candidates[nzchar(candidates)]
+  hits <- candidates[file.exists(candidates)]
+  if(length(hits) > 0) hits[1] else ""
+}
+
+read_ensembl_txdb_sqlite_feature_table <- function(gtf_file) {
+  sqlite_file <- resolve_ensembl_txdb_sqlite(gtf_file)
+  if(!nzchar(sqlite_file)) {
+    handle_nonfatal(
+      paste("Ensembl TxDb SQLite was not found for liftOver related-gene annotation. GTF:", gtf_file),
+      step = "Step7"
+    )
+    return(data.frame())
+  }
+  if(!requireNamespace("DBI", quietly = TRUE) || !requireNamespace("RSQLite", quietly = TRUE)) {
+    handle_nonfatal("Packages DBI and RSQLite are required for TxDb-SQL related-gene annotation.", step = "Step7")
+    return(data.frame())
+  }
+
+  con <- DBI::dbConnect(RSQLite::SQLite(), sqlite_file)
+  on.exit(DBI::dbDisconnect(con), add = TRUE)
+
+  tx <- DBI::dbGetQuery(con, "select * from transcript") %>%
+    transmute(
+      tx_id = as.integer(`_tx_id`),
+      transcript_id = tx_name,
+      seqnames = ensure_ucsc_seqnames(tx_chrom),
+      strand = tx_strand,
+      start = as.integer(tx_start),
+      end = as.integer(tx_end)
+    )
+  gene <- DBI::dbGetQuery(con, "select * from gene") %>%
+    transmute(gene_id = gene_id, tx_id = as.integer(`_tx_id`))
+  exon <- DBI::dbGetQuery(con, "select * from exon") %>%
+    transmute(
+      exon_id = as.integer(`_exon_id`),
+      seqnames = ensure_ucsc_seqnames(exon_chrom),
+      strand = exon_strand,
+      start = as.integer(exon_start),
+      end = as.integer(exon_end)
+    )
+  cds <- DBI::dbGetQuery(con, "select * from cds") %>%
+    transmute(
+      cds_id = as.integer(`_cds_id`),
+      seqnames = ensure_ucsc_seqnames(cds_chrom),
+      strand = cds_strand,
+      start = as.integer(cds_start),
+      end = as.integer(cds_end)
+    )
+  splicing <- DBI::dbGetQuery(con, "select * from splicing") %>%
+    transmute(
+      tx_id = as.integer(`_tx_id`),
+      exon_rank = as.integer(exon_rank),
+      exon_id = as.integer(`_exon_id`),
+      cds_id = as.integer(`_cds_id`)
+    )
+
+  tx_gene <- tx %>% inner_join(gene, by = "tx_id")
+  gene_symbol_map <- tryCatch(
+    AnnotationDbi::select(
+      org.Mm.eg.db,
+      keys = unique(tx_gene$gene_id),
+      keytype = "ENSEMBL",
+      columns = c("SYMBOL")
+    ) %>%
+      distinct(ENSEMBL, .keep_all = TRUE) %>%
+      transmute(gene_id = ENSEMBL, gene_name = SYMBOL),
+    error = function(e) data.frame(gene_id = character(), gene_name = character(), stringsAsFactors = FALSE)
+  )
+  tx_gene <- tx_gene %>%
+    left_join(gene_symbol_map, by = "gene_id") %>%
+    mutate(gene_name = ifelse(is.na(gene_name) | !nzchar(gene_name), gene_id, gene_name))
+
+  gene_ranges <- tx_gene %>%
+    group_by(gene_id, gene_name, seqnames, strand) %>%
+    summarise(gene_start = min(start), gene_end = max(end), .groups = "drop")
+
+  tx_features <- tx_gene %>%
+    transmute(seqnames, start, end, strand, feature = "transcript", gene_id, gene_name, transcript_id)
+  exon_features <- splicing %>%
+    inner_join(exon, by = "exon_id") %>%
+    inner_join(tx_gene %>% dplyr::select(tx_id, gene_id, gene_name, transcript_id), by = "tx_id") %>%
+    transmute(seqnames, start, end, strand, feature = "exon", gene_id, gene_name, transcript_id)
+  cds_features <- splicing %>%
+    filter(!is.na(cds_id)) %>%
+    inner_join(cds, by = "cds_id") %>%
+    inner_join(tx_gene %>% dplyr::select(tx_id, gene_id, gene_name, transcript_id), by = "tx_id") %>%
+    transmute(seqnames, start, end, strand, feature = "CDS", gene_id, gene_name, transcript_id)
+
+  cds_bounds <- cds_features %>%
+    group_by(transcript_id) %>%
+    summarise(cds_start = min(start), cds_end = max(end), .groups = "drop")
+  utr_base <- exon_features %>%
+    inner_join(tx_gene %>% dplyr::select(transcript_id, tx_strand = strand), by = "transcript_id") %>%
+    inner_join(cds_bounds, by = "transcript_id")
+
+  utr_features <- bind_rows(
+    utr_base %>%
+      filter(tx_strand == "+", start < cds_start) %>%
+      transmute(seqnames, start = start, end = pmin(end, cds_start - 1L), strand, feature = "five_prime_utr", gene_id, gene_name, transcript_id),
+    utr_base %>%
+      filter(tx_strand == "-", end > cds_end) %>%
+      transmute(seqnames, start = pmax(start, cds_end + 1L), end = end, strand, feature = "five_prime_utr", gene_id, gene_name, transcript_id),
+    utr_base %>%
+      filter(tx_strand == "+", end > cds_end) %>%
+      transmute(seqnames, start = pmax(start, cds_end + 1L), end = end, strand, feature = "three_prime_utr", gene_id, gene_name, transcript_id),
+    utr_base %>%
+      filter(tx_strand == "-", start < cds_start) %>%
+      transmute(seqnames, start = start, end = pmin(end, cds_start - 1L), strand, feature = "three_prime_utr", gene_id, gene_name, transcript_id)
+  )
+
+  gene_body_features <- gene_ranges %>%
+    transmute(seqnames, start = gene_start, end = gene_end, strand, feature = "gene", gene_id, gene_name, transcript_id = NA_character_)
+  up2k_df <- gene_ranges %>%
+    transmute(
+      seqnames,
+      start = ifelse(strand == "+", pmax(1L, gene_start - 2000L), gene_end + 1L),
+      end = ifelse(strand == "+", gene_start - 1L, gene_end + 2000L),
+      strand,
+      feature = "Up2K",
+      gene_id,
+      gene_name,
+      transcript_id = NA_character_
+    ) %>%
+    filter(start >= 1, end >= start)
+  down2k_df <- gene_ranges %>%
+    transmute(
+      seqnames,
+      start = ifelse(strand == "+", gene_end + 1L, pmax(1L, gene_start - 2000L)),
+      end = ifelse(strand == "+", gene_end + 2000L, gene_start - 1L),
+      strand,
+      feature = "Down2K",
+      gene_id,
+      gene_name,
+      transcript_id = NA_character_
+    ) %>%
+    filter(start >= 1, end >= start)
+
+  bind_rows(gene_body_features, tx_features, exon_features, cds_features, utr_features, up2k_df, down2k_df) %>%
+    mutate(
+      gene_biotype = NA_character_,
+      transcript_biotype = NA_character_
+    ) %>%
+    filter(start >= 1, end >= start) %>%
+    distinct()
+}
+
+annotate_diff_peaks_after_liftover <- function(diff_input, chain_file, gtf_file) {
+  if(!isTRUE(atac_enable_liftover_related_gene_annotation)) return(data.frame())
+  if(!file.exists(chain_file)) {
+    handle_nonfatal(paste("mm10-to-mm39 chain file not found; skip liftOver related-gene annotation:", chain_file), step = "Step7")
+    return(data.frame())
+  }
+  if(!requireNamespace("rtracklayer", quietly = TRUE)) {
+    handle_nonfatal("Package rtracklayer is required for liftOver related-gene annotation.", step = "Step7")
+    return(data.frame())
+  }
+
+  diff_input <- standardize_diff_peak_df(diff_input) %>%
+    filter(!is.na(seqnames), !is.na(start), !is.na(end), start >= 1, end >= start) %>%
+    mutate(SourcePeakIndex = dplyr::row_number())
+  if(nrow(diff_input) == 0) return(data.frame())
+
+  source_gr <- GRanges(seqnames = diff_input$seqnames, ranges = IRanges(start = diff_input$start, end = diff_input$end))
+  keep_idx <- as.logical(seqnames(source_gr) %in% paste0("chr", c(1:19, "X", "Y")))
+  source_gr <- source_gr[keep_idx]
+  if(length(source_gr) == 0) return(data.frame())
+  source_gr$SourcePeakIndex <- diff_input$SourcePeakIndex[keep_idx]
+
+  chain <- rtracklayer::import.chain(chain_file)
+  lifted_list <- rtracklayer::liftOver(source_gr, chain)
+  lifted_counts <- S4Vectors::elementNROWS(lifted_list)
+  if(sum(lifted_counts) == 0) {
+    handle_nonfatal("No differential peaks mapped through mm10-to-mm39 liftOver.", step = "Step7")
+    return(data.frame())
+  }
+
+  lifted_gr <- unlist(lifted_list, use.names = FALSE)
+  lifted_gr$SourcePeakIndex <- rep(source_gr$SourcePeakIndex, lifted_counts)
+  lifted_gr$LiftOverMapIndex <- sequence(lifted_counts)
+
+  gtf_features <- read_ensembl_txdb_sqlite_feature_table(gtf_file)
+  if(nrow(gtf_features) == 0) return(data.frame())
+  feature_gr <- GRanges(seqnames = gtf_features$seqnames, ranges = IRanges(start = gtf_features$start, end = gtf_features$end))
+  S4Vectors::mcols(feature_gr) <- S4Vectors::DataFrame(gtf_features[, setdiff(colnames(gtf_features), c("seqnames", "start", "end")), drop = FALSE])
+
+  hits <- findOverlaps(lifted_gr, feature_gr, ignore.strand = TRUE)
+  if(length(hits) == 0) return(data.frame())
+
+  hit_tbl <- data.frame(
+    SourcePeakIndex = lifted_gr$SourcePeakIndex[queryHits(hits)],
+    LiftOverMapIndex = lifted_gr$LiftOverMapIndex[queryHits(hits)],
+    LiftedChr = as.character(seqnames(lifted_gr))[queryHits(hits)],
+    LiftedStart = start(lifted_gr)[queryHits(hits)],
+    LiftedEnd = end(lifted_gr)[queryHits(hits)],
+    Feature = as.character(S4Vectors::mcols(feature_gr)$feature[subjectHits(hits)]),
+    GeneID = as.character(S4Vectors::mcols(feature_gr)$gene_id[subjectHits(hits)]),
+    Gene = as.character(S4Vectors::mcols(feature_gr)$gene_name[subjectHits(hits)]),
+    TranscriptID = as.character(S4Vectors::mcols(feature_gr)$transcript_id[subjectHits(hits)]),
+    GeneBiotype = as.character(S4Vectors::mcols(feature_gr)$gene_biotype[subjectHits(hits)]),
+    TranscriptBiotype = as.character(S4Vectors::mcols(feature_gr)$transcript_biotype[subjectHits(hits)]),
+    stringsAsFactors = FALSE
+  )
+
+  yes_no <- function(x) ifelse(isTRUE(x), "YES", "NO")
+  related_tbl <- hit_tbl %>%
+    group_by(SourcePeakIndex, LiftOverMapIndex, LiftedChr, LiftedStart, LiftedEnd, GeneID, Gene, GeneBiotype) %>%
+    summarise(
+      TranscriptIDs = paste(sort(unique(TranscriptID[!is.na(TranscriptID) & nzchar(TranscriptID)])), collapse = ";"),
+      TranscriptBiotypes = paste(sort(unique(TranscriptBiotype[!is.na(TranscriptBiotype) & nzchar(TranscriptBiotype)])), collapse = ";"),
+      FeatureTypes = paste(sort(unique(Feature)), collapse = ";"),
+      CDS = yes_no(any(Feature == "CDS")),
+      Intron = yes_no(any(Feature %in% c("gene", "transcript")) && !any(Feature %in% c("exon", "CDS", "five_prime_utr", "three_prime_utr"))),
+      UTR3 = yes_no(any(Feature == "three_prime_utr")),
+      UTR5 = yes_no(any(Feature == "five_prime_utr")),
+      Exon = yes_no(any(Feature == "exon")),
+      Up2K = yes_no(any(Feature == "Up2K")),
+      Down2K = yes_no(any(Feature == "Down2K")),
+      .groups = "drop"
+    )
+
+  source_tbl <- diff_input %>%
+    dplyr::select(
+      SourcePeakIndex,
+      Chr = seqnames,
+      Start = start,
+      End = end,
+      peak_id,
+      peak_id_join,
+      Fold,
+      pvalue,
+      FDR,
+      PrimaryDiffPeak,
+      DiffPeakClass,
+      DiffDirection
+    )
+
+  related_tbl %>%
+    left_join(source_tbl, by = "SourcePeakIndex") %>%
+    mutate(
+      AnnotationSource = "mm10 coordinates lifted to mm39; Ensembl GRCm39 GTF related-gene overlap",
+      ChainFile = chain_file,
+      GTFFile = gtf_file
+    ) %>%
+    dplyr::select(
+      Chr, Start, End, peak_id, peak_id_join, LiftedChr, LiftedStart, LiftedEnd, LiftOverMapIndex,
+      GeneID, Gene, GeneBiotype, TranscriptIDs, TranscriptBiotypes, FeatureTypes,
+      CDS, Intron, UTR3, UTR5, Exon, Up2K, Down2K,
+      Fold, pvalue, FDR, PrimaryDiffPeak, DiffPeakClass, DiffDirection,
+      AnnotationSource, ChainFile, GTFFile
+    ) %>%
+    arrange(Chr, Start, End, Gene)
+}
+
+if(nrow(res_df) > 0) {
+  cat("Preparing differential peaks...\n")
+  diff_peak_source <- paste("Step5 primary", primary_diff_peak_label())
+  diff_input <- filter_diff_peaks(res_df, mode = "primary") %>%
+    dplyr::filter(!is.na(seqnames), !is.na(start), !is.na(end))
+
+  diff_peaks <- GRanges()
+  if(nrow(diff_input) > 0) {
+    diff_peaks <- diff_peak_granges(diff_input)
+  }
+
+  save_step_table(
+    data.frame(
+      Source = diff_peak_source,
+      ResDfRows = nrow(res_df),
+      Step5OfficialTableRows = nrow(step5_official_res_df),
+      DiffInputRows = nrow(diff_input),
+      DiffPeakRangesBeforePrimaryChrFilter = length(diff_peaks),
+      stringsAsFactors = FALSE
+    ),
+    "Step7",
+    "Peak_Gene_Enrichment_Input_Summary.csv"
+  )
+
+  if(length(diff_peaks) == 0) {
+    cat("No peaks passed the threshold, skip enrichment.\n")
+    write_skipped_state("Step7", "Peak_Gene_Enrichment", paste("No Step5 primary differential peaks passed", primary_diff_peak_label(), "."))
+  } else {
+    diff_peaks <- keep_primary_chromosomes(diff_peaks)
+    if(length(diff_peaks) == 0) {
+      cat("No primary-chromosome peaks remained for enrichment.\n")
+      write_skipped_state("Step7", "Peak_Gene_Enrichment", "No primary-chromosome Step5 differential peaks remained for enrichment.")
+    } else {
+      cat("Annotating peaks...\n")
+      txdb_step6 <- TxDb.Mmusculus.UCSC.mm39.refGene
+      diff_anno <- annotatePeak(diff_peaks, TxDb = txdb_step6, tssRegion = c(-2000, 2000), annoDb = "org.Mm.eg.db")
+      diff_tbl <- as.data.frame(diff_anno)
+      colnames(diff_tbl) <- make.unique(colnames(diff_tbl), sep = "_dup")
+      if("SYMBOL" %in% colnames(diff_tbl) && !"geneSymbol" %in% colnames(diff_tbl)) {
+        colnames(diff_tbl)[colnames(diff_tbl) == "SYMBOL"] <- "geneSymbol"
+      }
+      if(!"geneSymbol" %in% colnames(diff_tbl)) {
+        diff_tbl$geneSymbol <- NA_character_
+      }
+      diff_metric_tbl <- diff_input %>%
+        dplyr::select(peak_id_join, Fold_join = Fold, FDR_join = FDR, pvalue_join = pvalue) %>%
+        dplyr::distinct(peak_id_join, .keep_all = TRUE)
+      coalesce_numeric_columns <- function(df, cols) {
+        out <- rep(NA_real_, nrow(df))
+        for(col in cols) {
+          if(col %in% colnames(df)) {
+            out <- dplyr::coalesce(out, suppressWarnings(as.numeric(df[[col]])))
+          }
+        }
+        out
+      }
+      diff_tbl <- diff_tbl %>%
+        mutate(
+          seqnames = ensure_ucsc_seqnames(seqnames),
+          peak_id_join = canonical_peak_id(seqnames, start, end)
+        ) %>%
+        left_join(diff_metric_tbl, by = "peak_id_join")
+      diff_tbl$Fold <- coalesce_numeric_columns(diff_tbl, c("Fold", "Fold_join"))
+      diff_tbl$FDR <- coalesce_numeric_columns(diff_tbl, c("FDR", "FDR_join"))
+      diff_tbl$pvalue <- coalesce_numeric_columns(diff_tbl, c("pvalue", "pvalue_join"))
+      diff_tbl <- diff_tbl %>%
+        dplyr::select(-dplyr::any_of(c("Fold_join", "FDR_join", "pvalue_join"))) %>%
+        mutate(
+          Comparison = contrast_label,
+          Direction = direction_factor(Fold),
+          AnalysisRole = "comparison_reference_differential_peak",
+          DiffSet = diff_peak_source
+        )
+      diff_anno_df <- diff_tbl
+      save_csv_df(diff_tbl, file.path(step6_table_dir, "Annotated_DiffPeaks.csv"))
+
+      if(isTRUE(atac_enable_liftover_related_gene_annotation)) {
+        liftover_related_gene_tbl <- annotate_diff_peaks_after_liftover(
+          diff_input = diff_input,
+          chain_file = atac_mm10_to_mm39_chain_file,
+          gtf_file = atac_ensembl_gtf_file
+        )
+        if(nrow(liftover_related_gene_tbl) > 0) {
+          save_csv_df(
+            liftover_related_gene_tbl,
+            file.path(step6_table_dir, "DifferentialPeak_RelatedGenes_liftOver_mm10ToMm39_EnsemblGTF.csv")
+          )
+          liftover_related_gene_summary_tbl <- liftover_related_gene_tbl %>%
+            group_by(Chr, Start, End, peak_id, peak_id_join, LiftedChr, LiftedStart, LiftedEnd, Fold, pvalue, FDR, DiffDirection) %>%
+            summarise(
+              RelatedGeneCount = dplyr::n_distinct(GeneID),
+              RelatedGenes = paste(sort(unique(Gene[!is.na(Gene) & nzchar(Gene)])), collapse = ";"),
+              RelatedGeneIDs = paste(sort(unique(GeneID[!is.na(GeneID) & nzchar(GeneID)])), collapse = ";"),
+              RelatedFeatures = paste(sort(unique(FeatureTypes[!is.na(FeatureTypes) & nzchar(FeatureTypes)])), collapse = ";"),
+              .groups = "drop"
+            )
+          save_csv_df(
+            liftover_related_gene_summary_tbl,
+            file.path(step6_table_dir, "DifferentialPeak_RelatedGene_Summary_liftOver_mm10ToMm39_EnsemblGTF.csv")
+          )
+          cat("liftOver mm10->mm39 Ensembl GTF related peak-gene rows:", nrow(liftover_related_gene_tbl), "\n")
+        } else {
+          write_skipped_state(
+            "Step7",
+            "LiftOver_RelatedGene_Annotation",
+            "No liftOver mm10-to-mm39 Ensembl GTF related-gene annotations were generated."
+          )
+        }
+      } else {
+        write_skipped_state(
+          "Step7",
+          "LiftOver_RelatedGene_Annotation",
+          "ATAC_ENABLE_LIFTOVER_RELATED_GENE_ANNOTATION is false; native mm39 peaks were annotated directly without mm10-to-mm39 liftOver."
+        )
+      }
+
+      get_clean_ids <- function(ids) {
+        if(is.list(ids)) ids <- unlist(ids)
+        ids <- as.character(ids)
+        ids <- trimws(ids)
+        ids <- ids[!is.na(ids) & ids != ""]
+        unique(ids)
+      }
+
+      pfos_entrez <- get_clean_ids(diff_tbl$geneId[diff_tbl$Fold > 0])
+      wt_entrez <- get_clean_ids(diff_tbl$geneId[diff_tbl$Fold < 0])
+      diff_entrez <- get_clean_ids(diff_tbl$geneId)
+
+      gene_membership_tbl <- bind_rows(
+        data.frame(Comparison = contrast_label, Direction = comparison_open_label, AnalysisRole = "directional_subset", ENTREZID = pfos_entrez, stringsAsFactors = FALSE),
+        data.frame(Comparison = contrast_label, Direction = reference_open_label, AnalysisRole = "directional_subset", ENTREZID = wt_entrez, stringsAsFactors = FALSE),
+        data.frame(Comparison = contrast_label, Direction = "All-differential", AnalysisRole = "comparison_set", ENTREZID = diff_entrez, stringsAsFactors = FALSE)
+      )
+      save_csv_df(gene_membership_tbl, file.path(step6_table_dir, "DifferentialPeak_Associated_Genes.csv"))
+
+      all_peaks_genes <- unique(unlist(lapply(peaks_list, function(p) {
+        peak_gr <- keep_primary_chromosomes(p)
+        if(length(peak_gr) == 0) return(character(0))
+        anno <- annotatePeak(peak_gr, TxDb = txdb_step6, verbose = FALSE)
+        as.data.frame(anno)$geneId
+      })))
+      all_peaks_genes <- get_clean_ids(all_peaks_genes)
+      save_csv_df(data.frame(ENTREZID = all_peaks_genes, stringsAsFactors = FALSE),
+                  file.path(step6_table_dir, "Background_Peak_Associated_Genes.csv"))
+
+      cat(contrast_label, "differential peak-associated genes:", length(diff_entrez), "\n")
+      cat(comparison_open_label, "directional subset genes:", length(pfos_entrez), "\n")
+      cat(reference_open_label, "directional subset genes:", length(wt_entrez), "\n")
+      cat("背景基因集大小 (所有 peaks 关联基因):", length(all_peaks_genes), "\n")
+
+      go_ontologies <- c("BP", "MF", "CC", "ALL")
+      enrichment_sets <- list(
+        list(key = gsub("[^A-Za-z0-9]+", "_", contrast_label), label = contrast_label, genes = diff_entrez, role = "comparison set"),
+        list(key = "comparison_open", label = comparison_open_label, genes = pfos_entrez, role = "directional subset"),
+        list(key = "reference_open", label = reference_open_label, genes = wt_entrez, role = "directional subset")
+      )
+
+      for(set_info in enrichment_sets) {
+        gene_vec <- set_info$genes
+        for(ont in go_ontologies) {
+          prefix <- paste0("GO_", set_info$key, "_", ont)
+          out_file <- paste0(prefix, ".csv")
+          if(length(gene_vec) < 5) {
+            remove_step6_table(out_file)
+            write_enrichment_plot_skip(prefix, paste("Fewer than five genes were available for GO", ont, "enrichment in the", set_info$label, set_info$role, "."))
+            next
+          }
+          go_raw <- run_go_enrichment(gene_vec, set_info$label, ont, universe_genes = all_peaks_genes)
+          if(is.null(go_raw)) {
+            remove_step6_table(out_file)
+            write_enrichment_plot_skip(prefix, paste("GO", ont, "enrichment returned no result for the", set_info$label, set_info$role, "."))
+            next
+          }
+          save_csv_df(go_raw, file.path(step6_table_dir, out_file))
+          go_results[[paste(set_info$key, ont, sep = "_")]] <- go_raw
+          if(nrow(as.data.frame(filter_enrich_result(go_raw, p_cutoff = 0.05))) > 0) {
+            plot_enrichment_suite(
+              go_raw,
+              prefix = prefix,
+              title = paste("GO", ont, "Enrichment -", set_info$label, set_info$role),
+              plot_dir = step6_plot_dir
+            )
+          } else {
+            write_enrichment_plot_skip(prefix, paste("GO", ont, "enrichment for the", set_info$label, set_info$role, "had no terms with raw pvalue < 0.05."))
+          }
+        }
+      }
+
+      for(set_info in enrichment_sets) {
+        gene_vec <- set_info$genes
+        prefix <- paste0("KEGG_", set_info$key)
+        out_file <- paste0(prefix, ".csv")
+        if(length(gene_vec) < 5) {
+          remove_step6_table(out_file)
+          write_enrichment_plot_skip(prefix, paste("Fewer than five genes were available for KEGG enrichment in the", set_info$label, set_info$role, "."))
+          next
+        }
+        kegg_raw <- run_kegg_enrichment(gene_vec, set_info$label, universe_genes = all_peaks_genes)
+        if(is.null(kegg_raw)) {
+          remove_step6_table(out_file)
+          write_enrichment_plot_skip(prefix, paste("KEGG enrichment returned no result for the", set_info$label, set_info$role, "."))
+          next
+        }
+        save_csv_df(kegg_raw, file.path(step6_table_dir, out_file))
+        kegg_results[[set_info$key]] <- kegg_raw
+        if(nrow(as.data.frame(filter_enrich_result(kegg_raw, p_cutoff = 0.05))) > 0) {
+          plot_enrichment_suite(
+            kegg_raw,
+            prefix = prefix,
+            title = paste("KEGG Enrichment -", set_info$label, set_info$role),
+            plot_dir = step6_plot_dir
+          )
+        } else {
+          write_enrichment_plot_skip(prefix, paste("KEGG enrichment for the", set_info$label, set_info$role, "had no pathways with raw pvalue < 0.05."))
+        }
+      }
+
+      if(length(pfos_entrez) > 5 && length(wt_entrez) > 5) {
+        gene_list <- stats::setNames(list(pfos_entrez, wt_entrez), c(comparison_open_label, reference_open_label))
+
+        cat("Running GO comparison...\n")
+        ck_go_raw <- tryCatch(
+          compareCluster(
+            geneCluster = gene_list,
+            fun = "enrichGO",
+            OrgDb = org.Mm.eg.db,
+            ont = "BP",
+            universe = all_peaks_genes,
+            pvalueCutoff = 1,
+            qvalueCutoff = 1
+          ),
+          error = function(e) {
+            cat("GO comparison failed:", e$message, "\n")
+            NULL
+          }
+        )
+        if(is.null(ck_go_raw)) {
+          remove_step6_table("GO_Compare.csv")
+          write_enrichment_plot_skip("GO_Compare", "GO compareCluster returned no result.", compare = TRUE)
+        } else {
+          save_csv_df(ck_go_raw, file.path(step6_table_dir, "GO_Compare.csv"))
+        }
+        if(!is.null(ck_go_raw) && nrow(as.data.frame(filter_compare_cluster_result(ck_go_raw, p_cutoff = 0.05))) > 0) {
+          plot_compare_cluster_suite(
+            ck_go_raw,
+            prefix = "GO_Compare",
+            title = "GO Enrichment Comparison",
+            plot_dir = step6_plot_dir
+          )
+        } else if(!is.null(ck_go_raw)) {
+          write_enrichment_plot_skip("GO_Compare", "GO compareCluster had no terms with raw pvalue < 0.05.", compare = TRUE)
+        }
+
+        cat("Running KEGG comparison...\n")
+        ck_kegg_raw <- tryCatch(
+          compareCluster(
+            geneCluster = gene_list,
+            fun = "enrichKEGG",
+            organism = "mmu",
+            universe = all_peaks_genes,
+            pvalueCutoff = 1,
+            qvalueCutoff = 1
+          ),
+          error = function(e) {
+            cat("KEGG comparison failed:", e$message, "\n")
+            NULL
+          }
+        )
+        if(is.null(ck_kegg_raw)) {
+          remove_step6_table("KEGG_Compare.csv")
+          write_enrichment_plot_skip("KEGG_Compare", "KEGG compareCluster returned no result.", compare = TRUE)
+        } else {
+          save_csv_df(ck_kegg_raw, file.path(step6_table_dir, "KEGG_Compare.csv"))
+        }
+        if(!is.null(ck_kegg_raw) && nrow(as.data.frame(filter_compare_cluster_result(ck_kegg_raw, p_cutoff = 0.05))) > 0) {
+          plot_compare_cluster_suite(
+            ck_kegg_raw,
+            prefix = "KEGG_Compare",
+            title = "KEGG Enrichment Comparison",
+            plot_dir = step6_plot_dir
+          )
+        } else if(!is.null(ck_kegg_raw)) {
+          write_enrichment_plot_skip("KEGG_Compare", "KEGG compareCluster had no pathways with raw pvalue < 0.05.", compare = TRUE)
+        }
+      } else {
+        remove_step6_table("GO_Compare.csv")
+        remove_step6_table("KEGG_Compare.csv")
+        write_enrichment_plot_skip(
+          "GO_Compare",
+          paste0("GO compareCluster requires both directional subsets to have more than five genes; ", comparison_open_label, "=", length(pfos_entrez), ", ", reference_open_label, "=", length(wt_entrez), "."),
+          compare = TRUE
+        )
+        write_enrichment_plot_skip(
+          "KEGG_Compare",
+          paste0("KEGG compareCluster requires both directional subsets to have more than five genes; ", comparison_open_label, "=", length(pfos_entrez), ", ", reference_open_label, "=", length(wt_entrez), "."),
+          compare = TRUE
+        )
+      }
+    }
+  }
+} else {
+  cat("没有显著差异的 Peak，跳过富集分析。\n")
+  write_skipped_state("Step7", "Peak_Gene_Enrichment", "No Step5 differential peaks were available.")
+}
+```
+
+## 6.1 废弃：单样本 Peak 相关基因富集
+
+本模块不生成单样本 GO/KEGG 富集结果。富集口径固定为配置所得的两组比较主差异 peak，并可按两个可及性方向子集解释。
+
+```{r deprecated_sample_peak_enrichment}
+deprecated_sample_enrichment_summary <- data.frame()
+deprecated_sample_peak_gene_tbl <- data.frame()
+```
+
+```{r save_tracks_enrichment_state, include=FALSE}
+save_state(
+  "07_peak_gene_enrichment_state.rds",
+  c(
+    "top_peak", "diff_peaks", "diff_peak_source", "diff_anno", "diff_anno_df",
+    "pfos_entrez", "wt_entrez", "diff_entrez", "all_peaks_genes",
+    "gene_membership_tbl", "liftover_related_gene_tbl", "liftover_related_gene_summary_tbl",
+    "go_results", "kegg_results",
+    "ck_go_raw", "ck_kegg_raw", "deprecated_sample_peak_gene_tbl",
+    "deprecated_sample_enrichment_summary"
+  )
+)
+```

@@ -11,12 +11,22 @@ ensure_step_dirs(
   "result/8_multiomics/tables/1"
 )
 
-ensure_dmr_outputs_loaded()
+legacy_multiomics_tables <- c(
+  Sys.glob("result/8_multiomics/tables/1/quadrant_kegg_*.csv"),
+  Sys.glob("result/8_multiomics/tables/1/quadrant_go_*.csv"),
+  Sys.glob("result/8_multiomics/tables/1/quadrant_enrichment_status_*.csv"),
+  Sys.glob("result/8_multiomics/tables/1/gene_centric_*_GSEA.csv")
+)
+if(length(legacy_multiomics_tables) > 0) unlink(legacy_multiomics_tables)
 
-rna_p_threshold <- config$rna_p_threshold
+ensure_dmr_outputs_loaded()
+has_cgi_context <- isTRUE(ensure_dmr_cgi_context(required = FALSE, persist = TRUE))
+ensure_expr_loaded(required = FALSE)
+
+rna_significance <- significance_spec("rna")
 rna_log2fc_threshold <- config$rna_log2fc_threshold
 multiomics_methyl_delta <- config$multiomics_methyl_delta
-enrichment_p_threshold <- config$enrichment_p_threshold
+enrichment_significance <- significance_spec("enrichment")
 enrich_top_n_kegg <- config$enrichment_top_n_kegg
 enrich_top_n_go <- config$enrichment_top_n_go
 enrich_goplot_top_n <- config$enrichment_goplot_top_n
@@ -24,15 +34,13 @@ enrich_cnet_show_category <- config$enrichment_cnet_show_category
 enrich_tree_show_category <- config$enrichment_tree_show_category
 
 if(!"CGI_context" %in% colnames(dmr_anno_df)) {
-  dmr_anno_df$CGI_context <- "Open_Sea"
+  dmr_anno_df$CGI_context <- NA_character_
 }
 
 # 1 RNA-seq 联合分析
-# 这一层保留 DMR-level join，优点是信息完整；后面的 7.2 再做 gene-centric 去重版本。
-if(file.exists(config$rna_seq_file)) {
+# 这一层保留 DMR-level join，优点是信息完整；后面的第 2 节再做 gene-centric 去重版本。
+if(exists("expr_df", inherits = FALSE)) {
   message("⏳ 联合 RNA-seq 分析...")
-  expr_df <- read_expr_results(config$rna_seq_file)
-
   dmr_expr <- inner_join(dmr_anno_df, expr_df, by = "gene_id_clean")
   if(!"SYMBOL" %in% colnames(dmr_expr)) {
     tryCatch({
@@ -50,6 +58,9 @@ if(file.exists(config$rna_seq_file)) {
         diffMethy > multiomics_methyl_delta & log2FoldChange < -rna_log2fc_threshold ~ "Hyper-Down",
         TRUE ~ "NS"
       ))
+    dmr_expr$rna_is_selected_significant <- selected_significance_mask(
+      dmr_expr, domain = "rna", context = "multiomics RNA result"
+    )
 
     quad_counts <- dmr_expr %>% group_by(Quadrant) %>% summarise(count = n())
 
@@ -75,6 +86,11 @@ if(file.exists(config$rna_seq_file)) {
     ggsave("result/8_multiomics/plots/1/quadrant_scatter.pdf", p_quad, width = 7, height = 6, device = cairo_pdf)
     write_csv(dmr_expr, "result/8_multiomics/tables/1/multiomics_merged.csv")
   }
+} else {
+  write_csv(
+    tibble(step = "rna_integration", status = "skipped", message = paste("RNA-seq file missing:", config$rna_seq_file)),
+    "result/8_multiomics/tables/1/rna_integration_status.csv"
+  )
 }
 ```
 
@@ -189,6 +205,7 @@ if(exists("expr_df") && exists("dmr_anno_df") && nrow(dmr_anno_df) > 0) {
          p_gene_centric_count, width = 8, height = 5.5, device = cairo_pdf)
 
   # 基于排序的 GSEA：一版使用纯甲基化差异，一版使用表达耦合分数
+  gene_centric_gsea_tables <- list()
   gene_centric_meth_rank <- gene_centric_long %>%
     filter(!is.na(ENTREZID)) %>%
     group_by(ENTREZID) %>%
@@ -198,10 +215,17 @@ if(exists("expr_df") && exists("dmr_anno_df") && nrow(dmr_anno_df) > 0) {
     rank_vec <- gene_centric_meth_rank$diffMethy
     names(rank_vec) <- gene_centric_meth_rank$ENTREZID
     rank_vec <- rank_vec[!duplicated(names(rank_vec))]
-    build_gsea_plots(rank_vec,
-                     prefix = "result/8_multiomics/tables/1/gene_centric_methylation",
-                     title_prefix = "Gene-centric Methylation",
-                     plot_prefix = "result/8_multiomics/plots/2_gene_centric/gene_centric_methylation")
+    gene_centric_methylation_gsea <- build_gsea_plots(
+      rank_vec,
+      prefix = "result/8_multiomics/tables/1/gene_centric_methylation",
+      title_prefix = "Gene-centric Methylation",
+      plot_prefix = "result/8_multiomics/plots/2_gene_centric/gene_centric_methylation",
+      context_type = "gene_centric_rank",
+      context = "methylation"
+    )
+    if(!is.null(gene_centric_methylation_gsea$tables)) {
+      gene_centric_gsea_tables$methylation <- gene_centric_methylation_gsea$tables
+    }
   }
 
   gene_centric_coupling_rank <- gene_centric_long %>%
@@ -213,10 +237,23 @@ if(exists("expr_df") && exists("dmr_anno_df") && nrow(dmr_anno_df) > 0) {
     rank_vec <- gene_centric_coupling_rank$CouplingScore
     names(rank_vec) <- gene_centric_coupling_rank$ENTREZID
     rank_vec <- rank_vec[!duplicated(names(rank_vec))]
-    build_gsea_plots(rank_vec,
-                     prefix = "result/8_multiomics/tables/1/gene_centric_coupling",
-                     title_prefix = "Gene-centric Coupling",
-                     plot_prefix = "result/8_multiomics/plots/2_gene_centric/gene_centric_coupling")
+    gene_centric_coupling_gsea <- build_gsea_plots(
+      rank_vec,
+      prefix = "result/8_multiomics/tables/1/gene_centric_coupling",
+      title_prefix = "Gene-centric Coupling",
+      plot_prefix = "result/8_multiomics/plots/2_gene_centric/gene_centric_coupling",
+      context_type = "gene_centric_rank",
+      context = "coupling"
+    )
+    if(!is.null(gene_centric_coupling_gsea$tables)) {
+      gene_centric_gsea_tables$coupling <- gene_centric_coupling_gsea$tables
+    }
+  }
+  if(length(gene_centric_gsea_tables) > 0) {
+    write_csv(
+      bind_rows(gene_centric_gsea_tables),
+      "result/8_multiomics/tables/1/gene_centric_gsea_long.csv"
+    )
   }
 }
 ```
@@ -225,85 +262,99 @@ if(exists("expr_df") && exists("dmr_anno_df") && nrow(dmr_anno_df) > 0) {
 # 3 四象限独立富集分析
 # ==============================================================================
 # 这一节把四种表达-甲基化耦合模式拆开分析，便于分别讲故事线。
-# 当前继续保留既有 RNA `pvalue < config$rna_p_threshold` 与 `abs(log2FoldChange) > config$rna_log2fc_threshold` 口径。
-# 最终投稿或严格筛选时，建议在同一位置同时检查 RNA `padj < 0.05`，
-# 富集结果则优先报告 `p.adjust` 或 `qvalue < 0.05`。
+# RNA 与富集显著性均由 WGBS_SIGNIFICANCE_MODE 选择 pvalue 或 padj。
 quad_levels <- c("Hyper-Up", "Hypo-Up", "Hypo-Down", "Hyper-Down")
+quadrant_enrichment_file <- "result/8_multiomics/tables/1/quadrant_enrichment_long.csv"
+if(file.exists(quadrant_enrichment_file)) file.remove(quadrant_enrichment_file)
 
 if(!exists("dmr_expr") || is.null(dmr_expr) || nrow(dmr_expr) == 0) {
   message("⚠️ dmr_expr 不存在或为空，跳过四象限富集分析")
 } else {
+  quadrant_enrichment_status <- list()
   quadrant_enrichment_results <- lapply(quad_levels, function(quad) {
     message("   👉 正在分析象限: ", quad)
     quad_dir <- file.path("result/8_multiomics/plots/3_quadrant_enrichment", quad)
     sub_df <- dmr_expr %>%
       filter(
         Quadrant == quad,
-        pvalue < rna_p_threshold,
+        rna_is_selected_significant,
         abs(log2FoldChange) > rna_log2fc_threshold
       )
 
     if(nrow(sub_df) == 0) {
-      write_csv(
-        tibble(Quadrant = quad, status = "skipped", message = "no genes passed RNA pvalue/log2FC filters"),
-        file.path("result/8_multiomics/tables/1", paste0("quadrant_enrichment_status_", enrichment_context_slug(quad), ".csv"))
+      quadrant_enrichment_status[[quad]] <<- tibble(
+        context = quad,
+        status = "skipped",
+        message = paste("no genes passed RNA", config$significance_mode, "and log2FC filters")
       )
       return(NULL)
     }
 
-    theme_regex <- if(quad %in% config$enrichment_theme_quadrants) config$enrichment_theme_regex else NULL
-    run_ora_enrichment_bundle(
+    enrich_res <- run_ora_enrichment_bundle(
       input_df = sub_df,
       context_name = quad,
       plot_dir = quad_dir,
       table_dir = "result/8_multiomics/tables/1",
       file_prefix = "quadrant_",
-      context_col = "Quadrant",
-      p_threshold = enrichment_p_threshold,
-      theme_regex = theme_regex,
-      theme_label = "metabolism_insulin"
+      context_type = "Quadrant"
     )
+    n_terms <- sum(vapply(enrich_res[c("kegg", "go_bp", "go_mf", "go_cc")], function(x) {
+      if(is.null(x) || is.null(x$all)) return(0L)
+      nrow(x$all)
+    }, integer(1)))
+    quadrant_enrichment_status[[quad]] <<- tibble(
+      context = quad,
+      status = if(n_terms > 0) "ok" else "skipped",
+      message = paste("ORA terms:", n_terms)
+    )
+    enrich_res
   })
   names(quadrant_enrichment_results) <- quad_levels
+
+  quadrant_enrichment_long <- bind_rows(lapply(quadrant_enrichment_results, function(enrich_res) {
+    if(is.null(enrich_res)) return(NULL)
+    bind_rows(lapply(enrich_res[c("kegg", "go_bp", "go_mf", "go_cc")], function(x) {
+      if(is.null(x) || is.null(x$all)) return(NULL)
+      x$all
+    }))
+  }))
+  if(nrow(quadrant_enrichment_long) > 0) {
+    write_csv(quadrant_enrichment_long, quadrant_enrichment_file)
+  }
+  write_csv(bind_rows(quadrant_enrichment_status), "result/8_multiomics/tables/1/quadrant_enrichment_status.csv")
 }
 ```
 
 ```{r}
-# 7 四象限比较热图 / 三层流向图 / Top DMR 热图
+# 4 四象限比较热图 / 三层流向图 / Top DMR 热图
 # ==============================================================================
 # 这一节更偏结果展示层：把分散的富集结果压成热图、alluvial 和 ComplexHeatmap。
 
 # 四象限富集比较热图
 quad_levels <- c("Hyper-Up", "Hypo-Up", "Hypo-Down", "Hyper-Down")
 
-quad_go_df <- bind_rows(lapply(quad_levels, function(q) {
-  f <- paste0("result/8_multiomics/tables/1/quadrant_go_bp_", q, ".csv")
-  if(file.exists(f)) {
-    df <- suppressWarnings(read.csv(f, stringsAsFactors = FALSE))
-    if(nrow(df) > 0) {
-      df$Quadrant <- q
-      return(df)
-    }
+if(!exists("quadrant_enrichment_long")) {
+  quadrant_enrichment_long <- if(file.exists(quadrant_enrichment_file)) {
+    read_csv(quadrant_enrichment_file, show_col_types = FALSE)
+  } else {
+    tibble()
   }
-  NULL
-}))
+}
 
-quad_kegg_df <- bind_rows(lapply(quad_levels, function(q) {
-  f <- paste0("result/8_multiomics/tables/1/quadrant_kegg_", q, ".csv")
-  if(file.exists(f)) {
-    df <- suppressWarnings(read.csv(f, stringsAsFactors = FALSE))
-    if(nrow(df) > 0) {
-      df$Quadrant <- q
-      return(df)
-    }
-  }
-  NULL
-}))
+quad_go_df <- if(nrow(quadrant_enrichment_long) > 0) {
+  quadrant_enrichment_long %>%
+    filter(analysis_method == "ORA", gene_set_source == "GO", ontology == "BP")
+} else tibble()
+
+quad_kegg_df <- if(nrow(quadrant_enrichment_long) > 0) {
+  quadrant_enrichment_long %>%
+    filter(analysis_method == "ORA", gene_set_source == "KEGG")
+} else tibble()
 
 if(nrow(quad_go_df) > 0 && "pvalue" %in% colnames(quad_go_df)) {
   save_enrichment_compare_heatmap(
-    df = quad_go_df %>% filter(pvalue < enrichment_p_threshold),
-    context_col = "Quadrant",
+    df = quad_go_df %>% filter(is_selected_significant),
+    context_col = "context",
     out_pdf = "result/8_multiomics/plots/3_quadrant_enrichment/go_bp_quadrant_heatmap.pdf",
     out_csv = "result/8_multiomics/tables/1/go_bp_quadrant_heatmap.csv",
     title = "GO BP Enrichment across Expression-Methylation Quadrants",
@@ -314,8 +365,8 @@ if(nrow(quad_go_df) > 0 && "pvalue" %in% colnames(quad_go_df)) {
 
 if(nrow(quad_kegg_df) > 0 && "pvalue" %in% colnames(quad_kegg_df)) {
   save_enrichment_compare_heatmap(
-    df = quad_kegg_df %>% filter(pvalue < enrichment_p_threshold),
-    context_col = "Quadrant",
+    df = quad_kegg_df %>% filter(is_selected_significant),
+    context_col = "context",
     out_pdf = "result/8_multiomics/plots/3_quadrant_enrichment/kegg_quadrant_heatmap.pdf",
     out_csv = "result/8_multiomics/tables/1/kegg_quadrant_heatmap.csv",
     title = "KEGG Enrichment across Expression-Methylation Quadrants",
@@ -491,7 +542,7 @@ if(exists("dmr_expr") && nrow(dmr_expr) > 0) {
 ```
 
 ```{r}
-# 8 KEGG 比较分析 (WGBS vs RNA-seq)
+# 5 KEGG 比较分析 (WGBS vs RNA-seq)
 # ==============================================================================
 # 这里把 WGBS 与 RNA 两套 KEGG 结果并排比较，帮助区分一致通路与互补通路。
 message("⏳ [8] 正在进行 WGBS 与 RNA-seq KEGG 通路比较...")
@@ -505,9 +556,16 @@ if(file.exists(wgbs_kegg_file) && file.exists(rna_kegg_file)) {
   wgbs_kegg <- read.csv(wgbs_kegg_file, stringsAsFactors = FALSE)
   rna_kegg  <- read.csv(rna_kegg_file, stringsAsFactors = FALSE)
 
-  # 过滤显著通路 (pvalue <= enrichment_p_threshold)
-  wgbs_kegg <- wgbs_kegg[wgbs_kegg$pvalue <= enrichment_p_threshold, ]
-  rna_kegg  <- rna_kegg[rna_kegg$pvalue <= enrichment_p_threshold, ]
+  if(all(c("analysis_method", "gene_set_source") %in% colnames(wgbs_kegg))) {
+    wgbs_kegg <- wgbs_kegg %>% filter(analysis_method == "ORA", gene_set_source == "KEGG")
+  }
+  wgbs_kegg <- filter_selected_significance(
+    wgbs_kegg, domain = "enrichment", inclusive = TRUE, context = "WGBS KEGG result"
+  )
+  rna_kegg <- filter_selected_significance(
+    rna_kegg, domain = "enrichment", inclusive = TRUE, context = "RNA KEGG result"
+  )
+  selected_enrichment_col <- significance_spec("enrichment")$column
 
   # 辅助函数：计算 FoldEnrichment (如果不存在)
   calc_enrichment <- function(df) {
@@ -544,15 +602,19 @@ if(file.exists(wgbs_kegg_file) && file.exists(rna_kegg_file)) {
       row_rna  <- rna_kegg[rna_kegg$Description == pathway, ]
 
       # 取最显著的一行 (防止重复)
-      if(nrow(row_wgbs) > 1) row_wgbs <- row_wgbs[which.min(row_wgbs$pvalue), ]
-      if(nrow(row_rna) > 1)  row_rna  <- row_rna[which.min(row_rna$pvalue), ]
+      if(nrow(row_wgbs) > 1) row_wgbs <- row_wgbs[which.min(row_wgbs[[selected_enrichment_col]]), ]
+      if(nrow(row_rna) > 1)  row_rna  <- row_rna[which.min(row_rna[[selected_enrichment_col]]), ]
 
       comparison_df <- rbind(comparison_df, data.frame(
         Pathway = pathway,
         WGBS_pvalue = row_wgbs$pvalue,
+        WGBS_p_adjust = if("p.adjust" %in% colnames(row_wgbs)) row_wgbs$p.adjust else NA_real_,
+        WGBS_selected_significance = row_wgbs[[selected_enrichment_col]],
         WGBS_FoldEnrichment = row_wgbs$FoldEnrichment,
         WGBS_Count = row_wgbs$Count,
         RNA_pvalue = row_rna$pvalue,
+        RNA_p_adjust = if("p.adjust" %in% colnames(row_rna)) row_rna$p.adjust else NA_real_,
+        RNA_selected_significance = row_rna[[selected_enrichment_col]],
         RNA_FoldEnrichment = row_rna$FoldEnrichment,
         RNA_Count = row_rna$Count
       ))
@@ -563,12 +625,12 @@ if(file.exists(wgbs_kegg_file) && file.exists(rna_kegg_file)) {
 
     # 绘图 (散点图)
     p_comp <- ggplot(comparison_df, aes(x = WGBS_FoldEnrichment, y = RNA_FoldEnrichment)) +
-      geom_point(aes(size = -log10(WGBS_pvalue), color = -log10(RNA_pvalue)), alpha = 0.8) +
+      geom_point(aes(size = -log10(WGBS_selected_significance), color = -log10(RNA_selected_significance)), alpha = 0.8) +
       geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = alpha(viz_pal$neutral_dark, 0.75)) +
-      geom_text_repel(aes(label = ifelse(WGBS_pvalue < enrichment_p_threshold & RNA_pvalue < enrichment_p_threshold, Pathway, "")),
+      geom_text_repel(aes(label = Pathway),
                       size = 3, max.overlaps = 10) +
-      scale_size_continuous(name = "-log10(WGBS p-value)", range = c(2, 8)) +
-      scale_color_wgbs_ryb(name = "-log10(RNA p-value)") +
+      scale_size_continuous(name = paste0("-log10(WGBS ", config$significance_mode, ")"), range = c(2, 8)) +
+      scale_color_wgbs_ryb(name = paste0("-log10(RNA ", config$significance_mode, ")")) +
       labs(
         title = "KEGG Pathway Comparison: WGBS vs RNA-seq",
         subtitle = paste("Common Pathways:", length(common_pathways)),
@@ -590,7 +652,10 @@ if(file.exists(wgbs_kegg_file) && file.exists(rna_kegg_file)) {
 
     # 转换为长格式以便绘图
     plot_df <- comparison_df_top %>%
-      select(Pathway, WGBS_FoldEnrichment, RNA_FoldEnrichment, WGBS_pvalue, RNA_pvalue) %>%
+      select(Pathway, WGBS_FoldEnrichment, RNA_FoldEnrichment,
+             WGBS_selected_significance, RNA_selected_significance) %>%
+      rename(WGBS_significance = WGBS_selected_significance,
+             RNA_significance = RNA_selected_significance) %>%
       pivot_longer(
         cols = -Pathway,
         names_to = c("Omics", ".value"),
@@ -614,9 +679,9 @@ if(file.exists(wgbs_kegg_file) && file.exists(rna_kegg_file)) {
       pull(Pathway)
 
     p_dot <- ggplot(plot_df, aes(x = Omics, y = factor(Pathway, levels = pathway_order))) +
-      geom_point(aes(size = FoldEnrichment, color = -log10(pvalue)), alpha = 0.8) +
+      geom_point(aes(size = FoldEnrichment, color = -log10(significance)), alpha = 0.8) +
       scale_size_continuous(name = "Fold Enrichment", range = c(3, 10)) +
-      scale_color_wgbs_ryb(name = "-log10(p-value)") +
+      scale_color_wgbs_ryb(name = paste0("-log10(", config$significance_mode, ")")) +
       labs(
         title = "KEGG Pathway Enrichment Comparison",
         subtitle = paste("Common Pathways:", length(unique(plot_df$Pathway))),
@@ -644,7 +709,7 @@ if(file.exists(wgbs_kegg_file) && file.exists(rna_kegg_file)) {
 
 ```{r}
 # ==============================================================================
-# 9 ATAC-seq 整合分析
+# 6 ATAC-seq 整合分析
 # ==============================================================================
 # 如果有同组织的 ATAC-seq 数据，可分析 DMR 与染色质开放区域的重叠，
 # 以及甲基化-开放性-表达三维关联。

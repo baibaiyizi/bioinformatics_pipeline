@@ -1,48 +1,105 @@
-install_and_load <- function(pkgs, bioc = FALSE) {
-  for (pkg in pkgs) {
-    if (!requireNamespace(pkg, quietly = TRUE)) {
-      if (bioc) {
-        if (!requireNamespace("BiocManager", quietly = TRUE)) {
-          install.packages("BiocManager", repos = "https://cloud.r-project.org")
-        }
-        BiocManager::install(pkg, ask = FALSE, update = FALSE)
-      } else {
-        install.packages(pkg, repos = "https://cloud.r-project.org")
-      }
-    }
-    suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+# Academic Figure Skill Asset Confirmation (verified against assets/figures/)
+# (a) PCA/scatter/trajectory/bar -> PCA/LineTrend/GroupedBarChart -> param inherit
+# (b) heatmap/correlation matrix -> heatmap/CorrelationMatrix -> param inherit
+# (c) volcano/dot plot -> volcano/MarkerGeneDotPlot -> param inherit
+# RULE: existing scientific layers, facets, patchwork layouts and UpSet structures
+#       are preserved; publication parameters are applied centrally at export.
+
+# Figure display configuration. This switch affects only plot ordering, colour,
+# point size and displayed significance labels; analysis thresholds and tables
+# retain their existing definitions.
+figure_significance_metric <- "pvalue"
+rnaseq_random_seed <- as.integer(Sys.getenv("RNASEQ_SEED", "1"))
+set.seed(rnaseq_random_seed)
+
+# Shared publication export configuration.
+rnaseq_figure_width_mm <- 183
+rnaseq_figure_min_height_mm <- 70
+rnaseq_figure_max_height_mm <- 240
+rnaseq_figure_dpi <- 300
+rnaseq_figure_font_family <- "Liberation Sans"
+rnaseq_figure_base_size <- 8
+rnaseq_figure_tick_size <- 7
+
+canonical_figure_significance_metric <- function(metric = figure_significance_metric) {
+  value <- tolower(trimws(as.character(metric)[[1L]]))
+  if (value %in% c("p", "pval", "pvalue", "p-value", "raw_pvalue")) {
+    return("pvalue")
+  }
+  if (value %in% c("fdr", "padj", "adjusted_pvalue", "adjusted-pvalue", "qvalue")) {
+    return("fdr")
+  }
+  trimws(as.character(metric)[[1L]])
+}
+
+figure_significance_column <- function(x, metric = figure_significance_metric,
+                                       pvalue_candidates = NULL,
+                                       fdr_candidates = NULL) {
+  canonical <- canonical_figure_significance_metric(metric)
+  default_pvalue <- c(
+    "pvalue", "pval", "P.Value", "p.value", "PValue", "p_value",
+    "apa_pvalue", "event_pvalue", "dsfa_pvalue"
+  )
+  default_fdr <- c(
+    "p.adjust", "padj", "adj.P.Val", "FDR", "qvalue", "q_value",
+    "apa_fdr", "event_fdr", "dsfa_fdr"
+  )
+  candidates <- if (identical(canonical, "pvalue")) {
+    unique(c(pvalue_candidates, default_pvalue))
+  } else if (identical(canonical, "fdr")) {
+    unique(c(fdr_candidates, default_fdr))
+  } else {
+    canonical
+  }
+  hit <- candidates[candidates %in% names(x)]
+  if (length(hit) == 0) {
+    stop(
+      "图形显著性指标列不可用: ", metric,
+      "；当前列为 ", paste(names(x), collapse = ", ")
+    )
+  }
+  hit[[1L]]
+}
+
+figure_significance_values <- function(x, metric = figure_significance_metric,
+                                        pvalue_candidates = NULL,
+                                        fdr_candidates = NULL) {
+  column <- figure_significance_column(
+    x,
+    metric = metric,
+    pvalue_candidates = pvalue_candidates,
+    fdr_candidates = fdr_candidates
+  )
+  values <- suppressWarnings(as.numeric(x[[column]]))
+  values[!is.finite(values)] <- NA_real_
+  pmin(pmax(values, 0), 1)
+}
+
+figure_significance_label <- function(metric = figure_significance_metric) {
+  canonical <- canonical_figure_significance_metric(metric)
+  if (identical(canonical, "pvalue")) {
+    "p-value"
+  } else if (identical(canonical, "fdr")) {
+    "FDR"
+  } else {
+    canonical
   }
 }
 
-try_install_and_load <- function(pkgs, bioc = FALSE) {
-  loaded <- character(0)
-  missing <- character(0)
-  messages <- character(0)
-  for (pkg in pkgs) {
-    ok <- tryCatch({
-      if (!requireNamespace(pkg, quietly = TRUE)) {
-        if (bioc) {
-          if (!requireNamespace("BiocManager", quietly = TRUE)) {
-            install.packages("BiocManager", repos = "https://cloud.r-project.org")
-          }
-          BiocManager::install(pkg, ask = FALSE, update = FALSE)
-        } else {
-          install.packages(pkg, repos = "https://cloud.r-project.org")
-        }
-      }
-      suppressPackageStartupMessages(library(pkg, character.only = TRUE))
-      TRUE
-    }, error = function(e) {
-      messages <<- c(messages, paste0(pkg, ": ", conditionMessage(e)))
-      FALSE
-    })
-    if (isTRUE(ok)) {
-      loaded <- c(loaded, pkg)
-    } else {
-      missing <- c(missing, pkg)
-    }
-  }
-  list(ok = length(missing) == 0, loaded = loaded, missing = missing, messages = messages)
+figure_significance_axis_label <- function(metric = figure_significance_metric) {
+  paste0("-log10(", figure_significance_label(metric), ")")
+}
+
+require_and_load <- function(pkgs, bioc = FALSE) {
+  missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly = TRUE)]
+  if (length(missing)) stop("MISSING R packages: ", paste(missing, collapse=", "), "; 请在已有环境中显式安装，流程不会修改环境")
+  for (pkg in pkgs) suppressPackageStartupMessages(library(pkg, character.only=TRUE))
+}
+try_require_and_load <- function(pkgs, bioc = FALSE) {
+  missing <- pkgs[!vapply(pkgs, requireNamespace, logical(1), quietly=TRUE)]
+  loaded <- setdiff(pkgs, missing)
+  for (pkg in loaded) suppressPackageStartupMessages(library(pkg, character.only=TRUE))
+  list(ok=!length(missing), loaded=loaded, missing=missing, messages=paste("MISSING",missing))
 }
 
 first_nonempty <- function(...) {
@@ -63,10 +120,7 @@ normalize_rnaseq_species <- function(value) {
   if (species_key %in% c("", "mouse", "mus musculus", "mmu")) {
     return("mouse")
   }
-  if (species_key %in% c("human", "homo sapiens", "hsa")) {
-    return("human")
-  }
-  stop("不支持的 RNASEQ_SPECIES: ", value, "。当前仅支持 mouse 或 human。")
+  stop("该项目的主分析物种固定为 mouse；人源基因集只能写入 human_ortholog 补充目录。")
 }
 
 resolve_project_root <- function() {
@@ -99,65 +153,34 @@ rnaseq_species <- normalize_rnaseq_species(first_nonempty(
   "mouse"
 ))
 
-species_defaults <- switch(
-  rnaseq_species,
-  mouse = list(
-    orgdb_package = "org.Mm.eg.db",
-    orgdb_object_name = "org.Mm.eg.db",
-    kegg_organism_code = "mmu",
-    reactome_organism = "mouse",
-    msigdb_species = "Mus musculus"
-  ),
-  human = list(
-    orgdb_package = "org.Hs.eg.db",
-    orgdb_object_name = "org.Hs.eg.db",
-    kegg_organism_code = "hsa",
-    reactome_organism = "human",
-    msigdb_species = "Homo sapiens"
-  )
+species_defaults <- list(
+  orgdb_package = "org.Mm.eg.db",
+  orgdb_object_name = "org.Mm.eg.db",
+  kegg_organism_code = "mmu",
+  reactome_organism = "mouse",
+  msigdb_species = "Mus musculus"
 )
 
-orgdb_package <- first_nonempty(
-  get0("orgdb_package", ifnotfound = "", inherits = TRUE),
-  Sys.getenv("RNASEQ_ORGDB_PACKAGE", unset = ""),
-  species_defaults$orgdb_package
-)
-orgdb_object_name <- first_nonempty(
-  get0("orgdb_object_name", ifnotfound = "", inherits = TRUE),
-  Sys.getenv("RNASEQ_ORGDB_OBJECT", unset = ""),
-  species_defaults$orgdb_object_name
-)
-kegg_organism_code <- first_nonempty(
-  get0("kegg_organism_code", ifnotfound = "", inherits = TRUE),
-  Sys.getenv("RNASEQ_KEGG_ORGANISM", unset = ""),
-  species_defaults$kegg_organism_code
-)
-reactome_organism <- first_nonempty(
-  get0("reactome_organism", ifnotfound = "", inherits = TRUE),
-  Sys.getenv("RNASEQ_REACTOME_ORGANISM", unset = ""),
-  species_defaults$reactome_organism
-)
-msigdb_species <- first_nonempty(
-  get0("msigdb_species", ifnotfound = "", inherits = TRUE),
-  Sys.getenv("RNASEQ_MSIGDB_SPECIES", unset = ""),
-  species_defaults$msigdb_species
-)
+orgdb_package <- species_defaults$orgdb_package
+orgdb_object_name <- species_defaults$orgdb_object_name
+kegg_organism_code <- species_defaults$kegg_organism_code
+reactome_organism <- species_defaults$reactome_organism
+msigdb_species <- species_defaults$msigdb_species
 
-cran_pkgs <- c(
-  "dplyr", "tibble", "tidyr", "readr", "stringr", "purrr",
-  "ggplot2", "ggrepel", "ggdendro", "reshape2", "scales",
-  "RColorBrewer", "patchwork", "pheatmap", "WGCNA",
-  "GOplot", "UpSetR", "Cairo", "circlize", "msigdbr", "remotes",
-  "jsonlite"
-)
-bioc_pkgs <- unique(c(
-  "clusterProfiler", "enrichplot", orgdb_package,
-  "AnnotationDbi", "edgeR", "ComplexHeatmap", "ReactomePA", "fgsea",
-  "GSVA", "GSEABase", "DESeq2", "limma"
-))
+cran_pkgs <- c("dplyr", "tibble", "tidyr", "readr", "stringr", "purrr", "ggplot2", "ggrepel", "ggdendro", "reshape2", "scales", "RColorBrewer", "patchwork", "pheatmap", "png", "Cairo", "jsonlite")
+bioc_pkgs <- c(orgdb_package, "AnnotationDbi", "edgeR", "ComplexHeatmap", "DESeq2", "limma")
+enabled_modules <- as.integer(strsplit(Sys.getenv("RNASEQ_ENABLED_MODULES", "1 2 3 4 5"), "[ ,]+")[[1]])
+if (any(enabled_modules %in% 6:18)) {
+  cran_pkgs <- c(cran_pkgs, "GOplot", "UpSetR", "circlize", "msigdbr")
+  bioc_pkgs <- c(bioc_pkgs, "clusterProfiler", "enrichplot", "ReactomePA", "KEGGREST", "fgsea", "GSVA", "GSEABase")
+}
+if (12L %in% enabled_modules) cran_pkgs <- c(cran_pkgs, "WGCNA")
 
-install_and_load(cran_pkgs, bioc = FALSE)
-install_and_load(bioc_pkgs, bioc = TRUE)
+require_and_load(cran_pkgs, bioc = FALSE)
+require_and_load(bioc_pkgs, bioc = TRUE)
+
+rnaseq_figure_text_size <- rnaseq_figure_base_size / ggplot2::.pt
+rnaseq_figure_tick_text_size <- rnaseq_figure_tick_size / ggplot2::.pt
 
 # Several Bioconductor packages export common verb names such as count(),
 # filter(), select(), and rename(). Keep report code bound to dplyr semantics.
@@ -176,13 +199,7 @@ for (dplyr_preferred_verb in dplyr_preferred_verbs) {
 rm(dplyr_preferred_verb, dplyr_preferred_verbs)
 
 ensure_github_package <- function(pkg, repo) {
-  if (!requireNamespace(pkg, quietly = TRUE)) {
-    if (!requireNamespace("remotes", quietly = TRUE)) {
-      install.packages("remotes", repos = "https://cloud.r-project.org")
-    }
-    remotes::install_github(repo, upgrade = "never", dependencies = TRUE)
-  }
-  suppressPackageStartupMessages(library(pkg, character.only = TRUE))
+  require_and_load(pkg)
 }
 
 annotation_orgdb <- resolve_orgdb_object(orgdb_object_name, orgdb_package)
@@ -210,14 +227,18 @@ result_18_dir <- file.path(result_root_dir, "18_circle")
 cache_root_dir <- file.path(working_dir, ".cache", "rmd")
 cache_06_tables_path <- file.path(cache_root_dir, "06_main_enrichment_tables.rds")
 cache_06_objects_path <- file.path(cache_root_dir, "06_main_enrichment_objects.rds")
+cache_06_human_tables_path <- file.path(cache_root_dir, "06_human_ortholog_enrichment_tables.rds")
 cache_09_gsva_state_path <- file.path(cache_root_dir, "09_gsva_state.rds")
+cache_09_human_gsva_state_path <- file.path(cache_root_dir, "09_human_ortholog_gsva_state.rds")
 cache_10_tf_state_path <- file.path(cache_root_dir, "10_tf_regulator_state.rds")
 cache_11_ppi_state_path <- file.path(cache_root_dir, "11_ppi_state.rds")
 cache_12_wgcna_path <- file.path(cache_root_dir, "12_wgcna_state.rds")
 cache_15_splicing_state_path <- file.path(cache_root_dir, "15_splicing_state.rds")
 cache_16_immune_state_path <- file.path(cache_root_dir, "16_immune_state.rds")
+cache_mouse_native_gene_sets_path <- file.path(cache_root_dir, "mouse_native_gene_sets.rds")
+cache_human_ortholog_gene_sets_path <- file.path(cache_root_dir, "human_ortholog_gene_sets.rds")
 
-# 兼容旧 step 变量命名，统一映射到新目录接口。
+# 模块内部结果目录别名。
 step1_input_dir <- result_02_dir
 step1_overview_dir <- result_02_dir
 step2_qc_dir <- result_03_dir
@@ -257,7 +278,11 @@ ensure_dirs <- function(...) {
 }
 
 DIRECTION_LEVELS <- c("all", "up", "down")
-DIRECTION_LABELS <- c(all = "全部变化", up = "仅上调", down = "仅下调")
+DIRECTION_LABELS <- c(
+  all = "All significant DE genes",
+  up = "Higher in group 2",
+  down = "Higher in group 1"
+)
 PLOT_FILE_EXTENSIONS <- c("pdf", "png", "jpg", "jpeg", "svg", "tif", "tiff", "bmp")
 
 RESULT_LAYOUT_REGISTRY <- list(
@@ -293,8 +318,14 @@ RESULT_LAYOUT_REGISTRY <- list(
 )
 
 MODULE_CACHE_REGISTRY <- list(
-  "06_enrichment" = c(cache_06_tables_path, cache_06_objects_path),
-  "09_gsva" = cache_09_gsva_state_path,
+  "06_enrichment" = c(
+    cache_06_tables_path,
+    cache_06_objects_path,
+    cache_06_human_tables_path,
+    cache_mouse_native_gene_sets_path,
+    cache_human_ortholog_gene_sets_path
+  ),
+  "09_gsva" = c(cache_09_gsva_state_path, cache_09_human_gsva_state_path),
   "10_tf_regulator" = cache_10_tf_state_path,
   "11_ppi" = cache_11_ppi_state_path,
   "12_wgcna" = cache_12_wgcna_path,
@@ -455,7 +486,7 @@ numeric_env <- function(name, default, lower = -Inf, upper = Inf) {
   value
 }
 
-# Preserve the current 2cell definition by default, while making it explicit and reproducible.
+# Keep the significance and fold-change definitions explicit and reproducible.
 de_pvalue_cutoff <- numeric_env("RNASEQ_DE_PVALUE_CUTOFF", 0.05, lower = 0, upper = 1)
 de_log2fc_cutoff <- numeric_env("RNASEQ_DE_LOG2FC_CUTOFF", 1, lower = 0)
 de_use_padj <- truthy_env("RNASEQ_DE_USE_PADJ", default = FALSE)
@@ -481,7 +512,7 @@ clean_active_module_result_once <- function(step_dir) {
   }
   cleaned_module_result_steps[[step_dir]] <- TRUE
 
-  if (truthy_env("RNASEQ_CLEAN_MODULE_RESULT", default = TRUE)) {
+  if (truthy_env("RNASEQ_CLEAN_MODULE_RESULT", default = FALSE)) {
     target_dir <- module_result_root_dir(step_dir)
     result_root_norm <- normalizePath(result_root_dir, winslash = "/", mustWork = FALSE)
     target_norm <- normalizePath(target_dir, winslash = "/", mustWork = FALSE)
@@ -495,7 +526,7 @@ clean_active_module_result_once <- function(step_dir) {
     ensure_dirs(target_dir)
   }
 
-  if (truthy_env("RNASEQ_CLEAN_MODULE_CACHE", default = TRUE)) {
+  if (truthy_env("RNASEQ_CLEAN_MODULE_CACHE", default = FALSE)) {
     cache_paths <- MODULE_CACHE_REGISTRY[[step_dir]] %||% character(0)
     cache_paths <- cache_paths[!is.na(cache_paths) & nzchar(cache_paths)]
     cache_hits <- cache_paths[base::file.exists(cache_paths)]
@@ -506,65 +537,6 @@ clean_active_module_result_once <- function(step_dir) {
   }
 
   invisible(TRUE)
-}
-
-migrate_layout_key_dir <- function(step_dir, key_token) {
-  entry <- layout_entry_for_step(step_dir)
-  if (identical(entry$type, "standard")) {
-    return(invisible(NULL))
-  }
-
-  legacy_dir <- file.path(result_root_dir, step_dir, as.character(key_token))
-  target_key <- layout_key_dir(step_dir, key_token)
-  target_dir <- step_result_dir(step_dir, target_key)
-  if (identical(
-    normalizePath(legacy_dir, winslash = "/", mustWork = FALSE),
-    normalizePath(target_dir, winslash = "/", mustWork = FALSE)
-  )) {
-    return(invisible(NULL))
-  }
-  if (!base::dir.exists(legacy_dir)) {
-    return(invisible(NULL))
-  }
-
-  children <- list.files(legacy_dir, all.files = TRUE, no.. = TRUE, full.names = TRUE)
-  for (child in children) {
-    child_name <- basename(child)
-    if (base::dir.exists(child) && child_name %in% c("plots", "tables")) {
-      target_root <- if (identical(child_name, "plots")) step_plot_dir(step_dir, target_key) else step_table_dir(step_dir, target_key)
-      move_path_safe(child, target_root)
-    } else {
-      target_root <- if (is_plot_file_path(child_name)) step_plot_dir(step_dir, target_key) else step_table_dir(step_dir, target_key)
-      move_path_safe(child, file.path(target_root, child_name))
-    }
-  }
-  prune_empty_dirs(legacy_dir)
-}
-
-migrate_layout_kind_dir <- function(step_dir, kind) {
-  entry <- layout_entry_for_step(step_dir)
-  if (identical(entry$type, "standard")) {
-    return(invisible(NULL))
-  }
-
-  legacy_dir <- file.path(result_root_dir, step_dir, kind)
-  if (!base::dir.exists(legacy_dir)) {
-    return(invisible(NULL))
-  }
-
-  children <- list.files(legacy_dir, all.files = TRUE, no.. = TRUE, full.names = TRUE)
-  for (child in children) {
-    child_name <- basename(child)
-    child_stem <- tools::file_path_sans_ext(child_name)
-    target_key <- match_layout_key(step_dir, child_name) %||% match_layout_key(step_dir, child_stem) %||% layout_key_dir(step_dir, NULL)
-    target_root <- if (identical(kind, "plots")) step_plot_dir(step_dir, target_key) else step_table_dir(step_dir, target_key)
-    if (base::dir.exists(child) && !is.null(match_layout_key(step_dir, child_name))) {
-      move_path_safe(child, target_root)
-    } else {
-      move_path_safe(child, file.path(target_root, child_name))
-    }
-  }
-  prune_empty_dirs(legacy_dir)
 }
 
 ensure_module_result_layout <- function(step_dir) {
@@ -578,12 +550,6 @@ ensure_module_result_layout <- function(step_dir) {
   canonical_keys <- unique(c(names(entry$keys), unname(entry$keys)))
   for (key_token in canonical_keys) {
     ensure_dirs(step_result_dir(step_dir, key_token), step_plot_dir(step_dir, key_token), step_table_dir(step_dir, key_token))
-  }
-  for (key_token in canonical_keys) {
-    migrate_layout_key_dir(step_dir, key_token)
-  }
-  for (kind in c("plots", "tables")) {
-    migrate_layout_kind_dir(step_dir, kind)
   }
   invisible(step_result_dir(step_dir))
 }
@@ -911,53 +877,12 @@ load_post_context <- function(env = parent.frame()) {
   invisible(setup_manifest)
 }
 
-normalize_group <- function(x) {
-  sub("([._-]?[Ll]iver)$", "", x, perl = TRUE)
-}
-
 read_reads_info <- function(path) {
-  stopifnot(file.exists(path))
-  first_line <- readLines(path, n = 1, warn = FALSE)
-  has_header <- grepl("^group_stage\tsample\t", first_line) || grepl("^sample\tgroup\t", first_line)
-  if (!has_header) {
-    stop("reads_info.txt 必须使用当前带表头的格式，请先用当前 RNA-seq 流程生成或整理该文件。")
-  }
-
-  info <- read.delim(
-    path,
-    header = TRUE,
-    sep = "\t",
-    stringsAsFactors = FALSE,
-    check.names = FALSE
-  )
-  if (!"sample" %in% colnames(info)) {
-    stop("reads_info.txt 缺少 sample 列")
-  }
-  if (!"group_stage" %in% colnames(info)) {
-    if (all(c("group", "stage") %in% colnames(info))) {
-      info$group_stage <- paste0(info$group, info$stage)
-    } else if ("group" %in% colnames(info)) {
-      info$group_stage <- info$group
-    } else {
-      stop("reads_info.txt 缺少 group_stage/group 信息")
-    }
-  }
-
-  if (!"group" %in% colnames(info)) {
-    info$group <- normalize_group(info$group_stage)
-  }
-  if (!"stage" %in% colnames(info)) {
-    info$stage <- ifelse(grepl("liver$", info$group_stage, ignore.case = TRUE), "liver", info$group_stage)
-  }
-  if (!"raw_fq1" %in% colnames(info) && "fq1" %in% colnames(info)) {
-    info$raw_fq1 <- info$fq1
-  }
-  if (!"raw_fq2" %in% colnames(info) && "fq2" %in% colnames(info)) {
-    info$raw_fq2 <- info$fq2
-  }
-
-  info$group <- normalize_group(info$group)
-  info <- info[!duplicated(info$sample), , drop = FALSE]
+  info <- read.delim(path, stringsAsFactors=FALSE, check.names=FALSE, na.strings="")
+  required <- c("sample", "group", "biological_id", "stage", "eligible")
+  if (!all(required %in% names(info))) stop("样本表缺少必需列")
+  if (anyDuplicated(info$sample) || anyNA(info$sample) || anyNA(info$group)) stop("样本身份重复或缺失")
+  info <- info[tolower(as.character(info$eligible)) == "true", , drop=FALSE]
   rownames(info) <- info$sample
   info
 }
@@ -1073,22 +998,57 @@ find_rmats_file <- function(base_dir, event_type, count_mode) {
   found[[1]]
 }
 
-pdf_device_fn <- function() {
-  if (requireNamespace("Cairo", quietly = TRUE)) {
-    Cairo::CairoPDF
-  } else {
-    grDevices::pdf
+rnaseq_figure_height_mm <- function(width, height) {
+  ratio <- suppressWarnings(as.numeric(height) / as.numeric(width))
+  if (!is.finite(ratio) || ratio <= 0) {
+    ratio <- 0.75
   }
+  min(
+    rnaseq_figure_max_height_mm,
+    max(rnaseq_figure_min_height_mm, rnaseq_figure_width_mm * ratio)
+  )
+}
+
+rnaseq_figure_dimensions <- function(width, height) {
+  height_mm <- rnaseq_figure_height_mm(width, height)
+  pdf_width_mm <- round(rnaseq_figure_width_mm / 25.4 * 72) * 25.4 / 72
+  pdf_height_mm <- round(height_mm / 25.4 * 72) * 25.4 / 72
+  list(
+    width_mm = rnaseq_figure_width_mm,
+    height_mm = height_mm,
+    pdf_width_mm = pdf_width_mm,
+    pdf_height_mm = pdf_height_mm,
+    width_in = pdf_width_mm / 25.4,
+    height_in = pdf_height_mm / 25.4
+  )
+}
+
+assert_rnaseq_figure_runtime <- function() {
+  if (!isTRUE(capabilities("cairo"))) {
+    stop("统一图形导出要求当前 R 支持 Cairo。")
+  }
+  invisible(TRUE)
+}
+
+pdf_device_fn <- function() {
+  assert_rnaseq_figure_runtime()
+  grDevices::cairo_pdf
 }
 
 base_pdf_device_fn <- function(path, width, height) {
-  grDevices::pdf(path, width = width, height = height, useDingbats = FALSE)
+  assert_rnaseq_figure_runtime()
+  grDevices::cairo_pdf(
+    filename = path,
+    width = width,
+    height = height,
+    pointsize = rnaseq_figure_base_size,
+    family = rnaseq_figure_font_family,
+    bg = "white",
+    onefile = TRUE
+  )
 }
 
-FIG_PNG_DPI <- suppressWarnings(as.numeric(Sys.getenv("FIG_PNG_DPI", "300")))
-if (!is.finite(FIG_PNG_DPI) || FIG_PNG_DPI <= 0) {
-  FIG_PNG_DPI <- 300
-}
+FIG_PNG_DPI <- rnaseq_figure_dpi
 
 png_path_from_pdf <- function(path) {
   if (grepl("\\.pdf$", path, ignore.case = TRUE)) {
@@ -1098,15 +1058,39 @@ png_path_from_pdf <- function(path) {
   }
 }
 
+finalize_rgb_png <- function(path, dpi = FIG_PNG_DPI) {
+  if (!base::file.exists(path)) {
+    stop("待规范化的 PNG 不存在: ", path)
+  }
+  raster <- png::readPNG(path, native = FALSE)
+  if (length(dim(raster)) == 2L) {
+    raster <- array(rep(raster, 3L), dim = c(dim(raster), 3L))
+  } else if (dim(raster)[3L] == 4L) {
+    alpha <- raster[, , 4L]
+    raster <- sweep(raster[, , 1:3, drop = FALSE], c(1L, 2L), alpha, `*`) +
+      array(rep(1 - alpha, 3L), dim = c(dim(alpha), 3L))
+  }
+  png::writePNG(raster[, , 1:3, drop = FALSE], target = path, dpi = dpi)
+  invisible(path)
+}
+
 save_png_device <- function(path, width, height, expr) {
   ensure_parent_dir(path)
-  tryCatch({
-    grDevices::png(path, width = width, height = height, units = "in", res = FIG_PNG_DPI, type = "cairo")
-  }, error = function(e) {
-    grDevices::png(path, width = width, height = height, units = "in", res = FIG_PNG_DPI)
-  })
+  dims <- rnaseq_figure_dimensions(width, height)
+  assert_rnaseq_figure_runtime()
+  grDevices::png(
+    path,
+    width = dims$width_mm,
+    height = dims$height_mm,
+    units = "mm",
+    res = FIG_PNG_DPI,
+    pointsize = rnaseq_figure_base_size,
+    type = "cairo-png",
+    bg = "white"
+  )
   force(expr)
   grDevices::dev.off()
+  finalize_rgb_png(path)
 }
 
 normalize_project_output_path <- function(path) {
@@ -1175,6 +1159,11 @@ build_result_path_candidates <- function(path, preferred = c("auto", "table", "p
   step_dir <- rel_parts[[1]]
   layout_entry <- layout_entry_for_step(step_dir)
   remainder <- rel_parts[-1]
+
+  # human_ortholog 是模块根目录下的独立结果树，不参与标准/方向目录重排。
+  if (length(remainder) > 0 && identical(remainder[[1]], "human_ortholog")) {
+    return(normalized)
+  }
 
   resolve_kind_dir <- function(explicit_kind, file_parts) {
     inferred_kind <- if (length(file_parts) > 0 && is_plot_file_path(file_parts[[length(file_parts)]])) {
@@ -1290,16 +1279,7 @@ write_csv_safe <- function(x, path, row.names = FALSE, ...) {
   utils::write.csv(sanitize_table_for_export(x), path, row.names = row.names, ...)
 }
 
-write_compat_tables <- function() {
-  truthy_env("RNASEQ_WRITE_COMPAT_TABLES", default = FALSE)
-}
 
-write_csv_compat <- function(x, path, row.names = FALSE, ...) {
-  if (write_compat_tables()) {
-    write_csv_safe(x, path, row.names = row.names, ...)
-  }
-  invisible(x)
-}
 
 prepend_metadata_columns <- function(tbl, metadata) {
   tbl <- sanitize_table_for_export(tbl)
@@ -1360,7 +1340,7 @@ coalesce_num_columns <- function(tbl, cols, default = NA_real_) {
 }
 
 # Only fields with the same meaning and row grain enter the canonical table.
-# Package-specific raw columns remain available through optional compatibility tables.
+# 原方法列保留在规范化结果表内。
 standardize_enrichment_table <- function(tbl, analysis_type, database, source_module, direction = NULL, ontology = NULL) {
   tbl <- make_result_df(tbl)
   n <- nrow(tbl)
@@ -1499,29 +1479,54 @@ flush_plot_audit <- function(path = file.path(result_root_dir, "00_audit", "tabl
   invisible(audit_tbl)
 }
 
-save_plot_versions <- function(plot, primary, width = 8, height = 6) {
+save_plot_versions <- function(plot, primary, width = 8, height = 6,
+                               coordinate_system = c("axes", "none")) {
+  coordinate_system <- match.arg(coordinate_system)
   primary <- route_output_path(primary, preferred = "plot")
   ensure_parent_dir(primary)
-  ggsave(primary, plot = plot, width = width, height = height, device = pdf_device_fn())
+  dims <- rnaseq_figure_dimensions(width, height)
+  plot <- standardize_plot_typography(plot, coordinate_system = coordinate_system)
   ggsave(
-    png_path_from_pdf(primary),
+    primary,
     plot = plot,
-    width = width,
-    height = height,
-    units = "in",
+    width = dims$pdf_width_mm,
+    height = dims$pdf_height_mm,
+    units = "mm",
     dpi = FIG_PNG_DPI,
-    device = "png"
+    device = pdf_device_fn(),
+    family = rnaseq_figure_font_family,
+    limitsize = FALSE,
+    bg = "white"
   )
+  grDevices::png(
+    png_path_from_pdf(primary),
+    width = dims$width_mm,
+    height = dims$height_mm,
+    units = "mm",
+    res = FIG_PNG_DPI,
+    pointsize = rnaseq_figure_base_size,
+    type = "cairo-png",
+    bg = "white"
+  )
+  print(plot)
+  grDevices::dev.off()
+  finalize_rgb_png(png_path_from_pdf(primary))
 }
 
 save_placeholder_plot <- function(primary, title = "Plot skipped", reason = "No plottable data", width = 8, height = 6, input_rows = NA_integer_) {
   label <- paste(strwrap(paste(title, reason, sep = "\n"), width = 72), collapse = "\n")
   placeholder <- ggplot() +
-    annotate("label", x = 0, y = 0, label = label, size = 4.2, label.size = 0.25, fill = viz_pal$neutral["light"], color = viz_pal$neutral["dark"]) +
+    annotate("label", x = 0, y = 0, label = label, size = rnaseq_figure_text_size, label.size = 0.25, fill = viz_pal$neutral["light"], color = viz_pal$neutral["dark"]) +
     xlim(-1, 1) +
     ylim(-1, 1) +
-    theme_void()
-  save_plot_versions(placeholder, primary, width = width, height = height)
+    theme_rnaseq_void()
+  save_plot_versions(
+    placeholder,
+    primary,
+    width = width,
+    height = height,
+    coordinate_system = "none"
+  )
   record_plot_status(primary, status = "placeholder", reason = reason, input_rows = input_rows)
   invisible(NULL)
 }
@@ -1531,51 +1536,81 @@ save_base_pdf_versions <- function(primary, width = 8, height = 6, expr) {
   expr_env <- parent.frame()
   primary <- route_output_path(primary, preferred = "plot")
   ensure_parent_dir(primary)
-  base_pdf_device_fn(primary, width = width, height = height)
+  dims <- rnaseq_figure_dimensions(width, height)
+  base_pdf_device_fn(primary, width = dims$width_in, height = dims$height_in)
   eval(expr_sub, envir = expr_env)
   dev.off()
   png_primary <- png_path_from_pdf(primary)
   ensure_parent_dir(png_primary)
-  tryCatch({
-    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI, type = "cairo")
-  }, error = function(e) {
-    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI)
-  })
+  grDevices::png(
+    png_primary,
+    width = dims$width_mm,
+    height = dims$height_mm,
+    units = "mm",
+    res = FIG_PNG_DPI,
+    pointsize = rnaseq_figure_base_size,
+    type = "cairo-png",
+    bg = "white"
+  )
+  graphics::par(
+    family = rnaseq_figure_font_family,
+    fg = "#333333",
+    col.axis = "#333333",
+    col.lab = "#333333",
+    col.main = "#333333",
+    cex.axis = rnaseq_figure_tick_size / rnaseq_figure_base_size,
+    cex.lab = 1,
+    cex.main = 1,
+    bty = "l"
+  )
   eval(expr_sub, envir = expr_env)
   dev.off()
+  finalize_rgb_png(png_primary)
 }
 
 save_pheatmap_versions <- function(primary, width = 8, height = 6, expr) {
   expr_sub <- substitute(expr)
   expr_env <- parent.frame()
   primary <- route_output_path(primary, preferred = "plot")
+  ph <- eval(expr_sub, envir = expr_env)
+  ph_gtable <- if (is.list(ph) && !is.null(ph$gtable)) {
+    ph$gtable
+  } else if (inherits(ph, "gtable")) {
+    ph
+  } else {
+    NULL
+  }
 
   draw_once <- function() {
-    ph <- eval(expr_sub, envir = expr_env)
-    if (is.list(ph) && !is.null(ph$gtable)) {
-      grid::grid.newpage()
-      grid::grid.draw(ph$gtable)
-    } else if (inherits(ph, "gtable")) {
-      grid::grid.newpage()
-      grid::grid.draw(ph)
+    if (!is.null(ph_gtable)) {
+      grid::grid.draw(ph_gtable)
+    } else {
+      print(ph)
     }
     invisible(ph)
   }
 
   ensure_parent_dir(primary)
-  base_pdf_device_fn(primary, width = width, height = height)
+  dims <- rnaseq_figure_dimensions(width, height)
+  base_pdf_device_fn(primary, width = dims$width_in, height = dims$height_in)
   draw_once()
   grDevices::dev.off()
 
   png_primary <- png_path_from_pdf(primary)
   ensure_parent_dir(png_primary)
-  tryCatch({
-    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI, type = "cairo")
-  }, error = function(e) {
-    grDevices::png(png_primary, width = width, height = height, units = "in", res = FIG_PNG_DPI)
-  })
+  grDevices::png(
+    png_primary,
+    width = dims$width_mm,
+    height = dims$height_mm,
+    units = "mm",
+    res = FIG_PNG_DPI,
+    pointsize = rnaseq_figure_base_size,
+    type = "cairo-png",
+    bg = "white"
+  )
   draw_once()
   grDevices::dev.off()
+  finalize_rgb_png(png_primary)
 }
 
 write.csv <- function(x, file = "", ...) {
@@ -1658,7 +1693,11 @@ convert_pdf_to_png <- function(pdf_path, png_path = png_path_from_pdf(pdf_path),
     system2(py_bin, c("-c", shQuote(py_code), shQuote(pdf_path), shQuote(png_path), as.character(dpi)), stdout = FALSE, stderr = FALSE),
     error = function(e) 1
   )
-  invisible(status == 0 && file.exists(png_path))
+  success <- status == 0 && file.exists(png_path)
+  if (success) {
+    finalize_rgb_png(png_path, dpi = dpi)
+  }
+  invisible(success)
 }
 
 make_result_df <- function(x) {
@@ -1735,8 +1774,9 @@ build_directional_dotplot_df <- function(df, top_n = 10) {
   } else {
     df$.size_order__ <- dplyr::coalesce(as.numeric(df[[size_col]]), 0)
   }
+  df$.figure_significance__ <- figure_significance_values(df)
   df %>%
-    arrange(direction, pvalue, desc(.size_order__)) %>%
+    arrange(direction, .figure_significance__, desc(.size_order__)) %>%
     group_by(direction) %>%
     slice_head(n = top_n) %>%
     ungroup() %>%
@@ -1809,117 +1849,266 @@ build_leading_edge_heatmap_input <- function(leading_tbl, de_tbl, id_type = c("E
   if (nrow(leading_tbl) == 0) {
     return(NULL)
   }
-  lead_small <- leading_tbl %>%
+  top_pathways <- max(1L, as.integer(top_pathways))
+  top_genes <- max(1L, as.integer(top_genes))
+
+  pathway_rank <- leading_tbl %>%
+    mutate(.source_order = dplyr::row_number()) %>%
     group_by(Description) %>%
-    slice_head(n = top_genes) %>%
-    ungroup()
+    summarise(
+      .plot_pvalue = min(c(pvalue[is.finite(pvalue)], Inf)),
+      .plot_abs_nes = max(c(abs(NES[is.finite(NES)]), 0)),
+      .source_order = min(.source_order),
+      .groups = "drop"
+    ) %>%
+    arrange(.plot_pvalue, desc(.plot_abs_nes), .source_order) %>%
+    slice_head(n = top_pathways)
+  top_terms <- as.character(pathway_rank$Description)
 
-  if (id_type == "ENTREZID") {
-    fc_map <- de_tbl$log2FoldChange
-    names(fc_map) <- as.character(de_tbl$ENTREZID)
+  gene_id_col <- if (identical(id_type, "ENTREZID")) "ENTREZID" else "gene_label"
+  if (!gene_id_col %in% colnames(de_tbl) || !"log2FoldChange" %in% colnames(de_tbl)) {
+    return(NULL)
+  }
+  symbol_col <- if ("gene_label" %in% colnames(de_tbl)) {
+    "gene_label"
+  } else if ("SYMBOL" %in% colnames(de_tbl)) {
+    "SYMBOL"
   } else {
-    fc_map <- de_tbl$log2FoldChange
-    names(fc_map) <- as.character(de_tbl$gene_label)
+    gene_id_col
   }
-  fc_map <- fc_map[!is.na(names(fc_map)) & names(fc_map) != "" & is.finite(fc_map)]
-  if (length(fc_map) == 0) {
-    return(NULL)
-  }
-
-  lead_small$fc <- fc_map[as.character(lead_small$leading_edge)]
-  lead_small <- lead_small %>% filter(is.finite(fc))
-  if (nrow(lead_small) == 0) {
-    return(NULL)
-  }
-
-  top_terms <- lead_small %>%
-    count(Description, sort = TRUE) %>%
-    slice_head(n = top_pathways) %>%
-    pull(Description)
-  lead_small <- lead_small %>% filter(Description %in% top_terms)
-  if (nrow(lead_small) == 0) {
-    return(NULL)
-  }
-
-  mat <- lead_small %>%
-    distinct(Description, leading_edge, .keep_all = TRUE) %>%
-    transmute(pathway = Description, gene = leading_edge, fc = fc) %>%
-    tidyr::pivot_wider(names_from = pathway, values_from = fc, values_fill = 0)
-  mat <- as.data.frame(mat)
-  rownames(mat) <- mat$gene
-  mat$gene <- NULL
-  data.matrix(mat)
-}
-
-run_fgsea_hallmark <- function(rank_vector, species = msigdb_species) {
-  if (length(rank_vector) < 100) {
-    return(list(result = data.frame(), pathways = list()))
-  }
-  hallmark_tbl <- msigdbr::msigdbr(species = species, category = "H") %>%
-    dplyr::select(gs_name, gene_symbol)
-  hallmark_sets <- split(hallmark_tbl$gene_symbol, hallmark_tbl$gs_name)
-  fgsea_res <- fgsea::fgsea(
-    pathways = hallmark_sets,
-    stats = rank_vector,
-    eps = 0,
-    minSize = 10,
-    maxSize = 500
+  fc_tbl <- tibble::tibble(
+    gene_id = as.character(de_tbl[[gene_id_col]]),
+    gene_symbol = as.character(de_tbl[[symbol_col]]),
+    fc = suppressWarnings(as.numeric(de_tbl$log2FoldChange))
   ) %>%
-    as.data.frame() %>%
-    dplyr::arrange(pval, desc(abs(NES))) %>%
-    dplyr::rename(
-      ID = pathway,
-      Description = pathway,
-      pvalue = pval,
-      padj = padj,
-      setSize = size,
-      leadingEdge = leadingEdge
-    )
-  if ("leadingEdge" %in% colnames(fgsea_res)) {
-    fgsea_res$core_enrichment <- vapply(fgsea_res$leadingEdge, function(x) paste(x, collapse = "/"), character(1))
+    filter(!is.na(gene_id), nzchar(gene_id), is.finite(fc)) %>%
+    arrange(gene_id, desc(abs(fc))) %>%
+    distinct(gene_id, .keep_all = TRUE)
+  if (nrow(fc_tbl) == 0) {
+    return(NULL)
   }
-  list(result = fgsea_res, pathways = hallmark_sets)
+
+  membership <- leading_tbl %>%
+    filter(Description %in% top_terms) %>%
+    transmute(
+      pathway = factor(as.character(Description), levels = top_terms),
+      gene_id = as.character(leading_edge)
+    ) %>%
+    inner_join(fc_tbl %>% select(gene_id, fc), by = "gene_id") %>%
+    distinct(pathway, gene_id, .keep_all = TRUE)
+  if (nrow(membership) == 0) {
+    return(NULL)
+  }
+
+  seed_ids <- membership %>%
+    group_by(pathway) %>%
+    arrange(desc(abs(fc)), gene_id, .by_group = TRUE) %>%
+    slice_head(n = min(3L, top_genes)) %>%
+    ungroup() %>%
+    pull(gene_id) %>%
+    unique()
+
+  fill_ids <- membership %>%
+    count(gene_id, name = "pathway_count") %>%
+    left_join(fc_tbl %>% select(gene_id, fc), by = "gene_id") %>%
+    arrange(desc(pathway_count), desc(abs(fc)), gene_id) %>%
+    filter(!gene_id %in% seed_ids) %>%
+    pull(gene_id)
+  selected_ids <- unique(c(seed_ids, fill_ids))
+  selected_ids <- selected_ids[seq_len(min(length(selected_ids), top_genes))]
+
+  mat_tbl <- tidyr::expand_grid(gene_id = selected_ids, pathway = top_terms) %>%
+    left_join(
+      membership %>% transmute(gene_id, pathway = as.character(pathway), fc),
+      by = c("gene_id", "pathway")
+    ) %>%
+    mutate(fc = dplyr::coalesce(fc, 0)) %>%
+    tidyr::pivot_wider(names_from = pathway, values_from = fc)
+  mat <- as.data.frame(mat_tbl)
+  rownames(mat) <- mat$gene_id
+  mat$gene_id <- NULL
+  mat <- data.matrix(mat[selected_ids, top_terms, drop = FALSE])
+
+  row_labels <- fc_tbl$gene_symbol[match(selected_ids, fc_tbl$gene_id)]
+  row_labels[is.na(row_labels) | !nzchar(row_labels)] <- selected_ids[is.na(row_labels) | !nzchar(row_labels)]
+  duplicated_labels <- duplicated(row_labels) | duplicated(row_labels, fromLast = TRUE)
+  row_labels[duplicated_labels] <- paste0(row_labels[duplicated_labels], " [", selected_ids[duplicated_labels], "]")
+  rownames(mat) <- row_labels
+  mat
 }
 
-build_msig_symbol_sets <- function(collection, subcollection = NULL, species = msigdb_species) {
-  formals_now <- names(formals(msigdbr::msigdbr))
-  subcollection_options <- if (is.null(subcollection)) list(NULL) else as.list(subcollection)
-  last_error <- NULL
-
-  for (one_subcollection in subcollection_options) {
-    msig_tbl <- tryCatch({
-      if ("collection" %in% formals_now) {
-        call_args <- list(species = species, collection = collection)
-        if ("db_species" %in% formals_now) {
-          call_args$db_species <- "HS"
-        }
-        if (!is.null(one_subcollection) && !is.na(one_subcollection)) {
-          call_args$subcollection <- one_subcollection
-        }
-        do.call(msigdbr::msigdbr, call_args)
-      } else {
-        call_args <- list(species = species, category = collection)
-        if (!is.null(one_subcollection) && !is.na(one_subcollection)) {
-          call_args$subcategory <- one_subcollection
-        }
-        do.call(msigdbr::msigdbr, call_args)
-      }
-    }, error = function(e) {
-      last_error <<- conditionMessage(e)
-      data.frame()
-    })
-
-    if (nrow(msig_tbl) > 0 && all(c("gene_symbol", "gs_name") %in% colnames(msig_tbl))) {
-      return(split(msig_tbl$gene_symbol, msig_tbl$gs_name))
-    }
+fetch_msig_symbol_sets <- function(origin, library, db_species, collection, subcollection = NULL) {
+  if (!all(c("db_species", "species", "collection", "subcollection") %in% names(formals(msigdbr::msigdbr)))) {
+    stop("当前流程要求支持 db_species/collection/subcollection 的新版 msigdbr。")
   }
-
-  message(
-    "[MSigDB] 未能获取 collection=", collection,
-    if (!is.null(subcollection)) paste0(" subcollection=", paste(unlist(subcollection), collapse = "/")) else "",
-    if (!is.null(last_error)) paste0("；最后错误: ", last_error) else ""
+  call_args <- list(
+    db_species = db_species,
+    species = "Mus musculus",
+    collection = collection
   )
-  list()
+  if (!is.null(subcollection) && nzchar(subcollection)) {
+    call_args$subcollection <- subcollection
+  }
+  msig_tbl <- do.call(msigdbr::msigdbr, call_args)
+  if (!nrow(msig_tbl) || !all(c("gene_symbol", "gs_name", "db_version") %in% colnames(msig_tbl))) {
+    stop("MSigDB 返回空集合或缺少必要字段: ", library)
+  }
+  msig_tbl <- msig_tbl[!is.na(msig_tbl$gene_symbol) & nzchar(msig_tbl$gene_symbol), , drop = FALSE]
+  gene_sets <- lapply(split(msig_tbl$gene_symbol, msig_tbl$gs_name), unique)
+  manifest <- data.frame(
+    origin = origin,
+    library = library,
+    db_species = db_species,
+    analysis_species = "Mus musculus",
+    collection = collection,
+    subcollection = if (is.null(subcollection)) "" else subcollection,
+    db_version = paste(unique(msig_tbl$db_version), collapse = ";"),
+    retrieved_date = as.character(Sys.Date()),
+    gene_sets_total = length(gene_sets),
+    memberships_total = sum(lengths(gene_sets)),
+    orthology_mode = if (identical(db_species, "HS")) "HS_to_Mus_musculus" else "none_mouse_native",
+    scope_note = dplyr::case_when(
+      library == "Mouse_M2" ~ "Full mouse M2",
+      library == "Mouse_M5" ~ "Full mouse M5",
+      library == "Human_C2" ~ "Full human C2; includes CP:KEGG_MEDICUS",
+      library == "Human_C5" ~ "Full human C5",
+      TRUE ~ ""
+    ),
+    stringsAsFactors = FALSE
+  )
+  list(gene_sets = gene_sets, manifest = manifest)
+}
+
+fetch_mouse_kegg_symbol_sets <- function() {
+  fetch_kegg_mmu <- function(label, fn, attempts = 3L) {
+    errors <- character(0)
+    for (attempt in seq_len(attempts)) {
+      value <- tryCatch(
+        httr::with_config(httr::timeout(60), fn()),
+        error = function(e) e
+      )
+      if (!inherits(value, "error")) return(value)
+      errors <- c(errors, paste0("attempt ", attempt, ": ", conditionMessage(value)))
+      if (attempt < attempts) Sys.sleep(5 * attempt)
+    }
+    stop("KEGGREST mmu 请求失败 [", label, "]: ", paste(errors, collapse = " | "))
+  }
+  links <- fetch_kegg_mmu("keggLink pathway/mmu", function() KEGGREST::keggLink("pathway", "mmu"))
+  pairs <- data.frame(
+    pathway_id = sub("^path:", "", unname(links)),
+    ENTREZID = sub("^mmu:", "", names(links)),
+    stringsAsFactors = FALSE
+  )
+  mapped <- suppressMessages(AnnotationDbi::select(
+    annotation_orgdb,
+    keys = unique(pairs$ENTREZID),
+    keytype = "ENTREZID",
+    columns = "SYMBOL"
+  ))
+  mapped <- mapped[!is.na(mapped$SYMBOL) & nzchar(mapped$SYMBOL), , drop = FALSE]
+  pairs <- merge(pairs, mapped, by = "ENTREZID")
+  pathway_names <- fetch_kegg_mmu("keggList pathway/mmu", function() KEGGREST::keggList("pathway", "mmu"))
+  name_map <- setNames(
+    sub(" - Mus musculus \\(house mouse\\)$", "", unname(pathway_names)),
+    sub("^path:", "", names(pathway_names))
+  )
+  pairs$pathway <- paste0(pairs$pathway_id, "_", name_map[pairs$pathway_id])
+  gene_sets <- lapply(split(pairs$SYMBOL, pairs$pathway), unique)
+  manifest <- data.frame(
+    origin = "mouse_native",
+    library = "Mouse_KEGG",
+    db_species = "MM",
+    analysis_species = "Mus musculus",
+    collection = "KEGGREST",
+    subcollection = "mmu",
+    db_version = paste0("live_mm_mouse_", Sys.Date()),
+    retrieved_date = as.character(Sys.Date()),
+    gene_sets_total = length(gene_sets),
+    memberships_total = sum(lengths(gene_sets)),
+    orthology_mode = "none_mouse_native",
+    scope_note = "Native mouse KEGG pathways; mmu identifiers",
+    stringsAsFactors = FALSE
+  )
+  list(gene_sets = gene_sets, manifest = manifest)
+}
+
+build_pathway_gene_set_bundle <- function(origin = c("mouse_native", "human_ortholog")) {
+  origin <- match.arg(origin)
+  if (identical(origin, "mouse_native")) {
+    specs <- list(
+      Mouse_MH = c(collection = "MH", subcollection = ""),
+      Mouse_M2 = c(collection = "M2", subcollection = ""),
+      Mouse_Reactome = c(collection = "M2", subcollection = "CP:REACTOME"),
+      Mouse_M5 = c(collection = "M5", subcollection = "")
+    )
+    db_species <- "MM"
+  } else {
+    specs <- list(
+      Human_Hallmark = c(collection = "H", subcollection = ""),
+      Human_C2 = c(collection = "C2", subcollection = ""),
+      Human_C5 = c(collection = "C5", subcollection = ""),
+      Human_KEGG_Legacy = c(collection = "C2", subcollection = "CP:KEGG_LEGACY"),
+      Human_Reactome = c(collection = "C2", subcollection = "CP:REACTOME")
+    )
+    db_species <- "HS"
+  }
+  libraries <- list()
+  manifest_rows <- list()
+  for (library_name in names(specs)) {
+    spec <- specs[[library_name]]
+    fetched <- fetch_msig_symbol_sets(
+      origin = origin,
+      library = library_name,
+      db_species = db_species,
+      collection = unname(spec[["collection"]]),
+      subcollection = unname(spec[["subcollection"]])
+    )
+    libraries[[library_name]] <- fetched$gene_sets
+    manifest_rows[[length(manifest_rows) + 1L]] <- fetched$manifest
+  }
+  if (identical(origin, "mouse_native")) {
+    kegg <- fetch_mouse_kegg_symbol_sets()
+    libraries$Mouse_KEGG <- kegg$gene_sets
+    manifest_rows[[length(manifest_rows) + 1L]] <- kegg$manifest
+  }
+  list(
+    origin = origin,
+    libraries = libraries,
+    manifest = do.call(rbind, manifest_rows),
+    generated_at = as.character(Sys.time())
+  )
+}
+
+get_pathway_gene_set_bundle <- function(origin = c("mouse_native", "human_ortholog"), refresh = FALSE) {
+  origin <- match.arg(origin)
+  cache_path <- if (identical(origin, "mouse_native")) cache_mouse_native_gene_sets_path else cache_human_ortholog_gene_sets_path
+  if (!isTRUE(refresh) && file.exists(cache_path)) {
+    return(readRDS(cache_path))
+  }
+  bundle <- build_pathway_gene_set_bundle(origin)
+  ensure_dirs(dirname(cache_path))
+  saveRDS(bundle, cache_path)
+  bundle
+}
+
+manifest_with_tested_counts <- function(bundle, tested_counts) {
+  manifest <- bundle$manifest
+  tested_counts <- setNames(as.integer(tested_counts), names(tested_counts))
+  manifest$gene_sets_tested <- unname(tested_counts[manifest$library])
+  manifest$gene_sets_tested[is.na(manifest$gene_sets_tested)] <- 0L
+  manifest
+}
+
+filter_gene_sets_to_universe <- function(gene_sets, universe, min_size, max_size) {
+  universe <- unique(as.character(universe))
+  universe <- universe[!is.na(universe) & nzchar(universe)]
+  lookup <- rep.int(TRUE, length(universe))
+  names(lookup) <- universe
+  filtered <- lapply(gene_sets, function(x) {
+    x <- unique(as.character(x))
+    x[!is.na(lookup[x])]
+  })
+  filtered[lengths(filtered) >= min_size & lengths(filtered) <= max_size]
 }
 
 run_fgsea_symbol_sets <- function(rank_vector, gene_sets, min_size = 10, max_size = 500) {
@@ -1928,17 +2117,19 @@ run_fgsea_symbol_sets <- function(rank_vector, gene_sets, min_size = 10, max_siz
   }
   rank_vector <- rank_vector[is.finite(rank_vector)]
   rank_vector <- rank_vector[!duplicated(names(rank_vector))]
-  gene_sets <- lapply(gene_sets, function(x) unique(intersect(as.character(x), names(rank_vector))))
-  gene_sets <- gene_sets[lengths(gene_sets) >= min_size & lengths(gene_sets) <= max_size]
+  gene_sets <- filter_gene_sets_to_universe(gene_sets, names(rank_vector), min_size, max_size)
   if (length(gene_sets) == 0) {
     return(list(result = data.frame(), pathways = list()))
   }
+  set.seed(rnaseq_random_seed)
   fgsea_res <- fgsea::fgsea(
     pathways = gene_sets,
     stats = rank_vector,
     eps = 0,
     minSize = min_size,
-    maxSize = max_size
+    maxSize = max_size,
+    nproc = 1L,
+    BPPARAM = BiocParallel::SerialParam()
   ) %>%
     as.data.frame() %>%
     dplyr::arrange(pval, desc(abs(NES))) %>%
@@ -1956,21 +2147,8 @@ run_fgsea_symbol_sets <- function(rank_vector, gene_sets, min_size = 10, max_siz
   list(result = fgsea_res, pathways = gene_sets)
 }
 
-run_fgsea_msig_collection <- function(rank_vector, collection, subcollection = NULL, species = msigdb_species, min_size = 10, max_size = 500) {
-  gene_sets <- build_msig_symbol_sets(collection = collection, subcollection = subcollection, species = species)
-  run_fgsea_symbol_sets(rank_vector, gene_sets, min_size = min_size, max_size = max_size)
-}
-
 run_ssgsea_matrix <- function(expr_mat, gene_sets, min_size = 5, max_size = 500, normalize = TRUE) {
-  gene_sets <- gene_sets[vapply(gene_sets, function(x) {
-    length(intersect(unique(x), rownames(expr_mat))) >= min_size
-  }, logical(1))]
-  if (length(gene_sets) == 0) {
-    return(matrix(numeric(0), nrow = 0, ncol = ncol(expr_mat)))
-  }
-
-  gene_sets <- lapply(gene_sets, function(x) unique(intersect(as.character(x), rownames(expr_mat))))
-  gene_sets <- gene_sets[lengths(gene_sets) >= min_size & lengths(gene_sets) <= max_size]
+  gene_sets <- filter_gene_sets_to_universe(gene_sets, rownames(expr_mat), min_size, max_size)
   if (length(gene_sets) == 0) {
     return(matrix(numeric(0), nrow = 0, ncol = ncol(expr_mat)))
   }
@@ -2072,14 +2250,17 @@ build_membership_upset <- function(tbl, cols, primary, width = 9, height = 6) {
     primary = primary,
     width = width,
     height = height,
-    expr = UpSetR::upset(
+    expr = print(UpSetR::upset(
       upset_input,
       nsets = length(active_sets),
       keep.order = TRUE,
       sets = active_sets,
       mb.ratio = c(0.6, 0.4),
-      order.by = "freq"
-    )
+      order.by = "freq",
+      sets.bar.color = unname(viz_pal$upset["sets"]),
+      main.bar.color = unname(viz_pal$upset["main"]),
+      text.scale = c(1, 0.875, 1, 0.875, 1, 0.875)
+    ), newpage = FALSE)
   )
 }
 
@@ -2091,7 +2272,7 @@ sanitize_filename <- function(x) {
   ifelse(nchar(x) == 0, "item", x)
 }
 
-detect_sashimi_cmd <- function(bind_root = "/home/h1028/workspace", image = "quay.io/biocontainers/rmats2sashimiplot:3.0.0--py310ha6fa2df_2") {
+detect_sashimi_cmd <- function(bind_root = working_dir, image = "quay.io/biocontainers/rmats2sashimiplot:3.0.0--py310ha6fa2df_2") {
   local_bin <- Sys.which("rmats2sashimiplot")
   if (nzchar(local_bin)) {
     return(c(local_bin))
@@ -2122,14 +2303,29 @@ detect_sashimi_cmd <- function(bind_root = "/home/h1028/workspace", image = "qua
   NULL
 }
 
-render_sashimi_plot <- function(command_vec, b1, b2, event_type, event_file, out_dir, label1, label2, bind_root = "/home/h1028/workspace") {
+render_sashimi_plot <- function(command_vec, b1, b2, event_type, event_file, out_dir, label1, label2, bind_root = working_dir) {
   if (is.null(command_vec) || length(command_vec) == 0) {
     return(list(success = FALSE, pdf = NA_character_, png = NA_character_, message = "no_executor"))
   }
   dir.create(out_dir, recursive = TRUE, showWarnings = FALSE)
   gf <- tempfile(pattern = "sashimi_group_", fileext = ".txt")
   on.exit(unlink(gf, force = TRUE), add = TRUE)
+  mpl_config_dir <- tempfile(pattern = "sashimi_mpl_")
+  dir.create(mpl_config_dir, recursive = TRUE, showWarnings = FALSE)
+  on.exit(unlink(mpl_config_dir, recursive = TRUE, force = TRUE), add = TRUE)
+  writeLines(
+    c(
+      paste0("font.family: ", rnaseq_figure_font_family),
+      paste0("font.sans-serif: ", rnaseq_figure_font_family),
+      "pdf.fonttype: 42",
+      "ps.fonttype: 42",
+      "savefig.facecolor: white",
+      "figure.facecolor: white"
+    ),
+    file.path(mpl_config_dir, "matplotlibrc")
+  )
   writeLines(c(sprintf("%s: 1-%d", label1, length(b1)), sprintf("%s: %d-%d", label2, length(b1) + 1, length(b1) + length(b2))), gf)
+  sashimi_dims <- rnaseq_figure_dimensions(9, 7)
   args <- c(
     command_vec[-1],
     "--b1", paste(b1, collapse = ","),
@@ -2142,13 +2338,22 @@ render_sashimi_plot <- function(command_vec, b1, b2, event_type, event_file, out
     "--exon_s", "1",
     "--intron_s", "20",
     "--min-counts", "1",
-    "--fig-width", "9",
-    "--fig-height", "7",
-    "--font-size", "8",
+    "--fig-width", sprintf("%.4f", sashimi_dims$width_in),
+    "--fig-height", sprintf("%.4f", sashimi_dims$height_in),
+    "--font-size", as.character(rnaseq_figure_base_size),
     "--color", rna_sashimi_color_string,
     "-o", out_dir
   )
-  status <- tryCatch(system2(command_vec[[1]], args = args, stdout = FALSE, stderr = FALSE), error = function(e) 1)
+  status <- tryCatch(
+    system2(
+      command_vec[[1]],
+      args = args,
+      stdout = FALSE,
+      stderr = FALSE,
+      env = paste0("MPLCONFIGDIR=", mpl_config_dir)
+    ),
+    error = function(e) 1
+  )
   pdf_files <- list.files(out_dir, pattern = "\\.pdf$", full.names = TRUE)
   if (status != 0 || length(pdf_files) == 0) {
     return(list(success = FALSE, pdf = NA_character_, png = NA_character_, message = "render_failed"))
@@ -2202,8 +2407,8 @@ run_with_timeout <- function(label, fn, timeout_seconds = NULL) {
   collected <- parallel::mccollect(job, wait = FALSE, timeout = timeout_seconds)
 
   if (is.null(collected)) {
-    tools::pskill(job$pid)
-    try(suppressWarnings(parallel::mccollect(job, wait = FALSE, timeout = 1)), silent = TRUE)
+    tools::pskill(job$pid, signal = tools::SIGKILL)
+    try(suppressWarnings(parallel::mccollect(job, wait = TRUE)), silent = TRUE)
     stop(label, " 超过 ", timeout_seconds, " 秒未返回，已中止该次尝试。", call. = FALSE)
   }
 
@@ -2292,17 +2497,18 @@ build_gsea_dotplot_df <- function(gsea_df, top_n = 6) {
   if (nrow(gsea_df) == 0) {
     return(gsea_df)
   }
+  gsea_df$.figure_significance__ <- figure_significance_values(gsea_df)
   if ("ONTOLOGY" %in% colnames(gsea_df)) {
     gsea_df %>%
       group_by(ONTOLOGY) %>%
-      arrange(pvalue, desc(abs(NES)), .by_group = TRUE) %>%
+      arrange(.figure_significance__, desc(abs(NES)), .by_group = TRUE) %>%
       slice_head(n = top_n) %>%
       ungroup() %>%
       mutate(Description = factor(Description, levels = rev(unique(Description))))
   } else {
     gsea_df %>%
-      arrange(pvalue, desc(abs(NES))) %>%
-      slice_head(n = min(15, nrow(gsea_df))) %>%
+      arrange(.figure_significance__, desc(abs(NES))) %>%
+      slice_head(n = min(top_n, nrow(gsea_df))) %>%
       mutate(Description = factor(Description, levels = rev(unique(Description))))
   }
 }
@@ -2457,11 +2663,13 @@ save_module_target_enrichment <- function(
 
   write.csv(enrich_tbl, out_csv, row.names = FALSE)
 
-  enrich_plot <- ggplot(enrich_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = target_gene_count, color = -log10(pvalue + 1e-300))) +
+  enrich_plot_tbl <- enrich_tbl
+  enrich_plot_tbl$.figure_significance__ <- figure_significance_values(enrich_plot_tbl)
+  enrich_plot <- ggplot(enrich_plot_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = target_gene_count, color = -log10(.figure_significance__ + 1e-300))) +
     geom_point(alpha = 0.85) +
     scale_color_heatmap_sequential() +
-    labs(title = paste0(label_prefix, " module enrichment"), x = "Module-trait correlation", y = NULL, size = "Gene count", color = "-log10(pvalue)") +
-    theme_rnaseq_bw()
+    labs(title = paste0(label_prefix, " module enrichment"), x = "Module-trait correlation", y = NULL, size = "Gene count", color = figure_significance_axis_label()) +
+    theme_rnaseq_publication()
   save_plot_versions(enrich_plot, out_pdf, width = 8.5, height = max(4.5, 0.8 * nrow(enrich_tbl)))
   invisible(enrich_tbl)
 }
@@ -2491,8 +2699,8 @@ save_das_gene_burden_plot <- function(as_gene_priority, primary, top_n = 20, wid
     geom_col(width = 0.75) +
     coord_flip() +
     scale_fill_manual(values = viz_colors(viz_pal$overlap, plot_df$de_status)) +
-    labs(title = "Top DAS 基因事件负荷", x = NULL, y = "Significant AS event count") +
-    theme_rnaseq_minimal()
+    labs(title = "Top DAS genes by AS-event burden", x = NULL, y = "Significant AS event count") +
+    theme_rnaseq_publication()
   save_plot_versions(p, primary, width = width, height = height)
   record_plot_status(primary, status = "generated", reason = "", input_rows = input_rows)
 }
@@ -2517,8 +2725,8 @@ save_de_das_gene_scatter <- function(as_gene_priority, primary, width = 8, heigh
   p <- ggplot(plot_df, aes(x = de_log2FoldChange, y = max_abs_delta_psi, size = significant_event_count, color = de_status)) +
     geom_point(alpha = 0.8) +
     scale_color_manual(values = viz_colors(viz_pal$overlap, plot_df$de_status)) +
-    labs(title = "DE 与 DAS 整合散点图", x = "Gene log2FC", y = "Max |delta PSI|") +
-    theme_rnaseq_bw()
+    labs(title = "Differential expression versus alternative splicing", x = "Gene log2FC", y = "Max |delta PSI|") +
+    theme_rnaseq_publication()
   save_plot_versions(p, primary, width = width, height = height)
   record_plot_status(primary, status = "generated", reason = "", input_rows = input_rows)
 }
@@ -2539,8 +2747,8 @@ save_das_module_burden_plot <- function(module_burden_tbl, primary, width = 8.5,
     geom_col(position = "stack", width = 0.75) +
     coord_flip() +
     scale_fill_manual(values = viz_colors(viz_pal$overlap, module_burden_tbl$de_status)) +
-    labs(title = "各模块 DAS 事件负荷", x = NULL, y = "Total significant AS events") +
-    theme_rnaseq_minimal()
+    labs(title = "DAS event burden by module", x = NULL, y = "Total significant AS events") +
+    theme_rnaseq_publication()
   save_plot_versions(p, primary, width = width, height = height)
   record_plot_status(primary, status = "generated", reason = "", input_rows = input_rows)
 }
@@ -2567,7 +2775,7 @@ build_ora_plot_df <- function(ora_df, top_n = 15, facet_col = NULL) {
 
   plot_df <- as.data.frame(ora_df, stringsAsFactors = FALSE)
   plot_df$Description <- as.character(plot_df$Description)
-  plot_df$pvalue <- suppressWarnings(as.numeric(plot_df$pvalue))
+  plot_df$.figure_significance__ <- figure_significance_values(plot_df)
   plot_df$Count <- suppressWarnings(as.numeric(plot_df$Count))
   plot_df$ratio_value <- if ("GeneRatio" %in% colnames(plot_df)) {
     vapply(plot_df$GeneRatio, parse_ratio_value, numeric(1))
@@ -2576,17 +2784,17 @@ build_ora_plot_df <- function(ora_df, top_n = 15, facet_col = NULL) {
   }
   plot_df$ratio_value[!is.finite(plot_df$ratio_value)] <- plot_df$Count[!is.finite(plot_df$ratio_value)]
   plot_df$size_value <- dplyr::coalesce(plot_df$Count, plot_df$ratio_value, 1)
-  plot_df$neg_log10_p <- -log10(dplyr::coalesce(plot_df$pvalue, 1) + 1e-300)
+  plot_df$neg_log10_p <- -log10(dplyr::coalesce(plot_df$.figure_significance__, 1) + 1e-300)
 
   if (!is.null(facet_col) && facet_col %in% colnames(plot_df)) {
     plot_df <- plot_df %>%
       group_by(.data[[facet_col]]) %>%
-      arrange(pvalue, desc(ratio_value), .by_group = TRUE) %>%
+      arrange(.figure_significance__, desc(ratio_value), .by_group = TRUE) %>%
       slice_head(n = top_n) %>%
       ungroup()
   } else {
     plot_df <- plot_df %>%
-      arrange(pvalue, desc(ratio_value)) %>%
+      arrange(.figure_significance__, desc(ratio_value)) %>%
       slice_head(n = min(top_n, nrow(plot_df)))
   }
 
@@ -2601,6 +2809,19 @@ ora_axis_label <- function(ora_df) {
   "Gene count"
 }
 
+normalize_enrichment_plot_labels <- function(labels) {
+  labels <- as.character(labels)
+  labels <- sub(
+    "^(REACTOME|HALLMARK|KEGG|GOBP|GOCC|GOMF)[_[:space:]:-]+",
+    "",
+    labels,
+    ignore.case = TRUE,
+    perl = TRUE
+  )
+  labels <- gsub("_+", " ", labels, perl = TRUE)
+  gsub("\\s+", " ", trimws(labels), perl = TRUE)
+}
+
 shorten_plot_labels <- function(labels, max_chars = 48) {
   vapply(as.character(labels), function(label) {
     if (is.na(label) || !nzchar(trimws(label))) {
@@ -2612,6 +2833,47 @@ shorten_plot_labels <- function(labels, max_chars = 48) {
     }
     paste0(substr(label, 1, max_chars - 3), "...")
   }, character(1), USE.NAMES = FALSE)
+}
+
+format_enrichment_plot_labels <- function(labels, max_chars = 48) {
+  shorten_plot_labels(normalize_enrichment_plot_labels(labels), max_chars = max_chars)
+}
+
+wrap_enrichment_plot_labels <- function(labels, max_chars = 38, width = 19) {
+  labels <- format_enrichment_plot_labels(labels, max_chars = max_chars)
+  vapply(labels, function(label) {
+    paste(strwrap(label, width = width), collapse = "\n")
+  }, character(1), USE.NAMES = FALSE)
+}
+
+standardize_network_label_sizes <- function(plot, size = rnaseq_figure_tick_text_size) {
+  for (layer_index in seq_along(plot$layers)) {
+    geom_classes <- class(plot$layers[[layer_index]]$geom)
+    if (any(grepl("Text|Label", geom_classes))) {
+      plot$layers[[layer_index]]$aes_params$size <- size
+    }
+  }
+  plot
+}
+
+format_enrichment_object_descriptions <- function(enrich_obj) {
+  if (is.null(enrich_obj)) {
+    return(enrich_obj)
+  }
+  if (is.data.frame(enrich_obj)) {
+    if ("Description" %in% colnames(enrich_obj)) {
+      enrich_obj$Description <- normalize_enrichment_plot_labels(enrich_obj$Description)
+    }
+    return(enrich_obj)
+  }
+  if (methods::is(enrich_obj, "enrichResult") || methods::is(enrich_obj, "gseaResult")) {
+    result_tbl <- methods::slot(enrich_obj, "result")
+    if ("Description" %in% colnames(result_tbl)) {
+      result_tbl$Description <- normalize_enrichment_plot_labels(result_tbl$Description)
+      methods::slot(enrich_obj, "result") <- result_tbl
+    }
+  }
+  enrich_obj
 }
 
 save_ora_barplot_df <- function(ora_df, primary, title_prefix, top_n = 15, facet_col = NULL, analysis_type = c("ORA", "GO"), single_fill = NULL) {
@@ -2631,8 +2893,8 @@ save_ora_barplot_df <- function(ora_df, primary, title_prefix, top_n = 15, facet
 
   p <- p +
     coord_flip() +
-    labs(title = title_prefix, x = NULL, y = ora_axis_label(ora_df), fill = "-log10(PValue)") +
-    theme_rnaseq_bw(base_size = viz_style$compact_size) +
+    labs(title = title_prefix, x = NULL, y = ora_axis_label(ora_df), fill = figure_significance_axis_label()) +
+    theme_rnaseq_publication(base_size = viz_style$compact_size) +
     theme(panel.grid.major.y = element_blank())
 
   save_plot_versions(p, primary, width = 10.5, height = 8)
@@ -2653,9 +2915,9 @@ save_ora_dotplot_df <- function(ora_df, primary, title_prefix, top_n = 15, facet
       x = ora_axis_label(ora_df),
       y = NULL,
       size = "Gene count",
-      color = "-log10(PValue)"
+      color = figure_significance_axis_label()
     ) +
-    theme_rnaseq_bw(base_size = viz_style$compact_size)
+    theme_rnaseq_publication(base_size = viz_style$compact_size)
 
   if (!is.null(facet_col) && facet_col %in% colnames(plot_df)) {
     p <- p + facet_grid(stats::as.formula(paste(facet_col, "~ .")), scales = "free_y", space = "free_y")
@@ -2682,10 +2944,11 @@ build_goplot_inputs <- function(enrich_df, de_tbl, category_label = "TERM", top_
     return(NULL)
   }
 
+  enrich_df$.figure_significance__ <- figure_significance_values(enrich_df)
   enrich_top <- enrich_df %>%
-    arrange(pvalue) %>%
+    arrange(.figure_significance__) %>%
     slice_head(n = top_n) %>%
-    dplyr::select(ID, Description, pvalue, geneID)
+    dplyr::select(ID, Description, .figure_significance__, geneID)
 
   if (nrow(enrich_top) == 0) {
     return(NULL)
@@ -2714,7 +2977,8 @@ make_upset_gene_sets <- function(enrich_df, top_n = 15, max_label = 30) {
   if (is.null(enrich_df) || nrow(enrich_df) == 0) {
     return(list())
   }
-  top_go <- enrich_df %>% arrange(pvalue) %>% slice_head(n = top_n)
+  enrich_df$.figure_significance__ <- figure_significance_values(enrich_df)
+  top_go <- enrich_df %>% arrange(.figure_significance__) %>% slice_head(n = top_n)
   gene_sets <- list()
   for (i in seq_len(nrow(top_go))) {
     genes <- unlist(strsplit(as.character(top_go$geneID[i]), "/"))
@@ -2972,7 +3236,7 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
     height = 25,
     expr = {
       circlize::circos.clear()
-      circlize::circos.par(start.degree = 90, gap.degree = 2, track.margin = c(0.01, 0.01), canvas.xlim = c(-1.5, 1.5), canvas.ylim = c(-1.5, 1.5))
+      circlize::circos.par(start.degree = 90, gap.degree = 2, track.margin = c(0.01, 0.01), canvas.xlim = c(-1.8, 1.8), canvas.ylim = c(-1.65, 1.65))
       circlize::circos.genomicInitialize(data[, c("id", "gene_num.min", "gene_num.max")], plotType = NULL)
 
       circlize::circos.track(
@@ -2990,8 +3254,8 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
         if (length(label_text) == 0 || is.na(label_text) || !nzchar(as.character(label_text))) {
           label_text <- si
         }
-        if (label_type == "description" && nchar(as.character(label_text)) > 50) {
-          label_text <- paste0(substr(as.character(label_text), 1, 47), "...")
+        if (label_type == "description" && nchar(as.character(label_text)) > 25) {
+          label_text <- paste0(substr(as.character(label_text), 1, 22), "...")
         }
 
         xcenter <- mean(xlim)
@@ -3011,7 +3275,7 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
 
         graphics::lines(c(x_start, x_end), c(y_start, y_end), lty = 2, col = "black", lwd = 0.5)
         graphics::lines(c(x_end, x_text), c(y_end, y_text), lty = 2, col = "black", lwd = 0.5)
-        graphics::text(x_text, y_text, label_text, adj = if (is_right) c(0, 0.5) else c(1, 0.5), cex = 2.5)
+        graphics::text(x_text, y_text, label_text, adj = if (is_right) c(0, 0.5) else c(1, 0.5), cex = 1)
       }
 
       p_max <- max(data$neg_log10Pvalue, na.rm = TRUE)
@@ -3028,7 +3292,7 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
           val <- data[sector.index, "neg_log10Pvalue"]
           circlize::circos.rect(CELL_META$xlim[1], 0, CELL_META$xlim[2], 1, col = col_fun_p(val), border = NA)
           num <- data[sector.index, "gene_num.max"]
-          circlize::circos.text(CELL_META$xcenter, 0.5, paste0(num), cex = 3, col = "black", facing = "bending.inside")
+          circlize::circos.text(CELL_META$xcenter, 0.5, paste0(num), cex = 1, col = "black", facing = "bending.inside")
         }
       )
 
@@ -3068,7 +3332,7 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
         for (cat in unique(data$category)) {
           sectors <- data$id[data$category == cat]
           this_col <- cat_colors[cat]
-          circlize::highlight.sector(sectors, track.index = 1, col = paste0(this_col, "20"), text = cat, text.col = this_col, text.vjust = 0, cex = 1.2, font = 2, lwd = 2, border = this_col)
+          circlize::highlight.sector(sectors, track.index = 1, col = paste0(this_col, "20"), text = cat, text.col = this_col, text.vjust = 0, cex = 1, font = 2, lwd = 2, border = this_col)
         }
       }
 
@@ -3076,7 +3340,7 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
       lgd_reg <- ComplexHeatmap::Legend(title = "Regulation", labels = c("Up", "Down"), legend_gp = grid::gpar(fill = c(circle_reg_colors["up"], circle_reg_colors["down"])), ncol = 2)
       lgd_score <- ComplexHeatmap::Legend(title = if (analysis_type == "GSEA") "NES" else "Rich Factor", labels = c("Positive", "Negative"), legend_gp = grid::gpar(fill = c(circle_score_colors["pos"], circle_score_colors["neg"])), ncol = 2)
       lgd_cat <- ComplexHeatmap::Legend(title = "Category", labels = names(cat_colors), legend_gp = grid::gpar(fill = cat_colors), ncol = 1)
-      pd <- ComplexHeatmap::packLegend(lgd_cat, lgd_p, lgd_reg, lgd_score, direction = "vertical", max_height = grid::unit(40, "cm"), column_gap = grid::unit(20, "mm"), row_gap = grid::unit(12, "mm"))
+      pd <- ComplexHeatmap::packLegend(lgd_cat, lgd_p, lgd_reg, lgd_score, direction = "vertical", max_height = grid::unit(15, "cm"), column_gap = grid::unit(4, "mm"), row_gap = grid::unit(2, "mm"))
       ComplexHeatmap::draw(pd, x = grid::unit(0.5, "npc"), y = grid::unit(0.5, "npc"), just = "center")
       circlize::circos.clear()
     }
@@ -3085,6 +3349,58 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
 
 # Step 06-08 shared enrichment plot helpers live in the main setup so we keep
 # one entry file per module and avoid extra helper sidecars.
+goplot_publication_layout <- function(plot, term_colors, equal_aspect = FALSE,
+                                      legend_box = c("vertical", "horizontal")) {
+  legend_box <- match.arg(legend_box)
+  term_colors <- unname(term_colors)
+  term_guide <- ggplot2::guide_legend(
+    title = "Enriched terms",
+    ncol = 1,
+    byrow = TRUE,
+    order = 2,
+    title.position = "top",
+    label.position = "right",
+    override.aes = list(shape = 22, fill = term_colors, size = 4.5)
+  )
+  plot <- plot +
+    ggplot2::scale_size_discrete(
+      range = c(1, 1),
+      labels = function(x) format_enrichment_plot_labels(x, max_chars = 38)
+    ) +
+    ggplot2::guides(
+      size = term_guide,
+      shape = "none",
+      fill = ggplot2::guide_colorbar(
+        order = 1,
+        title.position = "top",
+        title.hjust = 0.5,
+        barheight = grid::unit(24, "mm"),
+        barwidth = grid::unit(3.2, "mm")
+      )
+    ) +
+    theme_rnaseq_void(legend = "right") +
+    ggplot2::theme(
+      legend.position = "right",
+      legend.direction = "vertical",
+      legend.box = legend_box,
+      legend.box.just = "left",
+      legend.justification = "center",
+      legend.key.height = grid::unit(4, "mm"),
+      legend.key.width = grid::unit(4, "mm"),
+      legend.spacing.y = grid::unit(1, "mm"),
+      legend.text = ggplot2::element_text(size = rnaseq_figure_tick_size),
+      plot.margin = ggplot2::margin(5, 5, 5, 5, unit = "mm")
+    )
+  if (isTRUE(equal_aspect)) {
+    plot <- plot + ggplot2::coord_equal(
+      xlim = c(-1.5, 1.5),
+      ylim = c(-1.5, 1.5),
+      clip = "off"
+    )
+  }
+  plot
+}
+
 save_chord_plot <- function(input_list, primary, title, width = 14, height = 12, max_genes_to_show = 20) {
   if (is.null(input_list) || is.null(input_list$circ) || nrow(input_list$circ) == 0) {
     return(invisible(NULL))
@@ -3155,20 +3471,24 @@ save_chord_plot <- function(input_list, primary, title, width = 14, height = 12,
     width = width,
     height = height,
     expr = print(
-      GOplot::GOChord(
+      goplot_publication_layout(
+        GOplot::GOChord(
         data = chord,
-        title = title,
+        title = NULL,
         space = 0.02,
         gene.order = "logFC",
         gene.space = 0.25,
-        gene.size = 3.5,
+        gene.size = rnaseq_figure_text_size,
         lfc.col = c(unname(viz_pal$de["up"]), unname(viz_pal$neutral["light"]), unname(viz_pal$de["down"])),
         lfc.min = chord_lfc_min,
         lfc.max = chord_lfc_max,
         ribbon.col = chord_ribbon_colors,
         border.size = 0.25,
-        process.label = 10,
+        process.label = rnaseq_figure_base_size,
         limit = c(0, 0)
+        ),
+        term_colors = chord_ribbon_colors,
+        equal_aspect = TRUE
       )
     )
   )
@@ -3191,8 +3511,9 @@ save_upset_plot <- function(enrich_df, primary) {
         order.by = "freq",
         sets.bar.color = viz_pal$upset["sets"],
         main.bar.color = viz_pal$upset["main"],
-        text.scale = c(1.3, 1.3, 1, 1, 1.3, 1)
-      )
+        text.scale = c(1, 0.875, 1, 0.875, 1, 0.875)
+      ),
+      newpage = FALSE
     )
   )
 }
@@ -3223,8 +3544,8 @@ save_gocluster_plot <- function(input_list, primary, title, max_genes_to_show = 
       primary,
       title = title,
       reason = "Term clustering skipped: fewer than two distinct logFC values are available.",
-      width = 16,
-      height = 10,
+      width = 14,
+      height = 12,
       input_rows = nrow(chord)
     )
     return(invisible(NULL))
@@ -3239,19 +3560,28 @@ save_gocluster_plot <- function(input_list, primary, title, max_genes_to_show = 
     list(chord = chord),
     parent = environment(GOplot::GOCluster)
   )
+  cluster_term_colors <- unname(resolve_named_colors(
+    c(viz_pal$accent, viz_pal$group, viz_pal$neutral["mid"]),
+    terms_to_cluster
+  ))
 
   save_base_pdf_versions(
     primary = primary,
-    width = 16,
-    height = 10,
+    width = 14,
+    height = 12,
     expr = print(
-      gocluster_fun(
-        chord,
-        terms_to_cluster,
-        lfc.col = c(unname(viz_pal$de["up"]), unname(viz_pal$neutral["light"]), unname(viz_pal$de["down"])),
-        lfc.min = chord_lfc_min,
-        lfc.max = chord_lfc_max
-      ) + labs(title = title)
+      goplot_publication_layout(
+        gocluster_fun(
+          chord,
+          terms_to_cluster,
+          lfc.col = c(unname(viz_pal$de["up"]), unname(viz_pal$neutral["light"]), unname(viz_pal$de["down"])),
+          term.col = cluster_term_colors,
+          lfc.min = chord_lfc_min,
+          lfc.max = chord_lfc_max
+        ),
+        term_colors = cluster_term_colors,
+        legend_box = "horizontal"
+      )
     )
   )
 }
@@ -3261,6 +3591,8 @@ save_go_family <- function(go_obj, file_paths, title_prefix, category_label) {
   if (nrow(go_df) == 0) {
     return(invisible(NULL))
   }
+  go_obj_display <- format_enrichment_object_descriptions(go_obj)
+  go_figure_significance_column <- figure_significance_column(go_df)
 
   save_ora_barplot_df(
     go_df,
@@ -3280,18 +3612,41 @@ save_go_family <- function(go_obj, file_paths, title_prefix, category_label) {
 
   if (length(geneList_symbol_fc) > 0 && nrow(go_df) >= 5) {
     try({
-      cnet_plot <- cnetplot(go_obj, foldChange = geneList_symbol_fc, showCategory = 5, node_label = "category")
-      save_plot_versions(cnet_plot, file_paths$cnet, width = 10, height = 8)
+      cnet_plot <- cnetplot(go_obj_display, foldChange = geneList_symbol_fc, showCategory = 5, node_label = "category") +
+        theme_rnaseq_void()
+      cnet_plot <- standardize_network_label_sizes(cnet_plot)
+      save_plot_versions(
+        cnet_plot,
+        file_paths$cnet,
+        width = 10,
+        height = 8,
+        coordinate_system = "none"
+      )
     }, silent = TRUE)
   }
 
-  go_obj_tree <- tryCatch(pairwise_termsim(go_obj), error = function(e) go_obj)
+  go_obj_tree <- tryCatch(pairwise_termsim(go_obj_display), error = function(e) go_obj_display)
   if (nrow(make_result_df(go_obj_tree)) > 1) {
     try({
-      tree_plot <- enrichplot::treeplot(go_obj_tree, showCategory = min(15, nrow(go_df)), color = "pvalue") +
+      tree_plot <- enrichplot::treeplot(
+        go_obj_tree,
+        showCategory = min(10, nrow(go_df)),
+        color = go_figure_significance_column,
+        label_format = 38,
+        fontsize_tiplab = rnaseq_figure_tick_text_size,
+        fontsize_cladelab = rnaseq_figure_tick_text_size,
+        hilight = FALSE,
+        hexpand = 0.3
+      ) +
         labs(title = paste0(title_prefix, " Treeplot")) +
-        theme(text = element_text(size = 10))
-      save_plot_versions(tree_plot, file_paths$tree, width = 12, height = 10)
+        theme_rnaseq_void()
+      save_plot_versions(
+        tree_plot,
+        file_paths$tree,
+        width = 12,
+        height = 10,
+        coordinate_system = "none"
+      )
     }, silent = TRUE)
   }
 
@@ -3306,6 +3661,8 @@ save_go_all_family <- function(go_obj, out_dir, title_prefix) {
   if (nrow(go_all_df_local) == 0) {
     return(invisible(NULL))
   }
+  go_obj_display <- format_enrichment_object_descriptions(go_obj)
+  go_all_figure_significance_column <- figure_significance_column(go_all_df_local)
 
   save_ora_barplot_df(
     go_all_df_local,
@@ -3324,13 +3681,28 @@ save_go_all_family <- function(go_obj, out_dir, title_prefix) {
     facet_col = "ONTOLOGY"
   )
 
-  go_all_sim <- tryCatch(pairwise_termsim(go_obj), error = function(e) NULL)
+  go_all_sim <- tryCatch(pairwise_termsim(go_obj_display), error = function(e) NULL)
   if (!is.null(go_all_sim) && nrow(make_result_df(go_all_sim)) > 1) {
     try({
-      go_all_tree <- enrichplot::treeplot(go_all_sim, showCategory = min(20, nrow(go_all_df_local)), color = "pvalue") +
+      go_all_tree <- enrichplot::treeplot(
+        go_all_sim,
+        showCategory = min(10, nrow(go_all_df_local)),
+        color = go_all_figure_significance_column,
+        label_format = 38,
+        fontsize_tiplab = rnaseq_figure_tick_text_size,
+        fontsize_cladelab = rnaseq_figure_tick_text_size,
+        hilight = FALSE,
+        hexpand = 0.3
+      ) +
         labs(title = paste(title_prefix, "Treeplot")) +
-        theme(text = element_text(size = 10))
-      save_plot_versions(go_all_tree, file.path(out_dir, "7_4_GO_ALL_Treeplot.pdf"), width = 12, height = 10)
+        theme_rnaseq_void()
+      save_plot_versions(
+        go_all_tree,
+        file.path(out_dir, "7_4_GO_ALL_Treeplot.pdf"),
+        width = 12,
+        height = 10,
+        coordinate_system = "none"
+      )
     }, silent = TRUE)
   }
 
@@ -3345,6 +3717,8 @@ save_kegg_family <- function(kegg_obj, out_dir, prefix = "6_1_KEGG", title_prefi
   if (nrow(kegg_df) == 0) {
     return(invisible(NULL))
   }
+  kegg_obj_display <- format_enrichment_object_descriptions(kegg_obj)
+  kegg_figure_significance_column <- figure_significance_column(kegg_df)
 
   save_ora_barplot_df(
     kegg_df,
@@ -3364,23 +3738,38 @@ save_kegg_family <- function(kegg_obj, out_dir, prefix = "6_1_KEGG", title_prefi
 
   if (length(geneList_symbol_fc) > 0 && nrow(kegg_df) >= 5) {
     try({
-      cnet_plot <- cnetplot(kegg_obj, foldChange = geneList_symbol_fc, showCategory = min(10, nrow(kegg_df)), node_label = "category")
-      save_plot_versions(cnet_plot, file.path(out_dir, paste0(prefix, "_cnetplot.pdf")), width = 10, height = 8)
+      cnet_plot <- cnetplot(kegg_obj_display, foldChange = geneList_symbol_fc, showCategory = min(10, nrow(kegg_df)), node_label = "category") +
+        theme_rnaseq_void()
+      cnet_plot <- standardize_network_label_sizes(cnet_plot)
+      save_plot_versions(
+        cnet_plot,
+        file.path(out_dir, paste0(prefix, "_cnetplot.pdf")),
+        width = 10,
+        height = 8,
+        coordinate_system = "none"
+      )
     }, silent = TRUE)
   }
 
   if (nrow(kegg_df) >= 3) {
-    kegg_sim <- tryCatch(pairwise_termsim(kegg_obj), error = function(e) NULL)
+    kegg_sim <- tryCatch(pairwise_termsim(kegg_obj_display), error = function(e) NULL)
     if (!is.null(kegg_sim)) {
       try({
-        emap_plot <- enrichplot::emapplot(kegg_sim, showCategory = min(15, nrow(kegg_df)), color = "pvalue") +
+        emap_plot <- enrichplot::emapplot(
+          kegg_sim,
+          showCategory = min(10, nrow(kegg_df)),
+          color = kegg_figure_significance_column,
+          label_format = 38,
+          node_label_size = rnaseq_figure_tick_text_size
+        ) +
           labs(title = paste0(title_prefix, " Network")) +
-          theme(text = element_text(size = 10))
+          theme_rnaseq_void()
         save_plot_versions(
           emap_plot,
           file.path(out_dir, paste0(prefix, "_emapplot.pdf")),
           width = 12,
-          height = 10
+          height = 10,
+          coordinate_system = "none"
         )
       }, silent = TRUE)
     }
@@ -3426,12 +3815,12 @@ save_directional_ora_plot <- function(direction_df, primary, title_prefix, facet
     return(invisible(NULL))
   }
   plot_df$size_value <- if ("Count" %in% colnames(plot_df)) plot_df$Count else if ("setSize" %in% colnames(plot_df)) plot_df$setSize else 1
-  plot_df$neg_log10_p <- -log10(dplyr::coalesce(as.numeric(plot_df$pvalue), 1) + 1e-300)
+  plot_df$neg_log10_p <- -log10(dplyr::coalesce(plot_df$.figure_significance__, 1) + 1e-300)
   p <- ggplot(plot_df, aes(x = direction, y = Description, size = size_value, color = neg_log10_p)) +
     geom_point(alpha = 0.85) +
     scale_color_gradientn(colours = unname(viz_pal$enrich_p)) +
-    labs(title = title_prefix, x = NULL, y = NULL, size = "Gene count", color = "-log10(PValue)") +
-    theme_rnaseq_bw(base_size = viz_style$compact_size)
+    labs(title = title_prefix, x = NULL, y = NULL, size = "Gene count", color = figure_significance_axis_label()) +
+    theme_rnaseq_publication(base_size = viz_style$compact_size)
   if (facet_by == "source" && "source" %in% colnames(plot_df)) {
     p <- p + facet_grid(source ~ ., scales = "free_y", space = "free_y")
   }
@@ -3447,24 +3836,34 @@ save_gsea_df_dotplot <- function(gsea_df, primary, title_prefix, top_n = 12, fac
     return(invisible(NULL))
   }
   plot_df$setSize <- dplyr::coalesce(plot_df$setSize, 1)
-  plot_df$neg_log10_p <- -log10(dplyr::coalesce(as.numeric(plot_df$pvalue), 1) + 1e-300)
+  plot_df$neg_log10_p <- -log10(dplyr::coalesce(plot_df$.figure_significance__, 1) + 1e-300)
   p <- ggplot(plot_df, aes(x = NES, y = Description, size = setSize, color = neg_log10_p)) +
     geom_point(alpha = 0.85) +
     scale_color_gradientn(colours = unname(viz_pal$enrich_p)) +
-    labs(title = title_prefix, x = "Normalized Enrichment Score", y = NULL, size = "Set size", color = "-log10(PValue)") +
-    theme_rnaseq_bw(base_size = viz_style$compact_size)
+    scale_y_discrete(labels = function(x) format_enrichment_plot_labels(x, max_chars = 48)) +
+    labs(title = title_prefix, x = "Normalized Enrichment Score", y = NULL, size = "Set size", color = figure_significance_axis_label()) +
+    theme_rnaseq_publication(base_size = viz_style$compact_size)
   if (!is.null(facet_col) && facet_col %in% colnames(plot_df)) {
     p <- p + facet_grid(stats::as.formula(paste(facet_col, "~ .")), scales = "free_y", space = "free_y")
   }
   save_plot_versions(p, primary, width = 10.5, height = 7.5)
 }
 
-save_leading_edge_heatmap <- function(leading_tbl, de_tbl, primary, id_type = c("ENTREZID", "SYMBOL"), top_pathways = 8, top_genes = 40) {
+save_leading_edge_heatmap <- function(leading_tbl, de_tbl, primary, id_type = c("ENTREZID", "SYMBOL"), top_pathways = 8, top_genes = 40, column_title = "Mouse native leading-edge genes") {
   id_type <- match.arg(id_type)
   mat <- build_leading_edge_heatmap_input(leading_tbl, de_tbl, id_type = id_type, top_pathways = top_pathways, top_genes = top_genes)
   if (is.null(mat) || nrow(mat) < 2 || ncol(mat) < 2) {
     return(invisible(NULL))
   }
+  max_abs_fc <- max(abs(mat), na.rm = TRUE)
+  if (!is.finite(max_abs_fc) || max_abs_fc <= 0) {
+    max_abs_fc <- 1
+  }
+  column_labels <- wrap_enrichment_plot_labels(
+    colnames(mat),
+    max_chars = 38,
+    width = 19
+  )
   save_base_pdf_versions(
     primary = primary,
     width = 9,
@@ -3476,8 +3875,28 @@ save_leading_edge_heatmap <- function(leading_tbl, de_tbl, primary, id_type = c(
         cluster_rows = TRUE,
         cluster_columns = FALSE,
         column_names_rot = 45,
-        col = heatmap_diverging_col_fun(mat)
-      )
+        column_labels = column_labels,
+        column_names_max_height = grid::unit(38, "mm"),
+        column_names_gp = grid::gpar(
+          fontfamily = rnaseq_figure_font_family,
+          fontsize = rnaseq_figure_tick_size
+        ),
+        row_names_gp = grid::gpar(
+          fontfamily = rnaseq_figure_font_family,
+          fontsize = rnaseq_figure_tick_size
+        ),
+        column_title = column_title,
+        col = heatmap_diverging_col_fun(
+          breaks = c(-max_abs_fc, 0, max_abs_fc)
+        ),
+        heatmap_legend_param = list(
+          direction = "horizontal",
+          title_position = "topcenter",
+          legend_width = grid::unit(36, "mm")
+        )
+      ),
+      heatmap_legend_side = "bottom",
+      padding = grid::unit(rep(6, 4), "mm")
     )
   )
 }
@@ -3487,10 +3906,14 @@ save_gsea_family <- function(gsea_obj, file_paths, title_prefix, include_single 
   if (nrow(gsea_df) == 0) {
     return(invisible(NULL))
   }
+  gsea_obj_display <- format_enrichment_object_descriptions(gsea_obj)
+  gsea_figure_significance_column <- figure_significance_column(gsea_df)
+  gsea_figure_significance <- figure_significance_values(gsea_df)
 
   try({
-    ridge_plot <- enrichplot::ridgeplot(gsea_obj, label_format = 40, fill = "pvalue") +
-      labs(title = paste0("GSEA: ", title_prefix))
+    ridge_plot <- enrichplot::ridgeplot(gsea_obj_display, label_format = 40, fill = gsea_figure_significance_column) +
+      labs(title = paste0("GSEA: ", title_prefix)) +
+      theme_rnaseq_publication()
     save_plot_versions(ridge_plot, file_paths$ridge, width = 12, height = 8)
   }, silent = TRUE)
 
@@ -3502,19 +3925,40 @@ save_gsea_family <- function(gsea_obj, file_paths, title_prefix, include_single 
     facet_col = if ("ONTOLOGY" %in% colnames(gsea_df)) "ONTOLOGY" else NULL
   )
 
-  gsea_sim <- tryCatch(pairwise_termsim(gsea_obj), error = function(e) NULL)
+  gsea_sim <- tryCatch(pairwise_termsim(gsea_obj_display), error = function(e) NULL)
   if (!is.null(gsea_sim) && nrow(make_result_df(gsea_sim)) > 1) {
     try({
-      emap_plot <- enrichplot::emapplot(gsea_sim, showCategory = min(15, nrow(gsea_df)), color = "pvalue") +
+      emap_plot <- enrichplot::emapplot(
+        gsea_sim,
+        showCategory = min(10, nrow(gsea_df)),
+        color = gsea_figure_significance_column,
+        label_format = 38,
+        node_label_size = rnaseq_figure_tick_text_size
+      ) +
         labs(title = paste0("GSEA: ", title_prefix, " Network")) +
-        theme(text = element_text(size = 10))
-      save_plot_versions(emap_plot, file_paths$emap, width = 12, height = 8)
+        theme_rnaseq_void()
+      save_plot_versions(
+        emap_plot,
+        file_paths$emap,
+        width = 12,
+        height = 8,
+        coordinate_system = "none"
+      )
     }, silent = TRUE)
   }
 
   if (include_single && nrow(gsea_df) > 0 && !is.na(file_paths$single)) {
     try({
-      single_plot <- enrichplot::gseaplot2(gsea_obj, geneSetID = gsea_df$ID[1], title = gsea_df$Description[1])
+      display_index <- which.min(dplyr::coalesce(gsea_figure_significance, Inf))
+      single_plot <- enrichplot::gseaplot2(
+        gsea_obj_display,
+        geneSetID = gsea_df$ID[display_index],
+        title = paste0(
+          title_prefix,
+          ": ",
+          format_enrichment_plot_labels(gsea_df$Description[display_index], max_chars = 60)
+        )
+      )
       save_plot_versions(single_plot, file_paths$single, width = 8, height = 6)
     }, silent = TRUE)
   }
@@ -3525,26 +3969,20 @@ merge_dir <- file.path(working_dir, "3.Merge_result")
 de_dir <- file.path(working_dir, "4.DE_analysis")
 result_pca_dir <- file.path(working_dir, "result_pca")
 post_tx_root_dir <- file.path(working_dir, "5.post_transcriptional_regulation")
-legacy_post_tx_root_dir <- file.path(working_dir, "5.AS_analysis")
-as_root_dir <- if (dir.exists(post_tx_root_dir)) post_tx_root_dir else legacy_post_tx_root_dir
-splicing_dir <- if (dir.exists(file.path(as_root_dir, "splicing"))) {
-  file.path(as_root_dir, "splicing")
-} else {
-  as_root_dir
-}
+as_root_dir <- post_tx_root_dir
+splicing_dir <- file.path(as_root_dir, "splicing")
 
-reads_info_path <- file.path(rawdata_dir, "reads_info.txt")
+reads_info_path <- Sys.getenv("RNASEQ_SAMPLES_TSV")
 selected_expr_path <- file.path(merge_dir, "genes.DESeq2.normalized_counts.matrix")
 selected_logcpm_path <- file.path(merge_dir, "genes.counts.logCPM.matrix")
 selected_count_path <- file.path(merge_dir, "genes.counts.matrix")
 selected_samples_path <- file.path(de_dir, "samples.txt")
-auto_select_path <- file.path(result_pca_dir, "auto_selection_summary.tsv")
 full_expr_path <- file.path(result_pca_dir, "full_sample_inputs", "genes.DESeq2.normalized_counts.matrix")
 full_logcpm_path <- file.path(result_pca_dir, "full_sample_inputs", "genes.counts.logCPM.matrix")
 full_count_path <- file.path(result_pca_dir, "full_sample_inputs", "genes.counts.matrix")
 de_path <- file.path(de_dir, "DE_results")
-rmats_dir <- if (dir.exists(file.path(splicing_dir, "rmats"))) file.path(splicing_dir, "rmats") else file.path(as_root_dir, "rmats_output")
-exon_usage_dir <- if (dir.exists(file.path(splicing_dir, "exon_usage"))) file.path(splicing_dir, "exon_usage") else file.path(as_root_dir, "exon_usage")
+rmats_dir <- file.path(splicing_dir, "rmats")
+exon_usage_dir <- file.path(splicing_dir, "exon_usage")
 isoform_switch_dir <- file.path(as_root_dir, "isoform_switch")
 isoform_results_dir <- file.path(isoform_switch_dir, "results")
 apa_dir <- file.path(as_root_dir, "apa")
@@ -3563,11 +4001,6 @@ if (!file.exists(de_path)) {
 
 reads_info <- read_reads_info(reads_info_path)
 selected_samples_tbl <- read_samples_file(selected_samples_path)
-auto_selection_summary <- if (file.exists(auto_select_path)) {
-  read.delim(auto_select_path, sep = "\t", stringsAsFactors = FALSE, check.names = FALSE)
-} else {
-  NULL
-}
 
 gene_exp <- read_matrix(selected_expr_path)
 gene_logcpm <- if (file.exists(selected_logcpm_path)) read_matrix(selected_logcpm_path) else NULL
@@ -3602,17 +4035,17 @@ if (length(missing_full_meta) > 0) {
   stop("全样本快照的样本信息缺失: ", paste(missing_full_meta, collapse = ", "))
 }
 
-analysis_groups <- if (!is.null(selected_samples_tbl) && nrow(selected_samples_tbl) > 0) {
-  unique(selected_samples_tbl$group)
-} else {
-  unique(sample_info$group)
-}
-if (length(analysis_groups) < 2) {
-  stop("当前 samples.txt 或表达矩阵中未解析出两个分组")
-}
-analysis_groups <- analysis_groups[seq_len(2)]
+analysis_groups <- c(Sys.getenv("RNASEQ_GROUP1"), Sys.getenv("RNASEQ_GROUP2"))
+if (length(unique(analysis_groups)) != 2L || any(!nzchar(analysis_groups)) || !setequal(unique(sample_info$group), analysis_groups)) stop("显式两组配置与样本表不符")
+if (!setequal(colnames(gene_exp), reads_info$sample)) stop("主分析必须包含全部预先合格样本")
 group1_label <- analysis_groups[[1]]
 group2_label <- analysis_groups[[2]]
+
+DIRECTION_LABELS <- c(
+  all = "All significant DE genes",
+  up = paste("Higher in", group2_label),
+  down = paste("Higher in", group1_label)
+)
 
 sample_name_info <- list(
   group1 = if (!is.null(selected_samples_tbl) && nrow(selected_samples_tbl) > 0) {
@@ -3666,10 +4099,10 @@ viz_pal <- list(
     "DAS_splicing" = "#8DE5A1",
     "Background_splicing" = "#D4D9DE"
   ),
-  go_category = c("BP" = "#FF9F9B", "CC" = "#A1C9F4", "MF" = "#B39FDB"),   
+  go_category = c("BP" = "#FF9F9B", "CC" = "#A1C9F4", "MF" = "#B39FDB"),
   enrich_p = rna_red_yellow_blue_palette,  ## #FFE6A7
-  score = c("pos" = "#FF9F9B", "neg" = "#A1C9F4"),     
-  upset = c("sets" = "#FF9F9B", "main" = "#A1C9F4"),  
+  score = c("pos" = "#FF9F9B", "neg" = "#A1C9F4"),
+  upset = c("sets" = "#FF9F9B", "main" = "#A1C9F4"),
   diverging = rna_red_yellow_blue_palette,
   heatmap_diverging = rna_red_yellow_blue_palette,
   heatmap_sequential = rna_red_yellow_blue_palette,
@@ -3687,63 +4120,131 @@ if (length(extra_groups) > 0) {
 }
 
 viz_style <- list(
-  base_size = 11,
-  compact_size = 10,
+  base_size = rnaseq_figure_base_size,
+  compact_size = rnaseq_figure_base_size,
   line = 0.5,
   point = 2.8,
   alpha = 0.85,
   legend = "right"
 )
 
-theme_rnaseq_classic <- function(base_size = viz_style$base_size, legend = viz_style$legend) {
-  theme_classic(base_size = base_size) +
+figure_export_typography_theme <- function(coordinate_system = c("axes", "none")) {
+  coordinate_system <- match.arg(coordinate_system)
+  typography <- theme(
+    text = element_text(
+      family = rnaseq_figure_font_family,
+      size = rnaseq_figure_base_size,
+      color = "#333333"
+    ),
+    plot.title = element_blank(),
+    plot.subtitle = element_blank(),
+    axis.title = element_text(
+      family = rnaseq_figure_font_family,
+      size = rnaseq_figure_base_size,
+      color = "#333333"
+    ),
+    axis.text = element_text(
+      family = rnaseq_figure_font_family,
+      size = rnaseq_figure_tick_size,
+      color = "#333333"
+    ),
+    legend.title = element_text(
+      family = rnaseq_figure_font_family,
+      size = rnaseq_figure_base_size,
+      face = "bold",
+      color = "#333333"
+    ),
+    legend.text = element_text(
+      family = rnaseq_figure_font_family,
+      size = rnaseq_figure_tick_size,
+      color = "#333333"
+    ),
+    strip.text = element_text(
+      family = rnaseq_figure_font_family,
+      size = rnaseq_figure_base_size,
+      face = "bold",
+      color = "#333333"
+    ),
+    legend.background = element_blank(),
+    legend.key = element_blank(),
+    plot.background = element_rect(fill = "white", color = NA),
+    plot.title.position = "plot",
+    plot.margin = margin(4, 6, 4, 4, unit = "mm")
+  )
+  if (identical(coordinate_system, "none")) {
+    typography <- typography + theme(
+      axis.title = element_blank(),
+      axis.text = element_blank(),
+      axis.ticks = element_blank(),
+      axis.line = element_blank(),
+      panel.grid = element_blank(),
+      panel.border = element_blank()
+    )
+  }
+  typography
+}
+
+standardize_plot_typography <- function(plot, coordinate_system = c("axes", "none")) {
+  coordinate_system <- match.arg(coordinate_system)
+  typography <- figure_export_typography_theme(coordinate_system = coordinate_system)
+  if (inherits(plot, "patchwork")) {
+    return(plot & typography)
+  }
+  plot + typography
+}
+
+theme_rnaseq_publication <- function(base_size = viz_style$base_size, legend = viz_style$legend) {
+  theme_classic(base_size = rnaseq_figure_base_size, base_family = rnaseq_figure_font_family) +
     theme(
-      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral["dark"]),
-      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral["dark"]),
-      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral["dark"]),
-      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
+      text = element_text(family = rnaseq_figure_font_family, size = rnaseq_figure_base_size, color = "#333333"),
+      plot.title = element_blank(),
+      plot.subtitle = element_blank(),
+      axis.title = element_text(size = rnaseq_figure_base_size, color = "#333333"),
+      axis.text = element_text(size = rnaseq_figure_tick_size, color = "#333333"),
+      panel.grid = element_blank(),
+      panel.border = element_blank(),
+      axis.line = element_line(color = "#333333", linewidth = 0.35),
+      axis.ticks = element_line(color = "#333333", linewidth = 0.35),
       strip.background = element_rect(fill = viz_pal$neutral["light"], color = NA),
-      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral["dark"]),
+      strip.text = element_text(size = rnaseq_figure_base_size, face = "bold", color = "#333333"),
       legend.position = legend,
-      legend.title = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
-      legend.text = element_text(size = base_size * 0.82, color = viz_pal$neutral["dark"])
+      legend.title = element_text(size = rnaseq_figure_base_size, face = "bold", color = "#333333"),
+      legend.text = element_text(size = rnaseq_figure_tick_size, color = "#333333"),
+      legend.background = element_blank(),
+      legend.key = element_blank(),
+      plot.background = element_rect(fill = "white", color = NA),
+      plot.title.position = "plot",
+      plot.margin = margin(4, 6, 4, 4, unit = "mm")
     )
 }
 
-theme_rnaseq_minimal <- function(base_size = viz_style$base_size, legend = viz_style$legend) {
-  theme_minimal(base_size = base_size) +
+theme_rnaseq_void <- function(base_size = viz_style$base_size, legend = viz_style$legend) {
+  ggplot2::theme_void(base_size = rnaseq_figure_base_size, base_family = rnaseq_figure_font_family) +
     theme(
-      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral["dark"]),
-      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral["dark"]),
-      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral["dark"]),
-      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
-      panel.grid.major = element_line(color = alpha(viz_pal$neutral["mid"], 0.45), linewidth = 0.35),
-      panel.grid.minor = element_blank(),
+      text = element_text(family = rnaseq_figure_font_family, size = rnaseq_figure_base_size, color = "#333333"),
+      plot.title = element_blank(),
+      plot.subtitle = element_blank(),
       strip.background = element_rect(fill = viz_pal$neutral["light"], color = NA),
-      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral["dark"]),
+      strip.text = element_text(size = rnaseq_figure_base_size, face = "bold", color = "#333333"),
       legend.position = legend,
-      legend.title = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
-      legend.text = element_text(size = base_size * 0.82, color = viz_pal$neutral["dark"])
+      legend.title = element_text(size = rnaseq_figure_base_size, face = "bold", color = "#333333"),
+      legend.text = element_text(size = rnaseq_figure_tick_size, color = "#333333"),
+      legend.background = element_blank(),
+      legend.key = element_blank(),
+      plot.background = element_rect(fill = "white", color = NA),
+      plot.title.position = "plot",
+      plot.margin = margin(4, 6, 4, 4, unit = "mm")
     )
 }
 
-theme_rnaseq_bw <- function(base_size = viz_style$base_size, legend = viz_style$legend) {
-  theme_bw(base_size = base_size) +
-    theme(
-      plot.title = element_text(hjust = 0.5, face = "bold", size = base_size * 1.12, color = viz_pal$neutral["dark"]),
-      plot.subtitle = element_text(hjust = 0.5, size = base_size * 0.94, color = viz_pal$neutral["dark"]),
-      axis.title = element_text(size = base_size * 0.96, color = viz_pal$neutral["dark"]),
-      axis.text = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
-      panel.grid.major = element_line(color = alpha(viz_pal$neutral["mid"], 0.45), linewidth = 0.35),
-      panel.grid.minor = element_blank(),
-      panel.border = element_rect(color = alpha(viz_pal$neutral["dark"], 0.35), linewidth = 0.5),
-      strip.background = element_rect(fill = viz_pal$neutral["light"], color = NA),
-      strip.text = element_text(size = base_size * 0.9, face = "bold", color = viz_pal$neutral["dark"]),
-      legend.position = legend,
-      legend.title = element_text(size = base_size * 0.88, color = viz_pal$neutral["dark"]),
-      legend.text = element_text(size = base_size * 0.82, color = viz_pal$neutral["dark"])
-    )
-}
+ComplexHeatmap::ht_opt(
+  heatmap_row_names_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_tick_size),
+  heatmap_column_names_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_tick_size),
+  heatmap_row_title_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_base_size),
+  heatmap_column_title_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_base_size),
+  legend_title_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_base_size, fontface = "bold"),
+  legend_labels_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_tick_size)
+)
 
 heatmap_group_palette <- function(groups, palette = group_colors) {
   group_levels <- unique(as.character(groups))
@@ -3862,17 +4363,20 @@ analysis_context <- data.frame(
     "kegg_organism_code",
     "reactome_organism",
     "msigdb_species",
+    "analysis_group_1",
+    "analysis_group_2",
+    "analysis_contrast",
+    "random_seed",
     "de_significance_column",
     "de_pvalue_cutoff",
     "de_log2fc_cutoff",
-    "write_compat_tables",
+    "screening_interpretation",
     "selected_samples_n",
     "selected_genes_n",
     "selected_logcpm_available",
     "full_snapshot_available",
     "full_snapshot_samples_n",
     "full_logcpm_available",
-    "auto_selection_available",
     "de_results_available",
     "rmats_dir_available",
     "exon_usage_available",
@@ -3888,17 +4392,20 @@ analysis_context <- data.frame(
     kegg_organism_code,
     reactome_organism,
     msigdb_species,
+    group1_label,
+    group2_label,
+    paste(group2_label, group1_label, sep = " - "),
+    rnaseq_random_seed,
     de_significance_column,
     de_pvalue_cutoff,
     de_log2fc_cutoff,
-    write_compat_tables(),
+    if (de_significance_column == "pvalue") "exploratory_nominal_p" else "BH_FDR",
     ncol(gene_exp),
     nrow(gene_exp),
     !is.null(gene_logcpm),
     file.exists(full_expr_path),
     ncol(gene_exp_full),
     !is.null(gene_logcpm_full),
-    !is.null(auto_selection_summary),
     file.exists(de_path),
     dir.exists(rmats_dir),
     dir.exists(exon_usage_dir),

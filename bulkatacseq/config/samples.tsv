@@ -1,0 +1,5 @@
+sample	biological_sample_id	group	stage	raw_fq1	raw_fq2
+control1	control1	control	tissue	01rawdata/instrument_control1_R1.fastq.gz	01rawdata/instrument_control1_R2.fastq.gz
+control2	control2	control	tissue	01rawdata/instrument_control2_R1.fastq.gz	01rawdata/instrument_control2_R2.fastq.gz
+treated1	treated1	treated	tissue	01rawdata/instrument_treated1_R1.fastq.gz	01rawdata/instrument_treated1_R2.fastq.gz
+treated2	treated2	treated	tissue	01rawdata/instrument_treated2_R1.fastq.gz	01rawdata/instrument_treated2_R2.fastq.gz

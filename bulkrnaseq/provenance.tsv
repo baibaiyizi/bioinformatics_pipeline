@@ -1,0 +1,41 @@
+source_path	sha256	target_path	extraction
+/home/h1028/workspace/model/bulkrnaseq/rawdata/reads_info.txt	e58c9c7e94b7fbb2c62b3c0d6ba378dd64861958be45c1b1671465015774f745	rawdata/reads_info.txt	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/01_main_setup.R	9d3a13cdf823afbdc504e447f9905576a1cacff7258a866adbd3242516e2369f	rmd/01_main_setup.R	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/02_selection.Rmd	f7a2fb49b847a98a904b39e75b865662cc4f97eee5bbf47c625a996bffbb84c0	rmd/02_selection.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/03_qc.Rmd	2a032327d5afcc959bc85a92c503451e2b72e2e66e10f69fed14d05a219d7839	rmd/03_qc.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/04_pca.Rmd	f47a0c229814b91178ee0d1f3238dc31a8a9d575a6adbb09d4c8191c050ab760	rmd/04_pca.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/05_de.Rmd	2b6e7c169fe802a9edcae10a5dd69ba3091b635b89759ece1581863d9d7bf886	rmd/05_de.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/06_enrichment.Rmd	53632987b49772439194b544765e2874d166faf2c4833b15d8c5d32ddb6e5e0e	rmd/06_enrichment.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/07_go.Rmd	175e436cf151b7be265948ab9654a97c5a58c6214909fa02f404aca1b85e058e	rmd/07_go.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/08_gsea.Rmd	91b92a46229dfc06fba9001ff842504134ef8908feee936a13eb8da1a34dc5e7	rmd/08_gsea.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/09_gsva.Rmd	c553281f29cf92953aef5b4cfcd1d126387123b579413f844aff2147e55ce96f	rmd/09_gsva.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/10_tf_regulator.Rmd	959db08e70b7f1468bb7b07864aca0544623e8b857741589b920080bf416205f	rmd/10_tf_regulator.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/11_ppi.Rmd	73873f373797657dcc39244a7291044ac49cec17b38c8a0bd6bf4e8c4366b908	rmd/11_ppi.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/12_wgcna.Rmd	e860b411adf5a9f68e88615227bd4a1003303d5d3ce8b57dc8d8f1e593a5b56f	rmd/12_wgcna.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/13_apa.Rmd	bce3771ed2fee88dbcf19518be6c3f0a74bdbf2b9d018160c4437feeae0bd8bc	rmd/13_apa.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/14_der.Rmd	6228db8680595a5790b0e89bf4fbd24fa165bc433fc4df9a807d18d62e42843b	rmd/14_der.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/15_splicing.Rmd	b61d37454ffa59e3420626ea74773433d02b5d7e9826ffe040b8479ad0138911	rmd/15_splicing.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/16_immune.Rmd	8c9e13186452856e153b79f9fa74f2556a08054feba23129c06fc2ce160395da	rmd/16_immune.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/17_pathway_activity.Rmd	f1355bcc07e21220f12c7662614bd5b5127349ca71d05c6f2721129c98e1dd3d	rmd/17_pathway_activity.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rmd/18_circle.Rmd	9b774241e1f80d6a5f091412437c84c1c394d3e864f4277c7f31899d09da2a03	rmd/18_circle.Rmd	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rnaseq_first.sh	08a5f1db6a72ae8aafa22c429b26ad1f29cd7dc2efc0093f054ba34b10ff4e14	rnaseq_first.sh	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rnaseq_second.sh	52128dd70eef055a37578f396853d7c62ab10c16daa5ddeb7f49e0a4bb19b77d	rnaseq_second.sh	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/rnaseq_third.sh	2bd5911e3c671dc8e40430eda0b19c9faf87886202a0dc11ede8d489d954dd14	rnaseq_third.sh	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/model/bulkrnaseq/run_rmd.sh	6a8118aa65ea40642802832ca4483134c0eb261cbb81c2b7dad9213e34f61efd	run_rmd.sh	原模板基线；按功能修订，APA 检查与上游算法保留
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/01_main_setup.R	2b4dc691205b0ce60e59abf414954bc509396d2fddaecada43e6d802662562f6	rmd/01_main_setup.R	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/03_qc.Rmd	747e64b8d94321bb8895f04dc09241ba8420e36b1560dd0db0bb11b928e198dd	rmd/03_qc.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/04_pca.Rmd	1b91a19f9b111980d10d510fe153a7fd0e44db0590bb4f5c24676f77a29347e8	rmd/04_pca.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/05_de.Rmd	41f0500bf0772053e16c3c6d7d91627b7149d122aaae9726e34e8bd49e90dbe3	rmd/05_de.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/06_enrichment.Rmd	2d680fd6352b2ed9360732f4acec45492a776e673e37e324d21143f2fd48a02d	rmd/06_enrichment.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/07_go.Rmd	6ef857e17137b01fe4704486f3f56ae4fb3e515d7cbbbd9dc5cf20659f3163ac	rmd/07_go.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/08_gsea.Rmd	8504c65adf75e6ecb7bc76e630eb092148c6b88cd3e239e2e4db501987fb4532	rmd/08_gsea.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/09_gsva.Rmd	b423bcfb17447ba0952a7f3ec42833794c104a375f9f2e1b846907b716505ca4	rmd/09_gsva.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/10_tf_regulator.Rmd	d72a7804d1875fb9679c4c453ea52a09050b2af28eaa5f75601c368fecdfbed3	rmd/10_tf_regulator.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/11_ppi.Rmd	620ab2fe99958b35c6f20a2c5e3fb8c11ecdc266affa232ba1d951f7dff69510	rmd/11_ppi.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/12_wgcna.Rmd	b352118d5f0e92156f33b0038522b3658196a3b66198355d20e3c4886a66cf29	rmd/12_wgcna.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/16_immune.Rmd	ab87e7617397aa155677e30904b99c99e03063aceec3e2cfd846efe12b800ae9	rmd/16_immune.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/17_pathway_activity.Rmd	cc9d4dad8ac5004d53b61be421dd368e58dc2e6a10e8fbd7589aaf7d2388c519	rmd/17_pathway_activity.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/18_circle.Rmd	9b774241e1f80d6a5f091412437c84c1c394d3e864f4277c7f31899d09da2a03	rmd/18_circle.Rmd	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/PFOS/liver/rmd/generate_result_report.R	9a666f91520add21d4b5dffafdaac8b360a791c9d49590b4f401fffdee13b2c6	rmd/generate_result_report.R	提取方向审计、mouse-native/ortholog 来源、固定 seed、统一绘图与报告；移除项目绑定
+/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/15_splicing.Rmd	24e3d321d0608e777455141e0f89b099de73fbbc5b4949e8c77e3704bea11654	rmd/15_splicing.Rmd	提取原始 PSI/差值保留及元数据身份校验；参数化组名
+/home/h1028/workspace/rna_seq/Mus/aging/PN5/rmd/rmats_direction.R	41cefbe0db2f69534e4d1a080110ef8eca09fe8c0b42d54af6c6a3092e3e0ae5	rmd/rmats_direction.R	提取原始 PSI/差值保留及元数据身份校验；参数化组名

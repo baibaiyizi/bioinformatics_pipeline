@@ -1,0 +1,30 @@
+[
+  {
+    "template": "bulkatacseq",
+    "state": "COMPLETED",
+    "report_exit": 0,
+    "old_table_in_report": true,
+    "PASS": true
+  },
+  {
+    "template": "bulkatacseq",
+    "state": "SKIPPED_DISABLED",
+    "report_exit": 0,
+    "old_table_in_report": false,
+    "PASS": true
+  },
+  {
+    "template": "bulkatacseq",
+    "state": "FAILED",
+    "report_exit": 0,
+    "old_table_in_report": false,
+    "PASS": true
+  },
+  {
+    "template": "bulkatacseq",
+    "state": "STARTED",
+    "report_exit": 0,
+    "old_table_in_report": false,
+    "PASS": true
+  }
+]

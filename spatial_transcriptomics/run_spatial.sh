@@ -9,19 +9,20 @@ set -euo pipefail
 #   bash run_spatial.sh --steps 3,5-8
 #   bash run_spatial.sh --list
 #
-# The runner mirrors the local wgbs_sperm style:
+# Pipeline properties:
 # - one official entry point
 # - selected-step execution
-# - active-step result cleanup only
+# - input signatures and step execution states
 # - auditable logs under result/logs
 ###############################################################################
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SPATIAL_CONFIG_FILE:-${ROOT_DIR}/config/spatial_config.yaml}"
-MANIFEST_FILE="${SPATIAL_MANIFEST_FILE:-${ROOT_DIR}/01rawdata/spatial_info.tsv}"
+MANIFEST_FILE="${SPATIAL_MANIFEST_FILE:-}"
+MANIFEST_ARGS=()
+[[ -z "${MANIFEST_FILE}" ]] || MANIFEST_ARGS=(--manifest "${MANIFEST_FILE}")
 PYTHON_BIN="${SPATIAL_PYTHON_BIN:-python3}"
 LOG_DIR="${SPATIAL_LOG_DIR:-${ROOT_DIR}/result/logs}"
-AUTO_VALIDATE="${SPATIAL_AUTO_VALIDATE:-1}"
 
 STEPS=(
   "01_validate_inputs"
@@ -34,7 +35,7 @@ STEPS=(
   "08_cell_type_annotation"
   "09_deconvolution"
   "10_segment_objects"
-  "11_programs_differential"
+  "11_programs_descriptive"
   "12_neighborhood_communication"
   "13_multi_sample_summary"
   "14_report_index"
@@ -49,9 +50,8 @@ Usage:
 
 Environment overrides:
   SPATIAL_CONFIG_FILE      default: config/spatial_config.yaml
-  SPATIAL_MANIFEST_FILE    default: 01rawdata/spatial_info.tsv
+  SPATIAL_MANIFEST_FILE    optional override of paths.manifest in YAML
   SPATIAL_PYTHON_BIN       default: python3
-  SPATIAL_AUTO_VALIDATE    default: 1
 EOF
 }
 
@@ -78,8 +78,8 @@ append_step_token() {
   local step
   [[ -n "${token}" ]] || return 0
   if [[ "${token}" =~ ^([0-9]+)-([0-9]+)$ ]]; then
-    local start="${BASH_REMATCH[1]}"
-    local end="${BASH_REMATCH[2]}"
+    local start="$((10#${BASH_REMATCH[1]}))"
+    local end="$((10#${BASH_REMATCH[2]}))"
     if (( start < 1 || end > ${#STEPS[@]} || start > end )); then
       die "Invalid step range: ${token}. Valid range: 1-${#STEPS[@]}"
     fi
@@ -87,6 +87,7 @@ append_step_token() {
       REQUESTED_STEPS+=("${step}")
     done
   elif [[ "${token}" =~ ^[0-9]+$ ]]; then
+    token="$((10#${token}))"
     if (( token < 1 || token > ${#STEPS[@]} )); then
       die "Invalid step: ${token}. Valid range: 1-${#STEPS[@]}"
     fi
@@ -110,27 +111,15 @@ dedupe_steps() {
   printf '%s\n' "${out[@]}"
 }
 
-guard_result_dir() {
-  local step_name="$1"
-  local result_dir="${ROOT_DIR}/result/${step_name}"
-  case "${result_dir}" in
-    "${ROOT_DIR}/result/"*) ;;
-    *) die "Refusing to clean unsafe result path: ${result_dir}" ;;
-  esac
-  rm -rf "${result_dir}"
-  mkdir -p "${result_dir}/tables" "${result_dir}/plots"
-}
-
 run_step() {
   local step_num="$1"
   local step_name="${STEPS[$((step_num - 1))]}"
   echo "[$(date '+%F %T')] START ${step_num} ${step_name}"
-  guard_result_dir "${step_name}"
   "${PYTHON_BIN}" "${ROOT_DIR}/scripts/spatial_pipeline.py" run-step \
     --step "${step_name}" \
     --project-root "${ROOT_DIR}" \
     --config "${CONFIG_FILE}" \
-    --manifest "${MANIFEST_FILE}"
+    "${MANIFEST_ARGS[@]}"
   echo "[$(date '+%F %T')] END   ${step_num} ${step_name}"
 }
 
@@ -145,6 +134,9 @@ else
       --list)
         list_steps
         exit 0
+        ;;
+      --check|--dry-run)
+        exec "${PYTHON_BIN}" "${ROOT_DIR}/scripts/spatial_pipeline.py" check --project-root "${ROOT_DIR}" --config "${CONFIG_FILE}" "${MANIFEST_ARGS[@]}"
         ;;
       --steps)
         [[ $# -ge 2 ]] || die "--steps requires a value"
@@ -165,20 +157,10 @@ else
 fi
 
 [[ -f "${CONFIG_FILE}" ]] || die "Config not found: ${CONFIG_FILE}"
-[[ -f "${MANIFEST_FILE}" ]] || die "Manifest not found: ${MANIFEST_FILE}"
+[[ -z "${MANIFEST_FILE}" || -f "${MANIFEST_FILE}" ]] || die "Manifest not found: ${MANIFEST_FILE}"
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/run_spatial_$(date '+%Y%m%d_%H%M%S').log"
 exec > >(tee -a "${LOG_FILE}") 2>&1
-
-if [[ "${AUTO_VALIDATE}" == "1" ]]; then
-  has_validate=0
-  for step in "${REQUESTED_STEPS[@]}"; do
-    [[ "${step}" == "1" ]] && has_validate=1
-  done
-  if [[ "${has_validate}" == "0" ]]; then
-    REQUESTED_STEPS=("1" "${REQUESTED_STEPS[@]}")
-  fi
-fi
 
 mapfile -t REQUESTED_STEPS < <(dedupe_steps REQUESTED_STEPS)
 
