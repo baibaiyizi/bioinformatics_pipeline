@@ -1,0 +1,5 @@
+Check	Status	Detail
+1_setup/1_expression_matrix/class_reads.tsv	PASS	byte_identical
+1_setup/composition_integrity_check.tsv	PASS	byte_identical
+1_setup/endo_transfer_audit.tsv	PASS	byte_identical
+separate_absolute_roots_and_current_signatures	PASS	same_input_and_source_content; separate_actual_path_signatures

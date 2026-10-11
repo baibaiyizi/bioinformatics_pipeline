@@ -1,0 +1,5 @@
+Species	RUN_ENDOSIRNA	ExitCode	Summary
+Mus	0	0	26/26 figures PASS; report: templates/smallrnaseq/validation/synthetic_Mus_0_figures.csv
+Mus	1	0	34/34 figures PASS; report: templates/smallrnaseq/validation/synthetic_Mus_1_figures.csv
+Homo	0	0	20/20 figures PASS; report: templates/smallrnaseq/validation/synthetic_Homo_0_figures.csv
+Homo	1	0	28/28 figures PASS; report: templates/smallrnaseq/validation/synthetic_Homo_1_figures.csv

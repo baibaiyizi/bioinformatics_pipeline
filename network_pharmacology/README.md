@@ -7,7 +7,7 @@ python scripts/run_network.py --config config/example.yml
 python -m unittest discover -s tests -v
 ```
 
-独立环境由 `/home/h1028/workspace/server_migration/install_sci_network_pharmacology.sh` 建立；脚本只使用显式 conda-forge URL，不修改 base 或全局频道。PrimeKG 只保留为被取代的历史背景，OptimusKG 不安装、不下载，也不进入评分依赖。
+独立环境由 [`server_migration/install_sci_network_pharmacology.sh`](../../server_migration/install_sci_network_pharmacology.sh) 建立；脚本只使用显式 conda-forge URL，不修改 base 或全局频道。PrimeKG 只保留为被取代的历史背景，OptimusKG 不安装、不下载，也不进入评分依赖。
 
 核心输出为 `standard_entities.tsv`、`evidence_edges.tsv`、`evidence_multidigraph.graphml`、`candidate_priority.tsv`、`leave_one_lane_out.tsv`、`string_threshold_sensitivity.tsv` 与 `modeling_handoff.tsv`。疾病关联、physical PPI、显式背景 Reactome ORA、结构可用性和直接 compound-target 证据分别计算百分位，再等权汇总；少于两个独立 lane 的候选不会进入正式排序。
 

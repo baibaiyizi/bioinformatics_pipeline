@@ -1,0 +1,1050 @@
+---
+title: "05 tsRNA Compare - Origin, Cleavage, Amino Acid and Isoacceptor"
+output: pdf_document
+---
+
+```{r init, include=FALSE, pandora_stage="prepare"}
+PANDORA_ANALYSIS_STAGE <- get0("PANDORA_ANALYSIS_STAGE", inherits = TRUE,
+  ifnotfound = Sys.getenv("PANDORA_ANALYSIS_STAGE", unset = "describe"))
+stopifnot(PANDORA_ANALYSIS_STAGE %in% c("describe", "differential", "enrichment"))
+initialize_profile_comparison_module(
+  environment(),
+  TSRNA_COMPARE_FIG,
+  TSRNA_COMPARE_TAB,
+  "05_tsrna_compare",
+  c(
+    "01_origin",
+    "02_cleavage",
+    "03_amino_acid",
+    "04_isoacceptor_bar",
+    "05_isoacceptor_heatmap",
+    "06_spider",
+    "07_origin_pattern",
+    "08_mapping_profile",
+    "07_tsRNA_origin",
+    "09_amino_acid_tRNA_spider"
+  )
+)
+
+palette_for_levels <- function(levels, reference_palette = amino_acid_palette, fallback_palette = "Set 3") {
+  levels <- unique(as.character(levels))
+  if (length(levels) == 0) return(setNames(character(), character()))
+  out <- reference_palette[levels]
+  missing_levels <- levels[is.na(out)]
+  if (length(missing_levels) > 0) {
+    extra <- setNames(grDevices::hcl.colors(length(missing_levels), palette = fallback_palette), missing_levels)
+    out[missing_levels] <- extra[missing_levels]
+  }
+  out[levels]
+}
+
+format_origin_label <- function(x) recode(x, Genomic = "Genomic tRNA", Mitochondrial = "Mitochondrial tRNA")
+
+format_cleavage_label <- function(origin_name, cleavage_name) {
+  if (origin_name == "Genomic") {
+    recode(
+      cleavage_name,
+      "5'end" = "Genomic tRNA 5'end",
+      "3'end" = "Genomic tRNA 3'end",
+      "CCA-end" = "Genomic tRNA CCA-end",
+      "Internal/full" = "Genomic tRNA internal"
+    )
+  } else {
+    recode(
+      cleavage_name,
+      "5'end" = "Mitochondrial tRNA 5'end",
+      "3'end" = "Mitochondrial tRNA 3'end",
+      "CCA-end" = "Mitochondrial tRNA CCA-end",
+      "Internal/full" = "Mitochondrial tRNA internal"
+    )
+  }
+}
+
+build_single_spider_plot <- function(plot_df, value_col, color_value, title_text) {
+  if (nrow(plot_df) == 0) return(plot_note(title_text, "No spider data available."))
+  axis_levels <- levels(plot_df$AminoAcid)
+  if (is.null(axis_levels)) axis_levels <- unique(as.character(plot_df$AminoAcid))
+  axis_levels <- axis_levels[!is.na(axis_levels)]
+  polar_start <- 0
+  radial_max <- max(ceiling(max(plot_df[[value_col]], na.rm = TRUE)), 1)
+  radial_breaks <- unique(round(seq(0, radial_max, length.out = 4), 1))
+  radial_offset <- if (length(radial_breaks) > 1) radial_breaks[2] else max(radial_max * 0.25, 0.25)
+  radial_plot_breaks <- radial_breaks + radial_offset
+  radial_limit <- radial_max + radial_offset
+  radial_label_df <- tibble(
+    AxisIndex = 1,
+    Radius = radial_plot_breaks,
+    Label = as.character(radial_breaks)
+  )
+
+  axis_grid_df <- tibble(
+    AxisIndex = seq_along(axis_levels),
+    AxisLabel = factor(axis_levels, levels = axis_levels)
+  )
+
+  spider_df <- plot_df %>%
+    mutate(
+      AminoAcid = factor(AminoAcid, levels = axis_levels),
+      AxisIndex = as.numeric(AminoAcid),
+      .plot_radius = .data[[value_col]] + radial_offset
+    ) %>%
+    arrange(AxisIndex)
+
+  path_df <- bind_rows(
+    spider_df,
+    spider_df %>% slice(1) %>% mutate(AxisIndex = length(axis_levels) + 1)
+  )
+
+  ggplot() +
+    geom_hline(yintercept = radial_plot_breaks, color = serum_neutral_line, linewidth = 0.45) +
+    geom_segment(
+      data = axis_grid_df,
+      aes(x = AxisIndex, xend = AxisIndex, y = radial_offset, yend = radial_limit),
+      inherit.aes = FALSE,
+      color = serum_neutral_line,
+      linewidth = 0.45
+    ) +
+    geom_area(
+      data = path_df,
+      aes(x = AxisIndex, y = .plot_radius, group = 1),
+      fill = grDevices::adjustcolor(color_value, alpha.f = 0.24),
+      color = NA
+    ) +
+    geom_path(data = path_df, aes(x = AxisIndex, y = .plot_radius, group = 1), color = color_value, linewidth = 1.2, lineend = "round") +
+    geom_point(data = spider_df, aes(x = AxisIndex, y = .plot_radius), shape = 21, fill = color_value, color = color_value, size = 2.8, stroke = 0.2) +
+    geom_text(
+      data = radial_label_df,
+      aes(x = AxisIndex, y = Radius, label = Label),
+      inherit.aes = FALSE,
+      color = serum_neutral_text,
+      size = 3,
+      vjust = -0.35
+    ) +
+    coord_polar(start = polar_start, clip = "off") +
+    scale_x_continuous(
+      breaks = seq_along(axis_levels),
+      labels = axis_levels,
+      limits = c(1, length(axis_levels) + 1),
+      expand = c(0, 0)
+    ) +
+    scale_y_continuous(
+      limits = c(0, radial_limit),
+      breaks = radial_plot_breaks,
+      labels = radial_breaks,
+      expand = expansion(mult = c(0, 0.1))
+    ) +
+    labs(x = NULL, y = NULL, title = title_text) +
+    serum_theme_minimal() +
+    theme(
+      axis.text.x = element_text(size = 9, color = serum_text_primary),
+      axis.text.y = element_blank(),
+      axis.title = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 14, color = serum_text_muted),
+      plot.margin = margin(10, 10, 18, 10)
+    )
+}
+
+build_group_spider_plot <- function(plot_df, value_col, title_text) {
+  if (nrow(plot_df) == 0) return(plot_note(title_text, "No spider data available."))
+  axis_levels <- levels(plot_df$AminoAcid)
+  if (is.null(axis_levels)) axis_levels <- unique(as.character(plot_df$AminoAcid))
+  axis_levels <- axis_levels[!is.na(axis_levels)]
+  polar_start <- 0
+  radial_max <- max(ceiling(max(plot_df[[value_col]], na.rm = TRUE)), 1)
+  radial_breaks <- unique(round(seq(0, radial_max, length.out = 4), 1))
+  radial_offset <- if (length(radial_breaks) > 1) radial_breaks[2] else max(radial_max * 0.25, 0.25)
+  radial_plot_breaks <- radial_breaks + radial_offset
+  radial_limit <- radial_max + radial_offset
+  radial_label_df <- tibble(
+    AxisIndex = 1,
+    Radius = radial_plot_breaks,
+    Label = as.character(radial_breaks)
+  )
+
+  axis_grid_df <- tibble(
+    AxisIndex = seq_along(axis_levels),
+    AxisLabel = factor(axis_levels, levels = axis_levels)
+  )
+
+  spider_df <- plot_df %>%
+    mutate(
+      AminoAcid = factor(AminoAcid, levels = axis_levels),
+      AxisIndex = as.numeric(AminoAcid),
+      .plot_radius = .data[[value_col]] + radial_offset
+    ) %>%
+    arrange(Group, AxisIndex)
+
+  path_df <- spider_df %>%
+    group_by(Group) %>%
+    group_modify(~bind_rows(.x, .x %>% slice(1) %>% mutate(AxisIndex = length(axis_levels) + 1))) %>%
+    ungroup()
+
+  ggplot() +
+    geom_hline(yintercept = radial_plot_breaks, color = serum_neutral_line, linewidth = 0.45) +
+    geom_segment(
+      data = axis_grid_df,
+      aes(x = AxisIndex, xend = AxisIndex, y = radial_offset, yend = radial_limit),
+      inherit.aes = FALSE,
+      color = serum_neutral_line,
+      linewidth = 0.45
+    ) +
+    geom_path(data = path_df, aes(x = AxisIndex, y = .plot_radius, color = Group, group = Group), linewidth = 1.1, lineend = "round") +
+    geom_point(data = spider_df, aes(x = AxisIndex, y = .plot_radius, color = Group, fill = Group, group = Group), shape = 21, size = 2.4, stroke = 0.18) +
+    geom_text(
+      data = radial_label_df,
+      aes(x = AxisIndex, y = Radius, label = Label),
+      inherit.aes = FALSE,
+      color = serum_neutral_text,
+      size = 3,
+      vjust = -0.35
+    ) +
+    coord_polar(start = polar_start, clip = "off") +
+    scale_x_continuous(
+      breaks = seq_along(axis_levels),
+      labels = axis_levels,
+      limits = c(1, length(axis_levels) + 1),
+      expand = c(0, 0)
+    ) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    scale_y_continuous(
+      limits = c(0, radial_limit),
+      breaks = radial_plot_breaks,
+      labels = radial_breaks,
+      expand = expansion(mult = c(0, 0.1))
+    ) +
+    labs(x = NULL, y = NULL, title = title_text) +
+    serum_theme_minimal() +
+    theme(
+      axis.text.x = element_text(size = 9, color = serum_text_primary),
+      axis.text.y = element_blank(),
+      axis.title = element_blank(),
+      plot.title = element_text(face = "bold", hjust = 0.5, size = 14, color = serum_text_muted),
+      legend.title = element_blank(),
+      legend.position = "top",
+      plot.margin = margin(10, 10, 18, 10)
+    )
+}
+
+prepare_isoacceptor_heatmap_long <- function(detail_df, origin_filter = NULL) {
+  out <- detail_df %>%
+    filter(AminoAcid != "Unknown", Anticodon != "Unknown")
+
+  if (!is.null(origin_filter)) {
+    out <- out %>% filter(Origin == origin_filter)
+  }
+
+  out %>%
+    left_join(clean_reads_tbl, by = "Sample") %>%
+    mutate(
+      CleavageGroup = case_when(
+        Cleavage == "CCA-end" ~ "3_CCA",
+        Cleavage == "5'end" ~ "5_end",
+        Cleavage == "3'end" ~ "3_end",
+        Cleavage == "Internal/full" ~ "inner",
+        TRUE ~ NA_character_
+      ),
+      AnticodonLabel = paste(AminoAcid, Anticodon, sep = "-"),
+      RPM = if_else(CleanReads > 0, 1e6 * Reads / CleanReads, 0)
+    ) %>%
+    filter(!is.na(CleavageGroup)) %>%
+    group_by(Sample, Group, CleavageGroup, AnticodonLabel) %>%
+    summarise(Reads = sum(Reads, na.rm = TRUE), RPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+    summarise_group_mean_rpm(c("CleavageGroup", "AnticodonLabel"))
+}
+
+isoacceptor_heatmap_gaps <- function(block_size, n_blocks) {
+  if (n_blocks <= 1) return(integer(0))
+  seq(block_size, block_size * (n_blocks - 1), by = block_size)
+}
+
+add_column_block_annotation <- function(heatmap_gtable, block_labels, block_sizes, block_colors, gaps_col, row_name, fontsize = 10, border_color = "grey60") {
+  if (!pkg_has("gtable")) return(heatmap_gtable)
+
+  layout <- heatmap_gtable$layout
+  matrix_idx <- which(layout$name == "matrix")
+  annotation_idx <- which(layout$name == "col_annotation")
+  if (length(matrix_idx) == 0 || length(annotation_idx) == 0) return(heatmap_gtable)
+
+  n_cols <- sum(block_sizes)
+  starts <- cumsum(c(1L, head(block_sizes, -1L)))
+  ends <- cumsum(block_sizes)
+  coord <- getFromNamespace("find_coordinates", "pheatmap")(n_cols, gaps_col)
+  block_left <- coord$coord[starts] - coord$size
+  block_right <- coord$coord[ends]
+  block_width <- block_right - block_left
+  block_x <- block_left + 0.5 * block_width
+
+  block_grob <- grid::grobTree(
+    grid::rectGrob(
+      x = block_x,
+      y = grid::unit(0.5, "npc"),
+      width = block_width,
+      height = grid::unit(fontsize, "bigpts"),
+      gp = grid::gpar(fill = unname(block_colors[block_labels]), col = border_color, lwd = 0.35)
+    ),
+    grid::textGrob(
+      label = block_labels,
+      x = block_x,
+      y = grid::unit(0.5, "npc"),
+      gp = grid::gpar(col = serum_text_primary, fontsize = fontsize * 0.78, fontface = "bold")
+    )
+  )
+
+  insert_after <- min(layout$t[annotation_idx]) - 1
+  block_height <- grid::unit(fontsize + 4, "bigpts")
+  # pheatmap already fills 1 npc; reserve the new annotation inside that height.
+  matrix_row <- layout$t[matrix_idx]
+  heatmap_gtable$heights[matrix_row] <- heatmap_gtable$heights[matrix_row] - block_height
+  heatmap_gtable <- gtable::gtable_add_rows(heatmap_gtable, block_height, pos = insert_after)
+  heatmap_gtable <- gtable::gtable_add_grob(
+    heatmap_gtable,
+    block_grob,
+    t = insert_after + 1,
+    l = layout$l[matrix_idx],
+    b = insert_after + 1,
+    r = layout$r[matrix_idx],
+    name = "cleavage_block_annotation",
+    clip = "off"
+  )
+
+  annotation_name_idx <- which(layout$name == "col_annotation_names")
+  if (length(annotation_name_idx) > 0) {
+    heatmap_gtable <- gtable::gtable_add_grob(
+      heatmap_gtable,
+      grid::textGrob(row_name, x = grid::unit(0, "npc"), just = "left", gp = grid::gpar(fontsize = fontsize)),
+      t = insert_after + 1,
+      l = layout$l[annotation_name_idx],
+      b = insert_after + 1,
+      r = layout$r[annotation_name_idx],
+      name = "cleavage_block_annotation_name",
+      clip = "off"
+    )
+  }
+
+  heatmap_gtable
+}
+
+render_isoacceptor_heatmap <- function(heatmap_long, output_name, title_text, value_mode = c("log", "zscore"), column_layout = c("cleavage_major", "group_major")) {
+  cleavage_order <- c("5_end", "inner", "3_end", "3_CCA")
+  value_mode <- match.arg(value_mode)
+  column_layout <- match.arg(column_layout)
+  if (nrow(heatmap_long) == 0 || !pkg_has("pheatmap")) return(invisible(NULL))
+
+  top_labels <- heatmap_long %>%
+    group_by(AnticodonLabel) %>%
+    summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(TotalRPM)) %>%
+    slice_head(n = 36) %>%
+    pull(AnticodonLabel)
+
+  cleavage_colors <- c(
+    "3_CCA" = ts_cleavage_palette[["CCA-end"]],
+    "inner" = ts_cleavage_palette[["Internal/full"]],
+    "5_end" = ts_cleavage_palette[["5'end"]],
+    "3_end" = ts_cleavage_palette[["3'end"]]
+  )
+
+  if (column_layout == "cleavage_major") {
+    column_levels <- unlist(lapply(cleavage_order, function(cg) paste(cg, group_levels, sep = "__")))
+    annotation_col <- data.frame(
+      Group = factor(rep(group_levels, times = length(cleavage_order)), levels = group_levels),
+      row.names = column_levels
+    )
+    annotation_colors <- list(Group = group_palette)
+    labels_col <- rep(group_levels, times = length(cleavage_order))
+    block_labels <- cleavage_order
+    block_sizes <- rep(length(group_levels), length(cleavage_order))
+    block_colors <- cleavage_colors
+    block_row_name <- "Cleavage"
+    gaps_col <- isoacceptor_heatmap_gaps(length(group_levels), length(cleavage_order))
+  } else {
+    column_levels <- unlist(lapply(group_levels, function(group_name) paste(cleavage_order, group_name, sep = "__")))
+    annotation_col <- data.frame(
+      Cleavage = factor(rep(cleavage_order, times = length(group_levels)), levels = cleavage_order),
+      row.names = column_levels
+    )
+    annotation_colors <- list(Cleavage = cleavage_colors)
+    labels_col <- rep(cleavage_order, times = length(group_levels))
+    block_labels <- group_levels
+    block_sizes <- rep(length(cleavage_order), length(group_levels))
+    block_colors <- group_palette[group_levels]
+    block_row_name <- "Group"
+    gaps_col <- isoacceptor_heatmap_gaps(length(cleavage_order), length(group_levels))
+  }
+
+  heatmap_ready <- heatmap_long %>%
+    filter(AnticodonLabel %in% top_labels, CleavageGroup %in% cleavage_order) %>%
+    complete(
+      AnticodonLabel = top_labels,
+      CleavageGroup = cleavage_order,
+      Group = group_levels,
+      fill = list(RPM = 0)
+    ) %>%
+    mutate(ColumnKey = factor(paste(CleavageGroup, Group, sep = "__"), levels = column_levels))
+
+  heatmap_wide <- heatmap_ready %>%
+    select(AnticodonLabel, ColumnKey, RPM) %>%
+    pivot_wider(names_from = ColumnKey, values_from = RPM, values_fill = 0)
+
+  heatmap_matrix <- heatmap_wide %>% select(-AnticodonLabel) %>% as.matrix()
+  rownames(heatmap_matrix) <- heatmap_wide$AnticodonLabel
+  heatmap_matrix <- heatmap_matrix[, column_levels, drop = FALSE]
+  heatmap_matrix <- log10(heatmap_matrix + 1)
+  if (value_mode == "zscore") {
+    heatmap_matrix <- safe_scale_rows(heatmap_matrix)
+    heatmap_matrix <- pmax(pmin(heatmap_matrix, 2), -2)
+    heatmap_breaks <- seq(-2, 2, length.out = 102)
+    heatmap_legend_breaks <- seq(-2, 2, by = 1)
+    heatmap_legend_labels <- as.character(heatmap_legend_breaks)
+  } else {
+    heatmap_matrix <- pmin(heatmap_matrix, 2)
+    heatmap_breaks <- seq(0, 2, length.out = 102)
+    heatmap_legend_breaks <- seq(0, 2, by = 0.5)
+    heatmap_legend_labels <- c("0", "0.5", "1.0", "1.5", "2.0")
+  }
+
+  heatmap_dir <- build_nested_dir(OUTPUT_FIG_DIR, "05_isoacceptor_heatmap", view = REPORT_VIEW)
+  pdf_path <- file.path(heatmap_dir, output_name)
+  heatmap_height <- max(8, nrow(heatmap_matrix) * 0.24 + 2.8)
+
+  heatmap_plot <- figure_pheatmap(
+    heatmap_matrix,
+    cluster_rows = TRUE,
+    cluster_cols = FALSE,
+    gaps_col = gaps_col,
+    border_color = "grey60",
+    color = grDevices::colorRampPalette(serum_heatmap_gradient)(101),
+    breaks = heatmap_breaks,
+    legend_breaks = heatmap_legend_breaks,
+    legend_labels = heatmap_legend_labels,
+    annotation_col = annotation_col,
+    annotation_colors = annotation_colors,
+    labels_col = labels_col,
+    angle_col = 0,
+    fontsize_col = 10,
+    fontsize_row = 8,
+    main = title_text,
+    width = 10.5,
+    height = heatmap_height,
+    silent = TRUE
+  )
+  heatmap_gtable <- add_column_block_annotation(
+    heatmap_plot$gtable,
+    block_labels = block_labels,
+    block_sizes = block_sizes,
+    block_colors = block_colors,
+    gaps_col = gaps_col,
+    row_name = block_row_name,
+    fontsize = 10
+  )
+
+  save_plot_device(
+    pdf_path,
+    data = list(matrix=heatmap_matrix, values=heatmap_ready),
+    width = 10.5,
+    height = heatmap_height,
+    draw_fn = function() {
+      grid::grid.newpage()
+      grid::grid.draw(heatmap_gtable)
+    }
+  )
+}
+PANDORA_CAN_PCA <- nrow(sample_info) >= 3L
+pandora_group_n <- table(as.character(sample_info$Group))
+PANDORA_CAN_COMPARE <- length(pandora_group_n) >= 2L && all(pandora_group_n >= 2L)
+write_csv_safe(tibble(
+  AnalysisStage = PANDORA_ANALYSIS_STAGE,
+  AnalysisScope = get0("analysis_scope", inherits = TRUE, ifnotfound = "all"),
+  LibraryN = nrow(sample_info), GroupN = length(pandora_group_n),
+  PCAApplicable = PANDORA_CAN_PCA, GroupComparisonApplicable = PANDORA_CAN_COMPARE
+), "analysis_stage_status.csv")
+
+```
+
+```{r tsrna-origin-compare, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+group_origin_plot_df <- group_tsrna_origin_view %>%
+  mutate(OriginLabel = format_origin_label(Origin))
+
+for (group_name in group_levels) {
+  origin_plot <- plot_percent_pie(
+    group_origin_plot_df %>% filter(Group == group_name) %>% transmute(Group, Origin = OriginLabel, Reads, Percent),
+    "Origin",
+    ts_origin_palette,
+    paste0("Group ", group_name, " tsRNA origin"),
+    "No tsRNA origin data available."
+  )
+  save_plot_nested(origin_plot, "01_origin", paste0("group_", safe_dir_name(group_name), ".pdf"), width = 6, height = 5, view = REPORT_VIEW)
+}
+
+tsrna_origin_trend <- group_origin_plot_df %>%
+  transmute(Group, TrendCategory = OriginLabel, Reads, Percent)
+tsrna_origin_levels <- names(ts_origin_palette)[names(ts_origin_palette) %in% unique(tsrna_origin_trend$TrendCategory)]
+
+if (length(tsrna_origin_levels) >= 2) {
+  origin_percent_bar <- build_trend_bar_plot(tsrna_origin_trend, tsrna_origin_levels, "Percent", "tsRNA origin across groups", "Proportion within tsRNA (%)", group_levels, fill_palette = ts_origin_palette)
+  origin_percent_alluvial <- build_trend_alluvial_plot(tsrna_origin_trend, tsrna_origin_levels, "Percent", "Alluvial plot of tsRNA origin across groups", "Proportion within tsRNA (%)", group_levels, fill_palette = ts_origin_palette)
+  origin_reads_bar <- build_trend_bar_plot(tsrna_origin_trend, tsrna_origin_levels, "Reads", "tsRNA origin reads across groups", "Reads", group_levels, fill_palette = ts_origin_palette)
+  origin_reads_alluvial <- build_trend_alluvial_plot(tsrna_origin_trend, tsrna_origin_levels, "Reads", "Alluvial plot of tsRNA origin reads across groups", "Reads", group_levels, fill_palette = ts_origin_palette)
+
+  save_plot_nested(origin_percent_bar, "01_origin", "group_compare_percent_bar.pdf", width = 9, height = 6, view = REPORT_VIEW)
+  save_plot_nested(origin_percent_alluvial, "01_origin", "group_compare_percent_alluvial.pdf", width = 10, height = 6, view = REPORT_VIEW)
+  save_plot_nested(origin_reads_bar, "01_origin", "group_compare_reads_bar.pdf", width = 9, height = 6, view = REPORT_VIEW)
+  save_plot_nested(origin_reads_alluvial, "01_origin", "group_compare_reads_alluvial.pdf", width = 10, height = 6, view = REPORT_VIEW)
+}
+```
+
+```{r tsrna-cleavage-compare, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+group_cleavage_plot_df <- group_tsrna_cleavage_view %>%
+  mutate(CleavageLabel = map2_chr(Origin, Cleavage, format_cleavage_label))
+
+for (group_name in group_levels) {
+  genomic_plot <- plot_percent_pie(
+    group_cleavage_plot_df %>%
+      filter(Group == group_name, Origin == "Genomic") %>%
+      transmute(Group, Cleavage = CleavageLabel, Reads, Percent),
+    "Cleavage",
+    ts_genomic_palette,
+    paste0("Group ", group_name, " genomic tsRNA cleavage"),
+    "No genomic tsRNA cleavage data available."
+  ) + theme(plot.title.position = "plot")
+  mito_plot <- plot_percent_pie(
+    group_cleavage_plot_df %>%
+      filter(Group == group_name, Origin == "Mitochondrial") %>%
+      transmute(Group, Cleavage = CleavageLabel, Reads, Percent),
+    "Cleavage",
+    ts_mito_palette,
+    paste0("Group ", group_name, " mitochondrial tsRNA cleavage"),
+    "No mitochondrial tsRNA cleavage data available."
+  ) + theme(plot.title.position = "plot")
+  combined_plot <- build_plot_collage(
+    list(genomic_plot, mito_plot),
+    title_text = paste0("Group ", group_name, " tsRNA cleavage"),
+    cols = 2
+  )
+  save_plot_nested(combined_plot, "02_cleavage", paste0("group_", safe_dir_name(group_name), ".pdf"), width = 12, height = 5.5, view = REPORT_VIEW)
+}
+
+for (origin_name in c("Genomic", "Mitochondrial")) {
+  origin_df <- group_cleavage_plot_df %>%
+    filter(Origin == origin_name) %>%
+    transmute(Group, TrendCategory = CleavageLabel, Reads, Percent)
+  cleavage_levels <- unique(as.character(origin_df$TrendCategory))
+  if (length(cleavage_levels) < 2) next
+
+  cleavage_palette <- if (origin_name == "Genomic") ts_genomic_palette else ts_mito_palette
+  file_prefix <- if (origin_name == "Genomic") "genomic" else "mitochondrial"
+
+  save_plot_nested(
+    build_trend_bar_plot(origin_df, cleavage_levels, "Percent", paste0(origin_name, " tsRNA cleavage across groups"), "Proportion (%)", group_levels, fill_palette = cleavage_palette),
+    "02_cleavage",
+    paste0(file_prefix, "_group_compare_bar.pdf"),
+    width = 9,
+    height = 6,
+    view = REPORT_VIEW
+  )
+  save_plot_nested(
+    build_trend_alluvial_plot(origin_df, cleavage_levels, "Percent", paste0("Alluvial of ", origin_name, " tsRNA cleavage across groups"), "Proportion (%)", group_levels, fill_palette = cleavage_palette),
+    "02_cleavage",
+    paste0(file_prefix, "_group_compare_alluvial.pdf"),
+    width = 10,
+    height = 6,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r amino-acid-data, include=FALSE, pandora_stage="prepare", eval=TRUE}
+aa_sample_df <- tsrna_base_detail %>%
+  filter(AminoAcid != "Unknown") %>%
+  group_by(Sample, Group, AminoAcid) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(RPM = if_else(CleanReads > 0, 1e6 * Reads / CleanReads, 0)) %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+aa_group_df <- aa_sample_df %>%
+  summarise_group_mean_rpm("AminoAcid") %>%
+  left_join(
+    aa_sample_df %>%
+      summarise_group_mean_percent("AminoAcid") %>%
+      select(Group, AminoAcid, Percent),
+    by = c("Group", "AminoAcid")
+  ) %>%
+  mutate(Percent = replace_na(Percent, 0))
+
+aa_levels <- aa_group_df %>%
+  group_by(AminoAcid) %>%
+  summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(TotalRPM)) %>%
+  slice_head(n = 20) %>%
+  pull(AminoAcid) %>%
+  order_by_reference(canonical_aa_order)
+
+mt_tsrna_detail <- tsrna_base_detail %>% filter(Origin == "Mitochondrial", AminoAcid != "Unknown")
+mt_aa_sample_df <- mt_tsrna_detail %>%
+  group_by(Sample, Group, AminoAcid) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(RPM = if_else(CleanReads > 0, 1e6 * Reads / CleanReads, 0)) %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+mt_aa_group_df <- mt_aa_sample_df %>%
+  summarise_group_mean_rpm("AminoAcid") %>%
+  left_join(
+    mt_aa_sample_df %>%
+      summarise_group_mean_percent("AminoAcid") %>%
+      select(Group, AminoAcid, Percent),
+    by = c("Group", "AminoAcid")
+  ) %>%
+  mutate(Percent = replace_na(Percent, 0))
+
+mt_aa_levels <- mt_aa_group_df %>%
+  group_by(AminoAcid) %>%
+  summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(TotalRPM)) %>%
+  slice_head(n = 15) %>%
+  pull(AminoAcid) %>%
+  order_by_reference(canonical_aa_order)
+```
+
+```{r amino-acid-compare, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (length(aa_levels) >= 2) {
+  aa_palette <- palette_for_levels(aa_levels)
+  aa_trend <- aa_group_df %>%
+    filter(AminoAcid %in% aa_levels) %>%
+    transmute(Group, TrendCategory = AminoAcid, Reads, Percent)
+
+  save_plot_nested(
+    build_trend_alluvial_plot(aa_trend, aa_levels, "Percent", "Alluvial of tsRNA amino-acid across groups", "Proportion (%)", group_levels, fill_palette = aa_palette),
+    "03_amino_acid",
+    "tsRNA_percent_alluvial.pdf",
+    width = 10,
+    height = 6,
+    view = REPORT_VIEW
+  )
+}
+
+if (length(mt_aa_levels) >= 2) {
+  mt_aa_palette <- palette_for_levels(mt_aa_levels)
+  mt_aa_trend <- mt_aa_group_df %>%
+    filter(AminoAcid %in% mt_aa_levels) %>%
+    transmute(Group, TrendCategory = AminoAcid, Reads, Percent)
+
+  save_plot_nested(
+    build_trend_alluvial_plot(mt_aa_trend, mt_aa_levels, "Percent", "Alluvial of mt-tsRNA amino-acid across groups", "Proportion (%)", group_levels, fill_palette = mt_aa_palette),
+    "03_amino_acid",
+    "mt_tsRNA_percent_alluvial.pdf",
+    width = 10,
+    height = 6,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r amino-acid-spider, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (length(aa_levels) >= 3) {
+  spider_levels <- sort(unique(as.character(aa_levels)), method = "radix")
+  for (group_name in group_levels) {
+    group_df <- aa_group_df %>%
+      filter(Group == group_name, AminoAcid %in% spider_levels) %>%
+      complete(AminoAcid = spider_levels, fill = list(Reads = 0, Percent = 0, RPM = 0)) %>%
+      mutate(AminoAcid = factor(AminoAcid, levels = spider_levels)) %>%
+      arrange(AminoAcid)
+
+    percent_spider <- build_single_spider_plot(
+      group_df,
+      "Percent",
+      group_palette[[group_name]],
+      paste0("Group ", group_name, " tsRNA amino-acid spider")
+    )
+    save_plot_nested(percent_spider, "06_spider", paste0("tsRNA_amino_acid_group_", safe_dir_name(group_name), ".pdf"), width = 7.2, height = 6.3, view = REPORT_VIEW)
+
+    log_spider <- build_single_spider_plot(
+      group_df %>% mutate(logRPM = log10(RPM + 1)),
+      "logRPM",
+      group_palette[[group_name]],
+      paste0("Group ", group_name, " tsRNA amino-acid log10(RPM+1) spider")
+    )
+    save_plot_nested(log_spider, "06_spider", paste0("tsRNA_logRPM_group_", safe_dir_name(group_name), ".pdf"), width = 7.2, height = 6.3, view = REPORT_VIEW)
+  }
+
+  spider_groups_df <- aa_group_df %>%
+    filter(AminoAcid %in% spider_levels) %>%
+    mutate(logRPM = log10(RPM + 1)) %>%
+    select(Group, AminoAcid, logRPM) %>%
+    complete(Group = group_levels, AminoAcid = spider_levels, fill = list(logRPM = 0)) %>%
+    mutate(Group = factor(Group, levels = group_levels), AminoAcid = factor(AminoAcid, levels = spider_levels)) %>%
+    arrange(Group, AminoAcid)
+
+  p_groups <- build_group_spider_plot(
+    spider_groups_df,
+    "logRPM",
+    "tsRNA amino-acid log10(RPM+1) spider across groups"
+  )
+  save_plot_nested(p_groups, "06_spider", "tsRNA_logRPM_group_compare.pdf", width = 7.6, height = 6.6, view = REPORT_VIEW)
+}
+
+if (length(mt_aa_levels) >= 3) {
+  mt_spider_levels <- sort(unique(as.character(mt_aa_levels)), method = "radix")
+  for (group_name in group_levels) {
+    group_df <- mt_aa_group_df %>%
+      filter(Group == group_name, AminoAcid %in% mt_spider_levels) %>%
+      complete(AminoAcid = mt_spider_levels, fill = list(Reads = 0, Percent = 0, RPM = 0)) %>%
+      mutate(AminoAcid = factor(AminoAcid, levels = mt_spider_levels)) %>%
+      arrange(AminoAcid)
+
+    percent_spider <- build_single_spider_plot(
+      group_df,
+      "Percent",
+      group_palette[[group_name]],
+      paste0("Group ", group_name, " mt-tsRNA amino-acid spider")
+    )
+    save_plot_nested(percent_spider, "06_spider", paste0("mt_tsRNA_amino_acid_group_", safe_dir_name(group_name), ".pdf"), width = 7.2, height = 6.3, view = REPORT_VIEW)
+
+    log_spider <- build_single_spider_plot(
+      group_df %>% mutate(logRPM = log10(RPM + 1)),
+      "logRPM",
+      group_palette[[group_name]],
+      paste0("Group ", group_name, " mt-tsRNA amino-acid log10(RPM+1) spider")
+    )
+    save_plot_nested(log_spider, "06_spider", paste0("mt_tsRNA_logRPM_group_", safe_dir_name(group_name), ".pdf"), width = 7.2, height = 6.3, view = REPORT_VIEW)
+  }
+
+  mt_spider_groups_df <- mt_aa_group_df %>%
+    filter(AminoAcid %in% mt_spider_levels) %>%
+    mutate(logRPM = log10(RPM + 1)) %>%
+    select(Group, AminoAcid, logRPM) %>%
+    complete(Group = group_levels, AminoAcid = mt_spider_levels, fill = list(logRPM = 0)) %>%
+    mutate(Group = factor(Group, levels = group_levels), AminoAcid = factor(AminoAcid, levels = mt_spider_levels)) %>%
+    arrange(Group, AminoAcid)
+
+  mt_p_groups <- build_group_spider_plot(
+    mt_spider_groups_df,
+    "logRPM",
+    "mt-tsRNA amino-acid log10(RPM+1) spider across groups"
+  )
+  save_plot_nested(mt_p_groups, "06_spider", "mt_tsRNA_logRPM_group_compare.pdf", width = 7.6, height = 6.6, view = REPORT_VIEW)
+}
+```
+
+```{r tsrna-isoacceptor-bar, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+ts_anticodon_group <- tsrna_base_detail %>%
+  filter(AminoAcid != "Unknown", Anticodon != "Unknown") %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(
+    AnticodonLabel = paste(AminoAcid, Anticodon, sep = "-"),
+    RPM = if_else(CleanReads > 0, 1e6 * Reads / CleanReads, 0)
+  ) %>%
+  group_by(Sample, Group, AnticodonLabel) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), RPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  summarise_group_mean_rpm("AnticodonLabel") %>%
+  filter(RPM > 0 | Reads > 0) %>%
+  arrange(Group, desc(RPM)) %>%
+  group_by(Group) %>%
+  slice_head(n = 20) %>%
+  ungroup()
+
+if (nrow(ts_anticodon_group) > 0) {
+  all_labels <- ts_anticodon_group %>% arrange(desc(RPM)) %>% pull(AnticodonLabel) %>% unique()
+  ts_anticodon_group <- ts_anticodon_group %>%
+    mutate(AnticodonLabel = factor(AnticodonLabel, levels = rev(all_labels)))
+
+  isoacceptor_bar <- ggplot(ts_anticodon_group, aes(x = AnticodonLabel, y = RPM + 1, fill = Group)) +
+    geom_col(position = "dodge", width = 0.7) +
+    scale_y_log10() +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    coord_flip() +
+    labs(x = NULL, y = "RPM + 1 (log scale)", title = "tsRNA isoacceptor comparison across groups") +
+    serum_theme_bw() +
+    theme(legend.title = element_blank(), legend.position = "top")
+
+  save_plot_nested(isoacceptor_bar, "04_isoacceptor_bar", "tsRNA_isoacceptor_bar.pdf", width = 10, height = 7, view = REPORT_VIEW)
+}
+
+mt_ts_anticodon_group <- tsrna_base_detail %>%
+  filter(Origin == "Mitochondrial", AminoAcid != "Unknown", Anticodon != "Unknown") %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(
+    AnticodonLabel = paste(AminoAcid, Anticodon, sep = "-"),
+    RPM = if_else(CleanReads > 0, 1e6 * Reads / CleanReads, 0)
+  ) %>%
+  group_by(Sample, Group, AnticodonLabel) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), RPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  summarise_group_mean_rpm("AnticodonLabel") %>%
+  filter(RPM > 0 | Reads > 0) %>%
+  arrange(Group, desc(RPM)) %>%
+  group_by(Group) %>%
+  slice_head(n = 20) %>%
+  ungroup()
+
+if (nrow(mt_ts_anticodon_group) > 0) {
+  all_labels_mt <- mt_ts_anticodon_group %>% arrange(desc(RPM)) %>% pull(AnticodonLabel) %>% unique()
+  mt_ts_anticodon_group <- mt_ts_anticodon_group %>%
+    mutate(AnticodonLabel = factor(AnticodonLabel, levels = rev(all_labels_mt)))
+
+  mt_isoacceptor_bar <- ggplot(mt_ts_anticodon_group, aes(x = AnticodonLabel, y = RPM + 1, fill = Group)) +
+    geom_col(position = "dodge", width = 0.7) +
+    scale_y_log10() +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    coord_flip() +
+    labs(x = NULL, y = "RPM + 1 (log scale)", title = "mt-tsRNA isoacceptor comparison across groups") +
+    serum_theme_bw() +
+    theme(legend.title = element_blank(), legend.position = "top")
+
+  save_plot_nested(mt_isoacceptor_bar, "04_isoacceptor_bar", "mt_tsRNA_isoacceptor_bar.pdf", width = 10, height = 7, view = REPORT_VIEW)
+}
+```
+
+```{r tsrna-isoacceptor-heatmap, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+render_isoacceptor_heatmap(
+  prepare_isoacceptor_heatmap_long(tsrna_cleavage_detail),
+  "tsRNA_isoacceptor_heatmap.pdf",
+  "tsRNA isoacceptor log10(RPM+1) heatmap across groups",
+  value_mode = "log",
+  column_layout = "cleavage_major"
+)
+
+render_isoacceptor_heatmap(
+  prepare_isoacceptor_heatmap_long(tsrna_cleavage_detail, origin_filter = "Mitochondrial"),
+  "mt_tsRNA_isoacceptor_heatmap.pdf",
+  "mt-tsRNA isoacceptor log10(RPM+1) heatmap across groups",
+  value_mode = "log",
+  column_layout = "cleavage_major"
+)
+
+render_isoacceptor_heatmap(
+  prepare_isoacceptor_heatmap_long(tsrna_cleavage_detail),
+  "tsRNA_isoacceptor_zscore_heatmap.pdf",
+  "tsRNA isoacceptor log10(RPM+1) row z-score heatmap across groups",
+  value_mode = "zscore",
+  column_layout = "group_major"
+)
+
+render_isoacceptor_heatmap(
+  prepare_isoacceptor_heatmap_long(tsrna_cleavage_detail, origin_filter = "Mitochondrial"),
+  "mt_tsRNA_isoacceptor_zscore_heatmap.pdf",
+  "mt-tsRNA isoacceptor log10(RPM+1) row z-score heatmap across groups",
+  value_mode = "zscore",
+  column_layout = "group_major"
+)
+```
+
+```{r tsrna-origin-pattern-heatmap, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+tsrna_origin_pattern <- tsrna_cleavage_detail %>%
+  filter(AminoAcid != "Unknown", Anticodon != "Unknown") %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(
+    AnticodonLabel = paste(AminoAcid, Anticodon, sep = "-"),
+    CleavagePattern = case_when(
+      Cleavage == "CCA-end" ~ "3_CCA",
+      Cleavage == "5'end" ~ "5_end",
+      Cleavage == "3'end" ~ "3_end",
+      TRUE ~ "inner"
+    ),
+    RPM = if_else(CleanReads > 0, 1e6 * Reads / CleanReads, 0)
+  ) %>%
+  group_by(Sample, Group, Origin, CleavagePattern, AnticodonLabel) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), RPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  summarise_group_mean_rpm(c("Origin", "CleavagePattern", "AnticodonLabel"))
+
+plot_tsrna_origin_pattern <- function(pattern_df, origin_name, output_name) {
+  origin_df <- pattern_df %>% filter(Origin == origin_name)
+  if (nrow(origin_df) == 0) {
+    save_plot_nested(
+      plot_note(paste0(origin_name, " tsRNA origin pattern"), "No tsRNA origin pattern data available."),
+      "07_origin_pattern",
+      output_name,
+      width = 8,
+      height = 5,
+      view = REPORT_VIEW
+    )
+    return(invisible(NULL))
+  }
+
+  top_labels <- origin_df %>%
+    group_by(AnticodonLabel) %>%
+    summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+    arrange(desc(TotalRPM), AnticodonLabel) %>%
+    slice_head(n = 36) %>%
+    pull(AnticodonLabel)
+
+  plot_df <- origin_df %>%
+    filter(AnticodonLabel %in% top_labels) %>%
+    complete(
+      CleavagePattern = c("5_end", "inner", "3_end", "3_CCA"),
+      Group = group_levels,
+      AnticodonLabel = top_labels,
+      fill = list(RPM = 0, Reads = 0)
+    ) %>%
+    group_by(AnticodonLabel) %>%
+    mutate(
+      logRPM = log10(RPM + 1),
+      ZScore = {
+        scaled <- as.numeric(scale(logRPM))
+        ifelse(is.finite(scaled), scaled, 0)
+      }
+    ) %>%
+    ungroup() %>%
+    mutate(
+      Group = factor(as.character(Group), levels = group_levels),
+      CleavagePattern = factor(CleavagePattern, levels = c("5_end", "inner", "3_end", "3_CCA")),
+      AnticodonLabel = factor(AnticodonLabel, levels = rev(top_labels))
+    )
+
+  origin_pattern_plot <- ggplot(plot_df, aes(x = Group, y = AnticodonLabel, fill = pmax(pmin(ZScore, 2), -2))) +
+    geom_tile(color = "white", linewidth = 0.2) +
+    facet_wrap(~CleavagePattern, nrow = 1) +
+    scale_fill_gradientn(colours = serum_heatmap_gradient, limits = c(-2, 2), name = "Z-score") +
+    labs(
+      x = "Group",
+      y = NULL,
+      title = paste0(origin_name, " tsRNA origin pattern by cleavage")
+    ) +
+    serum_theme_bw() +
+    theme(
+      axis.text.x = element_text(angle = 45, hjust = 1),
+      strip.background = element_rect(fill = "white", color = serum_neutral_line),
+      legend.position = "right"
+    )
+
+  save_plot_nested(
+    origin_pattern_plot,
+    "07_origin_pattern",
+    output_name,
+    width = 12,
+    height = max(6.5, length(top_labels) * 0.18 + 2.5),
+    view = REPORT_VIEW
+  )
+}
+
+plot_tsrna_origin_pattern(tsrna_origin_pattern, "Genomic", "genomic_tsRNA_origin_pattern.pdf")
+plot_tsrna_origin_pattern(tsrna_origin_pattern, "Mitochondrial", "mitochondrial_tsRNA_origin_pattern.pdf")
+```
+
+```{r tsrna-mapping-profile, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+build_tsrna_mapping_profile_path <- function(sample_id) {
+  file.path(SPORTS_RESULT_DIR, sample_id, paste0(sample_id, "_processed"), paste0(sample_id, "_tRNA_mature_mapping.txt"))
+}
+
+normalize_mapping_trna_name <- function(x) {
+  str_replace(as.character(x), "-[0-9]+$", "")
+}
+
+read_tsrna_mapping_profile <- function(sample_id) {
+  profile_file <- build_tsrna_mapping_profile_path(sample_id)
+  if (!file.exists(profile_file)) {
+    return(tibble(Sample = character(), tRNA = character(), Position = integer(), RPM = numeric(), MappingProfileFile = character()))
+  }
+
+  lines <- readLines(profile_file, warn = FALSE)
+  map_dfr(lines, function(line_text) {
+    parts <- strsplit(line_text, "\t", fixed = TRUE)[[1]]
+    if (length(parts) < 2 || !nzchar(parts[[1]]) || !nzchar(parts[[2]])) {
+      return(tibble(Sample = character(), tRNA = character(), Position = integer(), RPM = numeric(), MappingProfileFile = character()))
+    }
+    values <- clean_numeric(strsplit(parts[[2]], ",", fixed = TRUE)[[1]])
+    tibble(
+      Sample = sample_id,
+      tRNA = normalize_mapping_trna_name(parts[[1]]),
+      Position = seq_along(values),
+      RPM = replace_na(values, 0),
+      MappingProfileFile = profile_file
+    )
+  })
+}
+
+tsrna_mapping_profile_index <- sample_info %>%
+  transmute(
+    Sample = as.character(Sample),
+    Group = as.character(Group),
+    MappingProfileFile = map_chr(Sample, build_tsrna_mapping_profile_path),
+    MappingProfileExists = file.exists(MappingProfileFile)
+  )
+
+missing_tsrna_mapping_profiles <- tsrna_mapping_profile_index %>% filter(!MappingProfileExists)
+if (nrow(missing_tsrna_mapping_profiles) > 0) {
+  warning("Missing tsRNA mapping profile files for samples: ", paste(missing_tsrna_mapping_profiles$Sample, collapse = ", "))
+}
+
+tsrna_mapping_sample_profiles <- map_dfr(as.character(sample_info$Sample), read_tsrna_mapping_profile) %>%
+  left_join(sample_info %>% transmute(Sample = as.character(Sample), Group = as.character(Group)), by = "Sample") %>%
+  select(Sample, Group, tRNA, Position, RPM, MappingProfileFile)
+
+tsrna_mapping_group_profiles <- tsrna_mapping_sample_profiles %>%
+  group_by(Group, tRNA, Position) %>%
+  summarise(
+    MeanRPM = mean(RPM, na.rm = TRUE),
+    SampleN = n_distinct(Sample),
+    .groups = "drop"
+  ) %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+tsrna_mapping_group_profiles_wide <- tsrna_mapping_group_profiles %>%
+  mutate(Group = as.character(Group)) %>%
+  select(tRNA, Position, Group, MeanRPM) %>%
+  tidyr::pivot_wider(names_from = Group, values_from = MeanRPM, values_fill = 0)
+
+for (group_name in group_levels) {
+  if (!group_name %in% names(tsrna_mapping_group_profiles_wide)) {
+    tsrna_mapping_group_profiles_wide[[group_name]] <- 0
+  }
+}
+tsrna_mapping_group_profiles_wide <- tsrna_mapping_group_profiles_wide %>%
+  select(tRNA, Position, all_of(group_levels)) %>%
+  arrange(tRNA, Position)
+
+top_mapping_trnas <- tsrna_mapping_group_profiles %>%
+  group_by(tRNA) %>%
+  summarise(TotalRPM = sum(MeanRPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(TotalRPM), tRNA) %>%
+  slice_head(n = 16) %>%
+  pull(tRNA)
+
+tsrna_mapping_profile_plot <- if (length(top_mapping_trnas) == 0) {
+  plot_note("tsRNA mapping profiles", "No tRNA mapping profile data available.")
+} else {
+  tsrna_mapping_plot_df <- tsrna_mapping_group_profiles %>%
+    filter(tRNA %in% top_mapping_trnas) %>%
+    mutate(tRNA = factor(tRNA, levels = top_mapping_trnas))
+
+  ggplot(tsrna_mapping_plot_df, aes(x = Position, y = MeanRPM, color = Group, group = Group)) +
+    geom_line(linewidth = 0.75, alpha = 0.95) +
+    facet_wrap(~tRNA, scales = "free_y", ncol = 4) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_x_continuous(expand = c(0.01, 0)) +
+    labs(x = "tRNA position", y = "Mean RPM", title = "tsRNA mapping profiles across groups") +
+    serum_theme_bw() +
+    theme(
+      legend.position = "top",
+      legend.title = element_blank(),
+      strip.background = element_rect(fill = "white", color = serum_neutral_line),
+      panel.grid.minor = element_blank()
+    )
+}
+
+save_plot_nested(
+  tsrna_mapping_profile_plot,
+  "08_mapping_profile",
+  "tsRNA_mapping_profiles.pdf",
+  width = 12,
+  height = 9,
+  view = REPORT_VIEW
+)
+```
+
+```{r save-csv, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+write_csv_safe(group_tsrna_origin_view, "compare_group_tsrna_origin.csv")
+write_csv_safe(group_tsrna_cleavage_view, "compare_group_tsrna_cleavage.csv")
+write_csv_safe(group_tsrna_aa_view, "compare_group_tsrna_amino_acid.csv")
+write_csv_safe(group_tsrna_anticodon_view, "compare_group_tsrna_anticodon.csv")
+write_csv_safe(tsrna_origin_pattern, "compare_group_tsrna_origin_pattern.csv")
+write_csv_safe(tsrna_mapping_profile_index, "tsrna_mapping_profile_index.csv")
+write_csv_safe(tsrna_mapping_sample_profiles, "tsrna_mapping_profile_by_sample.csv")
+write_csv_safe(tsrna_mapping_group_profiles, "tsrna_mapping_profile_group_mean.csv")
+write_csv_safe(tsrna_mapping_group_profiles_wide, "tsrna_mapping_profile_group_mean_wide.csv")
+```

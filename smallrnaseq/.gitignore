@@ -1,0 +1,9 @@
+!scripts/
+!scripts/*.py
+!SOURCE_SNAPSHOT.tsv
+!config/samples.tsv
+!validation/
+!validation/*.tsv
+!validation/*.csv
+!validation/*.txt
+!.gitignore

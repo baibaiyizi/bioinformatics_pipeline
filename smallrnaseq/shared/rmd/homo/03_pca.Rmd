@@ -1,0 +1,323 @@
+---
+title: "03 Hellinger-PCA 与样本聚类"
+output: pdf_document
+---
+
+```{r init, include=FALSE, pandora_stage="prepare"}
+PANDORA_ANALYSIS_STAGE <- get0("PANDORA_ANALYSIS_STAGE", inherits = TRUE,
+  ifnotfound = Sys.getenv("PANDORA_ANALYSIS_STAGE", unset = "describe"))
+stopifnot(PANDORA_ANALYSIS_STAGE %in% c("describe", "differential", "enrichment"))
+OUTPUT_FIG_DIR <- PCA_FIG
+OUTPUT_TAB_DIR <- PCA_TAB
+prepare_module_outputs(OUTPUT_FIG_DIR, OUTPUT_TAB_DIR, c("01_pca", "02_distance", "03_loadings"))
+activate_serum_context(environment(), analysis_scope = "all")
+if (!pkg_has("patchwork")) stop("模块 3 需要 patchwork 组合 PCA 与载荷图。")
+library(patchwork)
+PANDORA_CAN_PCA <- nrow(sample_info) >= 3L
+pandora_group_n <- table(as.character(sample_info$Group))
+PANDORA_CAN_COMPARE <- length(pandora_group_n) >= 2L && all(pandora_group_n >= 2L)
+write_csv_safe(tibble(
+  AnalysisStage = PANDORA_ANALYSIS_STAGE,
+  AnalysisScope = get0("analysis_scope", inherits = TRUE, ifnotfound = "all"),
+  LibraryN = nrow(sample_info), GroupN = length(pandora_group_n),
+  PCAApplicable = PANDORA_CAN_PCA, GroupComparisonApplicable = PANDORA_CAN_COMPARE
+), "analysis_stage_status.csv")
+
+```
+
+# 分析口径
+
+全部配置文库用于样本级 QC；预先定义的方法比较队列另作独立视图。RNA 类别组成先按互斥口径计算，再进行 Hellinger 变换和 PCA。图中不绘制单样本方法的置信椭圆，也不预设聚类数。
+
+```{r helpers, include=FALSE, pandora_stage="prepare", eval=TRUE}
+build_composition_matrix <- function(ctx, cohort_name) {
+  sample_order <- as.character(ctx$sample_info$Sample)
+  long <- ctx$sample_comp_view %>%
+    transmute(
+      Sample = as.character(Sample), Group = as.character(Group),
+      Feature = as.character(MainCategory), Reads, Percent
+    ) %>%
+    complete(Sample = sample_order, Feature = category_levels, fill = list(Reads = 0, Percent = 0)) %>%
+    left_join(
+      ctx$sample_info %>% transmute(Sample = as.character(Sample), GroupMeta = as.character(Group)),
+      by = "Sample"
+    ) %>%
+    mutate(Group = coalesce(Group, GroupMeta)) %>%
+    select(-GroupMeta)
+
+  wide <- long %>%
+    select(Sample, Feature, Reads) %>%
+    pivot_wider(names_from = Feature, values_from = Reads, values_fill = 0) %>%
+    arrange(match(Sample, sample_order))
+  mat <- as.matrix(wide %>% select(-Sample))
+  rownames(mat) <- wide$Sample
+  keep <- colSums(mat, na.rm = TRUE) > 0
+  mat <- mat[, keep, drop = FALSE]
+  h <- hellinger_transform(mat)
+  input <- as.data.frame(h) %>%
+    rownames_to_column("Sample") %>%
+    pivot_longer(-Sample, names_to = "Feature", values_to = "Hellinger") %>%
+    left_join(long, by = c("Sample", "Feature")) %>%
+    mutate(Cohort = cohort_name)
+  list(raw = mat, hellinger = h, input = input)
+}
+
+run_pca <- function(h_matrix, metadata, cohort_name, pca_type = "class", category = "all_sncRNA") {
+  keep <- apply(h_matrix, 2, function(x) stats::sd(x, na.rm = TRUE) > 0)
+  h_matrix <- h_matrix[, keep, drop = FALSE]
+  if (nrow(h_matrix) < 3 || ncol(h_matrix) < 2) return(NULL)
+  fit <- stats::prcomp(h_matrix, center = TRUE, scale. = FALSE)
+  variance <- 100 * fit$sdev^2 / sum(fit$sdev^2)
+  coordinates <- tibble(
+    Sample = rownames(fit$x), PC1 = fit$x[, 1], PC2 = fit$x[, 2]
+  ) %>%
+    left_join(
+      metadata %>% transmute(
+        Sample = as.character(Sample), Group = as.character(Group),
+        BiologicalSample = as.character(BiologicalSample), Replicate = as.character(Replicate),
+        Batch = as.character(Batch), PairID = as.character(PairID), AnalysisRole
+      ),
+      by = "Sample"
+    ) %>%
+    mutate(Cohort = cohort_name, PCAType = pca_type, Category = category)
+  loadings <- tibble(
+    Feature = rownames(fit$rotation), PC1 = fit$rotation[, 1], PC2 = fit$rotation[, 2]
+  ) %>%
+    mutate(Cohort = cohort_name, PCAType = pca_type, Category = category)
+  variance_tbl <- tibble(
+    Cohort = cohort_name, PCAType = pca_type, Category = category,
+    Component = paste0("PC", seq_along(variance)), VariancePct = variance
+  )
+  list(fit = fit, coordinates = coordinates, loadings = loadings, variance = variance_tbl)
+}
+
+build_pair_segments <- function(coordinates, pair_mode) {
+  if (pair_mode == "spikein") {
+    coordinates %>%
+      filter(AnalysisRole %in% c("spikein_pair_control", "spikein_pair_test")) %>%
+      mutate(Connection = "Donor 3 spike-in pair")
+  } else {
+    coordinates %>%
+      filter(Group %in% c("1", "2"), PairID != "") %>%
+      group_by(PairID) %>%
+      filter(n() == 2) %>%
+      ungroup() %>%
+      mutate(Connection = PairID)
+  }
+}
+
+plot_pca <- function(pca_obj, title_text, pair_mode) {
+  coords <- pca_obj$coordinates
+  coords$DisplayBiologicalSample <- ifelse(is.na(coords$BiologicalSample) | !nzchar(as.character(coords$BiologicalSample)),"unspecified",as.character(coords$BiologicalSample))
+  donor_levels <- sort(unique(coords$DisplayBiologicalSample))
+  donor_shapes <- setNames(rep(c(16,17,15,18,0,1,2,5,6,7),length.out=length(donor_levels)),donor_levels)
+  variance <- pca_obj$variance$VariancePct[1:2]
+  pair_segments <- build_pair_segments(coords, pair_mode)
+  p <- ggplot(coords, aes(PC1, PC2, color = Group, shape = DisplayBiologicalSample))
+  if (nrow(pair_segments) > 0) {
+    p <- p + geom_path(
+      data = pair_segments,
+      aes(PC1, PC2, group = Connection),
+      inherit.aes = FALSE, color = serum_neutral_text, linewidth = 0.65, alpha = 0.7
+    )
+  }
+  p <- p + geom_point(size = 4, stroke = 1)
+  if (pkg_has("ggrepel")) {
+    p <- p + ggrepel::geom_text_repel(
+      aes(label = Sample), seed = 42, size = 3.1,
+      box.padding = 0.35, point.padding = 0.3, min.segment.length = 0,
+      max.overlaps = Inf, max.time = 2, show.legend = FALSE
+    )
+  } else {
+    p <- p + geom_text(aes(label = Sample), vjust = -0.9, size = 3.1, check_overlap = TRUE, show.legend = FALSE)
+  }
+  p +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_shape_manual(values = donor_shapes, drop = FALSE) +
+    scale_x_continuous(expand = expansion(mult = c(0.12, 0.12))) +
+    scale_y_continuous(expand = expansion(mult = c(0.12, 0.12))) +
+    coord_cartesian(clip = "off") +
+    labs(
+      title = title_text,
+      subtitle = if(PANDORA_DESIGN=="method_capture")"Hellinger transform; lines join predefined matched aliquots"else"Hellinger transform",
+      x = sprintf("PC1 (%.1f%%)", variance[[1]]),
+      y = sprintf("PC2 (%.1f%%)", variance[[2]]),
+      color = if(PANDORA_DESIGN=="method_capture")"Method"else"Group",
+      shape = if(PANDORA_DESIGN=="method_capture")"Donor"else"Biological sample"
+    ) +
+    serum_theme_bw() +
+    theme(
+      legend.position = "top", plot.title = element_text(face = "bold"),
+      plot.margin = margin(8, 14, 8, 14)
+    )
+}
+
+plot_top_loadings <- function(pca_obj, title_text, top_n = 6) {
+  long <- pca_obj$loadings %>%
+    select(Feature, PC1, PC2) %>%
+    pivot_longer(c(PC1, PC2), names_to = "Component", values_to = "Loading") %>%
+    group_by(Component) %>%
+    slice_max(abs(Loading), n = top_n, with_ties = FALSE) %>%
+    ungroup() %>%
+    mutate(FeaturePanel = paste(Feature, Component, sep = "___"))
+  ggplot(long, aes(x = reorder(FeaturePanel, abs(Loading)), y = Loading, fill = Loading > 0)) +
+    geom_col(width = 0.72) +
+    coord_flip() +
+    facet_wrap(~Component, scales = "free_y") +
+    scale_x_discrete(labels = function(x) sub("___.*$", "", x)) +
+    scale_fill_manual(values = c(`TRUE` = serum_orange, `FALSE` = serum_blue), guide = "none") +
+    labs(title = title_text, x = NULL, y = "Loading") +
+    serum_theme_bw() +
+    theme(plot.title = element_text(face = "bold"))
+}
+
+distance_to_long <- function(distance_obj, cohort_name) {
+  mat <- as.matrix(distance_obj)
+  as.data.frame(as.table(mat), stringsAsFactors = FALSE) %>%
+    as_tibble() %>%
+    transmute(Cohort = cohort_name, SampleA = as.character(Var1), SampleB = as.character(Var2), HellingerDistance = as.numeric(Freq))
+}
+
+plot_distance_heatmap <- function(distance_tbl, sample_order, title_text) {
+  distance_tbl %>%
+    mutate(
+      SampleA = factor(SampleA, levels = sample_order),
+      SampleB = factor(SampleB, levels = rev(sample_order))
+    ) %>%
+    ggplot(aes(SampleA, SampleB, fill = HellingerDistance)) +
+    geom_tile(color = "white", linewidth = 0.3) +
+    scale_fill_gradientn(colours = serum_heatmap_gradient) +
+    labs(title = title_text, x = NULL, y = NULL, fill = "Hellinger\ndistance") +
+    serum_theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(face = "bold"))
+}
+```
+
+```{r overall-pca, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe" && PANDORA_CAN_PCA}
+ctx_all <- load_serum_context(REPORT_VIEW, "all")
+all_comp <- build_composition_matrix(ctx_all, "all_samples")
+all_pca <- run_pca(all_comp$hellinger, ctx_all$sample_info, "all_samples")
+if (is.null(all_pca)) stop("RNA 类别矩阵缺少可用于 PCA 的变异特征。")
+PANDORA_ANALYSIS_SCOPE <- "all"
+all_pca_panel <- plot_pca(all_pca, paste0("sncRNA composition PCA: all ", nrow(ctx_all$sample_info), " libraries"), "spikein") |
+  plot_top_loadings(all_pca, "All libraries: leading PC1/PC2 loadings")
+save_plot_nested(all_pca_panel, "01_pca", "all_samples_sncRNA_pca.pdf", width=13,height=6.5,view=REPORT_VIEW)
+pca_input_list <- list(all_comp$input)
+pca_coordinates_list <- list(all_pca$coordinates)
+pca_loadings_list <- list(all_pca$loadings)
+pca_variance_list <- list(all_pca$variance)
+pca_cohorts <- "all_samples"
+if (PANDORA_DESIGN == "method_capture") {
+  ctx_method <- load_serum_context(REPORT_VIEW, "method_comparison")
+  method_comp <- build_composition_matrix(ctx_method, "method_comparison")
+  method_pca <- run_pca(method_comp$hellinger, ctx_method$sample_info, "method_comparison")
+  if (is.null(method_pca)) stop("方法比较队列缺少可用于 PCA 的变异特征。")
+  PANDORA_ANALYSIS_SCOPE <- "method_comparison"
+  method_pca_panel <- plot_pca(method_pca, paste0("Method comparison PCA: ", nrow(ctx_method$sample_info), " libraries"), "method12") |
+    plot_top_loadings(method_pca, "Method cohort: leading PC1/PC2 loadings")
+  save_plot_nested(method_pca_panel, "01_pca", "method_comparison_sncRNA_pca.pdf", width=13,height=6.5,view=REPORT_VIEW)
+  pca_input_list[[2L]] <- method_comp$input
+  pca_coordinates_list[[2L]] <- method_pca$coordinates
+  pca_loadings_list[[2L]] <- method_pca$loadings
+  pca_variance_list[[2L]] <- method_pca$variance
+  pca_cohorts <- c(pca_cohorts,"method_comparison")
+}
+PANDORA_ANALYSIS_SCOPE <- "all"
+
+```
+
+```{r subtype-pca, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe" && PANDORA_CAN_PCA}
+subtype_categories <- intersect(c("miRNA", "rsRNA", "tsRNA", "ysRNA", "piRNA", "snRNA", "snoRNA", if(ENDO_ENABLED)"endo-siRNA"), category_levels)
+for (category_name in subtype_categories) {
+  category_long <- if (category_name == "endo-siRNA") {
+    ctx_all$output_all %>% filter(EndoCandidate) %>% transmute(Sample=as.character(Sample),Group=as.character(Group),Feature=Sequence,Reads)
+  } else if (category_name == "tsRNA") {
+    ctx_all$tsrna_base_detail %>%
+      transmute(Sample = as.character(Sample), Group = as.character(Group), Feature = BaseSubClass, Reads)
+  } else {
+    ctx_all$summary_all %>%
+      filter(MainCategory == category_name, SubClass != "-") %>%
+      transmute(Sample = as.character(Sample), Group = as.character(Group), Feature = as.character(SubClass), Reads)
+  }
+  category_long <- category_long %>%
+    group_by(Sample, Group, Feature) %>%
+    summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+    left_join(ctx_all$clean_reads_tbl, by = "Sample") %>%
+    mutate(CPM = if_else(CleanReads > 0, 1e6 * Reads / CleanReads, 0))
+  keep_features <- category_long %>%
+    group_by(Feature) %>%
+    summarise(DetectedN = sum(CPM >= 1), .groups = "drop") %>%
+    filter(DetectedN >= 2) %>%
+    pull(Feature)
+  if (length(keep_features) < 2) next
+
+  sample_order <- as.character(ctx_all$sample_info$Sample)
+  wide <- category_long %>%
+    filter(Feature %in% keep_features) %>%
+    select(Sample, Feature, Reads) %>%
+    complete(Sample = sample_order, Feature = keep_features, fill = list(Reads = 0)) %>%
+    pivot_wider(names_from = Feature, values_from = Reads, values_fill = 0) %>%
+    arrange(match(Sample, sample_order))
+  mat <- as.matrix(wide %>% select(-Sample))
+  rownames(mat) <- wide$Sample
+  if (any(rowSums(mat) <= 0)) next
+  h <- hellinger_transform(mat)
+  pca_obj <- run_pca(h, ctx_all$sample_info, "all_samples", "subtype", category_name)
+  if (is.null(pca_obj)) next
+  save_plot_nested(
+    plot_pca(pca_obj, paste0(category_name, " subtype PCA: all ", nrow(ctx_all$sample_info), " libraries"), "spikein"),
+    "01_pca", paste0("all_samples_", safe_dir_name(category_name), "_subtype_pca.pdf"),
+    width = 8.5, height = 6.5, view = REPORT_VIEW
+  )
+  pca_coordinates_list[[length(pca_coordinates_list) + 1]] <- pca_obj$coordinates
+  pca_loadings_list[[length(pca_loadings_list) + 1]] <- pca_obj$loadings
+  pca_variance_list[[length(pca_variance_list) + 1]] <- pca_obj$variance
+}
+```
+
+```{r distance-clustering, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe" && PANDORA_CAN_PCA}
+distance_tables <- list()
+order_tables <- list()
+for (cohort_name in pca_cohorts) {
+  PANDORA_ANALYSIS_SCOPE <- if(cohort_name=="all_samples")"all"else"method_comparison"
+  h <- if (cohort_name == "all_samples") all_comp$hellinger else method_comp$hellinger
+  d <- stats::dist(h, method = "euclidean")
+  hc <- stats::hclust(d, method = "ward.D2")
+  ordered_samples <- hc$labels[hc$order]
+  distance_tbl <- distance_to_long(d, cohort_name)
+  order_tbl <- tibble(Cohort = cohort_name, Order = seq_along(ordered_samples), Sample = ordered_samples)
+  distance_tables[[cohort_name]] <- distance_tbl
+  order_tables[[cohort_name]] <- order_tbl
+
+  save_plot_nested(
+    plot_distance_heatmap(
+      distance_tbl, ordered_samples,
+      if (cohort_name == "all_samples") paste0("Hellinger distance: all ", nrow(ctx_all$sample_info), " libraries") else "Method comparison: Hellinger distance"
+    ),
+    "02_distance", paste0(cohort_name, "_hellinger_distance.pdf"),
+    width = if (cohort_name == "all_samples") 8.5 else 7.5, height = if (cohort_name == "all_samples") 7.5 else 6.8,
+    view = REPORT_VIEW
+  )
+  save_plot_device(
+    file.path(OUTPUT_FIG_DIR, "02_distance", paste0(cohort_name, "_hierarchical_clustering.pdf")),
+    function() {
+      old_par <- graphics::par(mar = c(7, 4, 3, 1))
+      on.exit(graphics::par(old_par), add = TRUE)
+      plot(hc, main = if (cohort_name == "all_samples") paste0("Ward.D2 clustering: all ", nrow(ctx_all$sample_info), " libraries") else "Method comparison: Ward.D2 clustering", xlab = "", sub = "", cex = 0.75)
+    },
+    width = if (cohort_name == "all_samples") 9 else 8, height = 6, dpi = 300,
+    data = list(hellinger_composition = h, clustering = hc), metric = "Hellinger distance; Ward.D2 clustering"
+  )
+}
+```
+
+```{r export, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe" && PANDORA_CAN_PCA}
+write_csv_safe(bind_rows(pca_input_list), "pca_input_composition.csv")
+write_csv_safe(bind_rows(pca_coordinates_list), "pca_coordinates.csv")
+write_csv_safe(bind_rows(pca_variance_list), "pca_variance_explained.csv")
+write_csv_safe(bind_rows(pca_loadings_list), "pca_loadings.csv")
+write_csv_safe(bind_rows(distance_tables), "sample_hellinger_distance.csv")
+write_csv_safe(bind_rows(order_tables), "hierarchical_sample_order.csv")
+```
+
+PCA 只用于展示样本在捕获谱空间中的位置。配置了方法比较设计时，全部文库与方法队列分别展示；供体差异和方法差异在解释时保持分离。

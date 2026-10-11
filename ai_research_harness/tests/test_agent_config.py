@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import tomllib
 from collections import Counter
 from pathlib import Path
@@ -8,7 +10,7 @@ from ai_research_harness.gate import load_qualification_tasks
 from ai_research_harness.runtime import ASSETS
 
 
-AGENT_DIR = Path("/home/h1028/.codex/agents")
+AGENT_DIR = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser() / "agents"
 
 
 def test_agent_family_is_complete_and_unique() -> None:

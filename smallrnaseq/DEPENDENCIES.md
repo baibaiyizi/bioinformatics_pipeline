@@ -1,9 +1,9 @@
 # 依赖
 
-使用服务器既有 R/工具环境，未升级或安装。R 的实际包版本记录在 validation/R_packages.tsv，每次运行保存 audit/sessionInfo.txt。
+沿用现有环境，不自动安装或升级依赖。
 
-最小下游：R、ggplot2、dplyr、tidyr、stringr、purrr、tibble、knitr；Python 3 标准库用于样本表预检查和合成输入，无额外 Python 包。data.table 存在时用于大表读写。
+描述流程需要 Rscript、ggplot2、dplyr、tidyr、stringr、purrr、tibble、knitr、data.table；endo 当前 FASTA 复核需要 Biostrings；差异与富集沿用模块原有 edgeR、multiMiR、OrgDb 等条件依赖。具体版本以实际运行的 sessionInfo 和验证记录为准。
 
-可选专题模块根据源脚本使用 scales、patchwork、ggrepel、pheatmap、ggalluvial、readr 等；缺依赖有显式说明，不等于该图已生成。实际 edgeR 还需 edgeR、limma、statmod；miRNA 靶标/富集需 multiMiR、clusterProfiler、配置的 OrgDb，显式 MSigDB 来源还需 msigdbr。缺包不会自动安装。
+SPORTS 上游需要 Perl、Bowtie1、bowtie-build、gzip、xargs、Python3、sha256sum，剪切需要 cutadapt；可选 FastQC/MultiQC 依配置检查。物种数据库、基因组 FASTA 与 Bowtie1 索引由配置定位。R 描述运行复用已有 SPORTS 表，不代表 FASTQ、剪切或 Bowtie1 已重新执行。
 
-原始上游：SPORTS1.1 的 sports.pl、Perl、Bowtie1/bowtie-build、gzip、xargs；预剪切需要 cutadapt；FastQC/MultiQC 为显式可选。复用 workspace/server_migration/envs/smallrna.yml 的环境层思路，但模板执行不读取该工作区路径；在目标服务器提供 PATH 和配置指定的工具/参考即可。原始上游本轮未执行。
+入口和只读预检仅使用 Bash 与 Python3 标准库。

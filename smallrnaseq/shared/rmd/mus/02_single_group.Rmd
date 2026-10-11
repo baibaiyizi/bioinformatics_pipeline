@@ -1,0 +1,706 @@
+---
+title: "02 Mouse `r PROJECT_STAGE` Sample-Level QC | `r PANDORA_ANALYSIS_STAGE`"
+output: pdf_document
+---
+
+```{r init, include=FALSE, pandora_stage="prepare"}
+PANDORA_ANALYSIS_STAGE <- get0("PANDORA_ANALYSIS_STAGE", inherits = TRUE,
+  ifnotfound = Sys.getenv("PANDORA_ANALYSIS_STAGE", unset = "describe"))
+stopifnot(PANDORA_ANALYSIS_STAGE %in% c("describe", "differential", "enrichment"))
+OUTPUT_FIG_DIR <- SINGLE_FIG
+OUTPUT_TAB_DIR <- SINGLE_TAB
+prepare_module_outputs(
+  OUTPUT_FIG_DIR,
+  OUTPUT_TAB_DIR,
+  c(
+    "01_sample_qc",
+    "02_sector_radar",
+    "03_sports_sncRNA_distribution",
+    "04_length_distribution",
+    "05_relative_ratios",
+    "06_tsrna_origin",
+    "07_rsrna_sector_radar",
+    "08_complexity_qc",
+    "09_raw_fastq_audit",
+    "02_sports_sncRNA_distribution",
+    "03_length_distribution",
+    "06_relative_ratios"
+  )
+)
+activate_mii_context(environment())
+PANDORA_CAN_PCA <- nrow(sample_info) >= 3L
+pandora_group_n <- table(as.character(sample_info$Group))
+PANDORA_CAN_COMPARE <- length(pandora_group_n) >= 2L && all(pandora_group_n >= 2L)
+write_csv_safe(tibble(
+  AnalysisStage = PANDORA_ANALYSIS_STAGE,
+  AnalysisScope = get0("analysis_scope", inherits = TRUE, ifnotfound = "all"),
+  LibraryN = nrow(sample_info), GroupN = length(pandora_group_n),
+  PCAApplicable = PANDORA_CAN_PCA, GroupComparisonApplicable = PANDORA_CAN_COMPARE
+), "analysis_stage_status.csv")
+
+```
+
+```{r sports-snc-function, include=FALSE, pandora_stage="prepare", eval=TRUE}
+# 共享compute_sports_snc_for_sample保留SPORTS父类，长度子集不重复累计。
+```
+
+```{r single-plot-helpers, include=FALSE, pandora_stage="prepare", eval=TRUE}
+plot_sample_qc <- function(sample_id, tbl) {
+  df <- tbl %>%
+    filter(as.character(Sample) == sample_id) %>%
+    select(Sample, Group, CleanReads, MatchGenome, GenomeRate, DominantCategory, DominantPercent) %>%
+    pivot_longer(cols = c(CleanReads, MatchGenome), names_to = "Metric", values_to = "Reads")
+  if (nrow(df) == 0) return(plot_note(sample_id, "No QC data."))
+  meta_row <- df %>% slice(1)
+  ggplot(df, aes(x = Metric, y = Reads, fill = Metric)) +
+    geom_col(width = 0.62) +
+    geom_text(aes(label = scales::comma(round(Reads, 0))), vjust = -0.35, size = 3.6) +
+    scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, 0.14))) +
+    scale_fill_manual(values = mii_qc_palette) +
+    labs(
+      x = NULL,
+      y = "Reads",
+      title = paste0(sample_id, " QC"),
+      subtitle = paste0(
+        "Group ", meta_row$Group[[1]],
+        " | Genome: ", sprintf("%.2f%%", meta_row$GenomeRate[[1]]),
+        " | Dominant: ", meta_row$DominantCategory[[1]],
+        " (", sprintf("%.2f%%", meta_row$DominantPercent[[1]]), ")"
+      )
+    ) +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+}
+
+plot_sports_stacked_length <- function(sample_id, df) {
+  if (nrow(df) == 0 || sum(df$RPM, na.rm = TRUE) == 0) return(plot_note(sample_id, "No sncRNA length data."))
+  plot_df <- df %>% group_by(Category) %>% filter(sum(RPM, na.rm = TRUE) > 0) %>% ungroup()
+  ggplot(plot_df, aes(x = Length, y = RPM, fill = Category)) +
+    geom_col(width = 0.9) +
+    scale_fill_manual(values = sports_length_palette, drop = TRUE) +
+    scale_x_continuous(breaks = seq(min(plot_df$Length), max(plot_df$Length), by = 5), expand = c(0.01, 0)) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.06))) +
+    labs(x = "Length", y = "RPM", title = paste(sample_id, "sncRNA length distribution")) +
+    mii_theme_bw() +
+    theme(legend.title = element_blank(), legend.position = "top")
+}
+
+plot_sports_category_length <- function(sample_id, category_name, df) {
+  category_df <- df %>% filter(as.character(Category) == category_name)
+  if (nrow(category_df) == 0 || sum(category_df$RPM, na.rm = TRUE) == 0) {
+    return(plot_note(paste(sample_id, category_name), "No length data."))
+  }
+  ggplot(category_df, aes(x = Length, y = RPM)) +
+    geom_col(width = 0.84, fill = sports_length_palette[[category_name]], color = "white", linewidth = 0.12) +
+    scale_x_continuous(breaks = seq(min(category_df$Length), max(category_df$Length), by = 5), expand = c(0.01, 0)) +
+    scale_y_continuous(expand = expansion(mult = c(0.04, 0.08))) +
+    labs(x = "Length", y = "RPM", title = paste(sample_id, category_name, "length distribution")) +
+    mii_theme_bw() +
+    theme(panel.grid = element_blank())
+}
+
+plot_relative_ratios_sample <- function(sample_id, df, view = REPORT_VIEW) {
+  plot_df <- df %>%
+    filter(as.character(Sample) == sample_id, Reads > 0) %>%
+    mutate(MainCategory = factor(as.character(MainCategory), levels = category_levels))
+  if (nrow(plot_df) == 0) return(plot_note(paste(sample_id, view), "No ratio data."))
+  ggplot(plot_df, aes(x = MainCategory, y = Percent, fill = MainCategory)) +
+    geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+    geom_text(aes(label = ifelse(Percent >= 0.25, sprintf("%.1f", Percent), "")), vjust = -0.25, size = 3.0) +
+    scale_fill_manual(values = category_palette, drop = FALSE) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.12))) +
+    labs(
+      x = NULL,
+      y = "Percent of clean reads",
+      title = paste0(sample_id, " sncRNA relative ratios", view_title_suffix(view))
+    ) +
+    mii_theme_bw() +
+    theme(legend.position = "none", axis.text.x = element_text(angle = 35, hjust = 1))
+}
+
+plot_sample_length_all <- function(sample_id, df, view = REPORT_VIEW) {
+  plot_df <- df %>%
+    filter(as.character(Sample) == sample_id, RPM > 0) %>%
+    filter_direction_view(view) %>%
+    mutate(MainCategory = factor(as.character(MainCategory), levels = length_focus_categories))
+  if (nrow(plot_df) == 0) return(plot_note(paste(sample_id, view), "No length data."))
+  ggplot(plot_df, aes(x = Length, y = RPM, color = MainCategory)) +
+    geom_line(linewidth = 0.76) +
+    geom_point(size = 0.85) +
+    sncrna_length_axis() +
+    scale_color_manual(values = category_palette, drop = FALSE) +
+    scale_y_continuous(expand = expansion(mult = c(0.04, 0.08))) +
+    labs(
+      x = "Length",
+      y = "RPM",
+      title = paste0(sample_id, " length architecture", view_title_suffix(view))
+    ) +
+    mii_theme_bw() +
+    theme(legend.title = element_blank(), legend.position = "top")
+}
+
+plot_sample_length_category <- function(sample_id, category_name, df, view = REPORT_VIEW) {
+  category_df <- df %>%
+    filter(as.character(Sample) == sample_id, as.character(MainCategory) == category_name, RPM > 0) %>%
+    filter_direction_view(view)
+  if (nrow(category_df) == 0) return(plot_note(paste(sample_id, category_name, view), "No length data."))
+  ggplot(category_df, aes(x = Length, y = RPM)) +
+    geom_line(linewidth = 0.86, color = category_palette[[category_name]]) +
+    geom_point(size = 0.85, color = category_palette[[category_name]]) +
+    sncrna_length_axis() +
+    scale_y_continuous(expand = expansion(mult = c(0.04, 0.08))) +
+    labs(
+      x = "Length",
+      y = "RPM",
+      title = paste0(sample_id, " ", category_name, " length", view_title_suffix(view))
+    ) +
+    mii_theme_bw()
+}
+
+build_sample_sports_collage <- function(sample_id, df) {
+  category_order <- df %>%
+    group_by(Category) %>%
+    summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+    filter(TotalRPM > 0, !is.na(Category)) %>%
+    arrange(desc(TotalRPM), match(as.character(Category), sports_length_categories)) %>%
+    pull(Category) %>%
+    as.character()
+  build_plot_collage(
+    map(category_order, ~plot_sports_category_length(sample_id, .x, df)),
+    title_text = paste0(sample_id, " sncRNA length collage"),
+    cols = 4
+  )
+}
+
+build_sample_length_collage <- function(sample_id, df) {
+  category_order <- df %>%
+    filter(as.character(Sample) == sample_id) %>%
+    group_by(MainCategory) %>%
+    summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+    filter(TotalRPM > 0, !is.na(MainCategory)) %>%
+    arrange(desc(TotalRPM), match(as.character(MainCategory), length_focus_categories)) %>%
+    pull(MainCategory) %>%
+    as.character()
+  build_plot_collage(
+    map(category_order, ~plot_sample_length_category(sample_id, .x, df, view = REPORT_VIEW)),
+    title_text = paste0(sample_id, " fitted length collage", view_title_suffix(REPORT_VIEW)),
+    cols = 4
+  )
+}
+
+plot_rsrna_sector_radar_sample <- function(sample_id, rsrna_plot_df, radar_max, radar_breaks, view = REPORT_VIEW) {
+  rsrna_radar_angle_offset <- -pi / length(rsrna_radar_levels)
+  plot_df <- rsrna_plot_df %>%
+    filter(as.character(Sample) == sample_id) %>%
+    transmute(PieCategory = as.character(RsRNAClass), Reads, Percent) %>%
+    build_sector_radar_df(
+      radar_max = radar_max,
+      sector_levels = rsrna_radar_levels,
+      sector_labels = rsrna_radar_labels,
+      sector_palette = rsrna_radar_palette,
+      bottom_anchor_category = "18S-rRNA",
+      angle_offset = rsrna_radar_angle_offset
+    )
+
+  plot_sector_radar_core(
+    plot_df = plot_df,
+    title_text = paste0("rsRNA Proportion of ", sample_id, view_title_suffix(view)),
+    radar_max = radar_max,
+    radar_breaks = radar_breaks,
+    sector_levels = rsrna_radar_levels,
+    sector_palette = rsrna_radar_palette,
+    axis_label = "Relative Abundance within total rsRNA (%)"
+  )
+}
+
+plot_sample_sequence_dominance <- function(sample_id, complexity_tbl) {
+  plot_df <- complexity_tbl %>%
+    filter(as.character(Sample) == sample_id) %>%
+    select(Sample, Group, Top1CleanFraction, Top5CleanFraction, Top10CleanFraction) %>%
+    pivot_longer(
+      cols = c(Top1CleanFraction, Top5CleanFraction, Top10CleanFraction),
+      names_to = "Metric",
+      values_to = "Fraction"
+    ) %>%
+    mutate(
+      Metric = factor(
+        Metric,
+        levels = c("Top1CleanFraction", "Top5CleanFraction", "Top10CleanFraction"),
+        labels = c("Top 1", "Top 5", "Top 10")
+      )
+    )
+
+  if (nrow(plot_df) == 0) return(plot_note(sample_id, "No sequence complexity data."))
+
+  subtitle_row <- complexity_tbl %>% filter(as.character(Sample) == sample_id) %>% slice(1)
+  ggplot(plot_df, aes(x = Metric, y = Fraction, fill = Metric)) +
+    geom_col(width = 0.62, color = "white", linewidth = 0.2) +
+    geom_text(aes(label = scales::percent(Fraction, accuracy = 0.1)), vjust = -0.35, size = 3.4) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.14))) +
+    scale_fill_manual(values = c("Top 1" = mii_red, "Top 5" = mii_orange, "Top 10" = mii_blue), drop = FALSE) +
+    labs(
+      x = NULL,
+      y = "Fraction of clean reads",
+      title = paste0(sample_id, " dominant sequence burden"),
+      subtitle = paste0(
+        "Dominant: ", subtitle_row$DominantAnnotation[[1]],
+        " | unique sequences: ", scales::comma(subtitle_row$UniqueSequences[[1]])
+      )
+    ) +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+}
+
+plot_sample_sequence_rank_curve <- function(sample_id, rank_tbl) {
+  plot_df <- rank_tbl %>% filter(as.character(Sample) == sample_id)
+  if (nrow(plot_df) == 0) return(plot_note(sample_id, "No ranked sequence data."))
+
+  ggplot(plot_df, aes(x = Rank, y = CumulativeFractionOfClean)) +
+    geom_line(color = mii_red, linewidth = 0.9) +
+    geom_point(color = mii_red, size = 1.5, alpha = 0.75) +
+    scale_x_continuous(breaks = unique(c(1, 5, 10, 20, 50)), minor_breaks = NULL) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.08))) +
+    labs(
+      x = "Ranked unique sequence",
+      y = "Cumulative fraction of clean reads",
+      title = paste0(sample_id, " top-sequence accumulation")
+    ) +
+    mii_theme_bw()
+}
+
+plot_sample_length_complexity <- function(sample_id, length_tbl) {
+  plot_df <- length_tbl %>% filter(as.character(Sample) == sample_id, Reads > 0)
+  if (nrow(plot_df) == 0) return(plot_note(sample_id, "No sequence length complexity data."))
+
+  ggplot(plot_df, aes(x = Length, y = UniqueSequences)) +
+    geom_col(fill = mii_green, color = "white", linewidth = 0.12, width = 0.86) +
+    scale_y_continuous(labels = scales::comma, expand = expansion(mult = c(0, 0.08))) +
+    labs(
+      x = "Length",
+      y = "Unique sequences",
+      title = paste0(sample_id, " sequence complexity by length")
+    ) +
+    mii_theme_bw()
+}
+```
+
+```{r raw-fastq-audit-helpers, include=FALSE, pandora_stage="prepare", eval=TRUE}
+plot_sample_raw_length <- function(sample_id, length_tbl) {
+  df <- length_tbl %>% filter(as.character(Sample) == sample_id)
+  if (nrow(df) == 0) return(plot_note(sample_id, "No raw FASTQ length audit data."))
+  ggplot(df, aes(x = Length, y = Fraction)) +
+    geom_col(width = 0.9, fill = mii_blue) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.08))) +
+    labs(title = paste(sample_id, "raw read length distribution"), x = "Raw read length", y = "Read fraction") +
+    mii_theme_bw()
+}
+
+plot_sample_raw_end_base <- function(sample_id, end_base_tbl) {
+  df <- end_base_tbl %>%
+    filter(as.character(Sample) == sample_id) %>%
+    mutate(Base = factor(Base, levels = c("A", "C", "G", "T", "N")))
+  if (nrow(df) == 0) return(plot_note(sample_id, "No raw FASTQ end-base audit data."))
+  ggplot(df, aes(x = Base, y = Fraction, fill = Base)) +
+    geom_col(width = 0.72) +
+    facet_wrap(~ End) +
+    scale_fill_manual(values = c(A = mii_green, C = mii_blue, G = mii_orange, T = mii_red, N = mii_neutral_line), drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1), expand = expansion(mult = c(0, 0.08))) +
+    labs(title = paste(sample_id, "raw read terminal-base composition"), x = NULL, y = "Read fraction", fill = "Base") +
+    mii_theme_bw() +
+    theme(legend.position = "top")
+}
+
+plot_sample_raw_kmer <- function(sample_id, kmer_tbl, top_n = 12L) {
+  df <- kmer_tbl %>%
+    filter(as.character(Sample) == sample_id) %>%
+    group_by(KmerSide) %>%
+    arrange(desc(ReadN), Kmer, .by_group = TRUE) %>%
+    slice_head(n = top_n) %>%
+    ungroup() %>%
+    mutate(Kmer = factor(Kmer, levels = rev(unique(Kmer))))
+  if (nrow(df) == 0) return(plot_note(sample_id, "No raw FASTQ k-mer audit data."))
+  ggplot(df, aes(x = Kmer, y = Fraction, fill = KmerSide)) +
+    geom_col(width = 0.72) +
+    coord_flip() +
+    facet_wrap(~ KmerSide, scales = "free_y") +
+    scale_fill_manual(values = c(`5prime` = mii_blue, `3prime` = mii_red), drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 0.1), expand = expansion(mult = c(0, 0.08))) +
+    labs(title = paste(sample_id, "top raw read terminal k-mers"), x = NULL, y = "Read fraction", fill = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "none", plot.margin = margin(10, 20, 10, 10))
+}
+```
+
+```{r single-tsrna-data, include=FALSE, pandora_stage="prepare", eval=TRUE}
+ts_main_counts <- summary_all %>%
+  filter(SubClass == "-", str_detect(Class, "^(GtRNAdb|mitotRNAdb)")) %>%
+  group_by(Sample, Class) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  pivot_wider(names_from = Class, values_from = Reads, values_fill = 0)
+
+ts_main_wide <- sample_info %>%
+  transmute(Sample = as.character(Sample), Group = as.character(Group)) %>%
+  left_join(ts_main_counts, by = "Sample") %>%
+  mutate(across(where(is.numeric), ~replace_na(.x, 0)))
+
+ts_origin_breakdown <- ts_main_wide %>%
+  mutate(
+    GenomicPreTotal = get_col(., "GtRNAdb-pre-tRNA_Match_Genome") + get_col(., "GtRNAdb-pre-tRNA_Unmatch_Genome"),
+    GenomicMatureTotal = get_col(., "GtRNAdb-mature-tRNA_Match_Genome") + get_col(., "GtRNAdb-mature-tRNA_Unmatch_Genome"),
+    GenomicFiveEnd = get_col(., "GtRNAdb-mature-tRNA_5_end_Match_Genome") + get_col(., "GtRNAdb-mature-tRNA_5_end_Unmatch_Genome"),
+    GenomicThreeEnd = get_col(., "GtRNAdb-mature-tRNA_3_end_Match_Genome") + get_col(., "GtRNAdb-mature-tRNA_3_end_Unmatch_Genome"),
+    GenomicCCAEnd = get_col(., "GtRNAdb-mature-tRNA_CCA_end_Match_Genome") + get_col(., "GtRNAdb-mature-tRNA_CCA_end_Unmatch_Genome"),
+    GenomicInternal = pmax(GenomicMatureTotal - GenomicFiveEnd - GenomicThreeEnd - GenomicCCAEnd, 0),
+    MitoMatureTotal = get_col(., "mitotRNAdb-mature-mt_tRNA_Match_Genome") + get_col(., "mitotRNAdb-mature-mt_tRNA_Unmatch_Genome"),
+    MitoFiveEnd = get_col(., "mitotRNAdb-mature-mt_tRNA_5_end_Match_Genome") + get_col(., "mitotRNAdb-mature-mt_tRNA_5_end_Unmatch_Genome"),
+    MitoThreeEnd = get_col(., "mitotRNAdb-mature-mt_tRNA_3_end_Match_Genome") + get_col(., "mitotRNAdb-mature-mt_tRNA_3_end_Unmatch_Genome"),
+    MitoCCAEnd = get_col(., "mitotRNAdb-mature-mt_tRNA_CCA_end_Match_Genome") + get_col(., "mitotRNAdb-mature-mt_tRNA_CCA_end_Unmatch_Genome"),
+    MitoInternal = pmax(MitoMatureTotal - MitoFiveEnd - MitoThreeEnd - MitoCCAEnd, 0),
+    Genomic = GenomicPreTotal + GenomicMatureTotal,
+    Mitochondrial = MitoMatureTotal
+  )
+
+ts_origin_sample <- ts_origin_breakdown %>%
+  select(Sample, Group, Genomic, Mitochondrial) %>%
+  pivot_longer(cols = c(Genomic, Mitochondrial), names_to = "Origin", values_to = "Reads") %>%
+  mutate(Origin = recode(Origin, Genomic = "Genomic tRNA", Mitochondrial = "Mitochondrial tRNA")) %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+ts_genomic_cleavage_sample <- ts_origin_breakdown %>%
+  select(Sample, Group, GenomicFiveEnd, GenomicThreeEnd, GenomicCCAEnd, GenomicInternal) %>%
+  pivot_longer(cols = c(GenomicFiveEnd, GenomicThreeEnd, GenomicCCAEnd, GenomicInternal), names_to = "Cleavage", values_to = "Reads") %>%
+  mutate(
+    Cleavage = recode(
+      Cleavage,
+      GenomicFiveEnd = "Genomic tRNA 5'end",
+      GenomicThreeEnd = "Genomic tRNA 3'end",
+      GenomicCCAEnd = "Genomic tRNA CCA-end",
+      GenomicInternal = "Genomic tRNA internal"
+    )
+  ) %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+ts_mito_cleavage_sample <- ts_origin_breakdown %>%
+  select(Sample, Group, MitoFiveEnd, MitoThreeEnd, MitoCCAEnd, MitoInternal) %>%
+  pivot_longer(cols = c(MitoFiveEnd, MitoThreeEnd, MitoCCAEnd, MitoInternal), names_to = "Cleavage", values_to = "Reads") %>%
+  mutate(
+    Cleavage = recode(
+      Cleavage,
+      MitoFiveEnd = "Mitochondrial tRNA 5'end",
+      MitoThreeEnd = "Mitochondrial tRNA 3'end",
+      MitoCCAEnd = "Mitochondrial tRNA CCA-end",
+      MitoInternal = "Mitochondrial tRNA internal"
+    )
+  ) %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+```
+
+```{r generate-qc, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+for (sample_id in as.character(sample_info$Sample)) {
+  save_plot_nested(
+    plot_sample_qc(sample_id, sample_qc_table),
+    "01_sample_qc",
+    paste0("qc_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 7,
+    height = 5,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r generate-radar, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+pie_by_view <- setNames(lapply(VIEW_LEVELS, function(view_name) compute_pie_tables(filter_direction_view(summary_top, view_name))), VIEW_LEVELS)
+radar_max <- max(c(30, unlist(lapply(pie_by_view, function(df) if (nrow(df) == 0) 0 else max(df$Percent, na.rm = TRUE)))), na.rm = TRUE)
+radar_max <- max(ceiling(radar_max / 5) * 5, 30)
+radar_breaks <- unique(round(seq(0, radar_max, length.out = 5), 2))
+
+for (sample_id in as.character(sample_info$Sample)) {
+  for (view_name in VIEW_LEVELS) {
+    save_plot_nested(
+      plot_sector_radar_sample(sample_id, pie_by_view[[view_name]], radar_max, radar_breaks, view = view_name),
+      "02_sector_radar",
+      paste0("sector_radar_", sample_id, ".pdf"),
+      sample = sample_id,
+      width = 8,
+      height = 8,
+      view = view_name
+    )
+  }
+}
+```
+
+```{r generate-sports-length, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+sports_redraw <- map(as.character(sample_info$Sample), compute_sports_snc_for_sample, length_df = length_all, sample_info_tbl = sample_info)
+names(sports_redraw) <- as.character(sample_info$Sample)
+sports_length_by_sample <- map_dfr(sports_redraw, "length")
+
+for (sample_id in as.character(sample_info$Sample)) {
+  sample_df <- sports_length_by_sample %>% filter(as.character(Sample) == sample_id)
+  collage_count <- sample_df %>%
+    group_by(Category) %>%
+    summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+    filter(TotalRPM > 0, !is.na(Category)) %>%
+    nrow()
+  collage_dims <- collage_dimensions(collage_count)
+
+  save_plot_nested(
+    plot_sports_stacked_length(sample_id, sample_df),
+    "03_sports_sncRNA_distribution",
+    paste0("sports_length_stacked_all_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 11,
+    height = 6,
+    view = REPORT_VIEW
+  )
+  save_plot_nested(
+    build_sample_sports_collage(sample_id, sample_df),
+    "03_sports_sncRNA_distribution",
+    paste0("sports_length_all_categories_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = collage_dims$width,
+    height = collage_dims$height,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r generate-length-fit, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+for (sample_id in as.character(sample_info$Sample)) {
+  collage_count <- sample_length_view %>%
+    filter(as.character(Sample) == sample_id) %>%
+    group_by(MainCategory) %>%
+    summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+    filter(TotalRPM > 0, !is.na(MainCategory)) %>%
+    nrow()
+  collage_dims <- collage_dimensions(collage_count)
+
+  save_plot_nested(
+    plot_sample_length_all(sample_id, sample_length_display, view = REPORT_VIEW),
+    "04_length_distribution",
+    paste0("length_distribution_all_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 10,
+    height = 6,
+    view = REPORT_VIEW
+  )
+  save_plot_nested(
+    build_sample_length_collage(sample_id, sample_length_display),
+    "04_length_distribution",
+    paste0("length_distribution_all_categories_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = collage_dims$width,
+    height = collage_dims$height,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r generate-relative-ratios, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+for (sample_id in as.character(sample_info$Sample)) {
+  save_plot_nested(
+    plot_relative_ratios_sample(sample_id, ratio_all_sample_df, view = REPORT_VIEW),
+    "05_relative_ratios",
+    paste0("relative_ratios_all_classified_rna_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 9,
+    height = 5.5,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r generate-sample-tsrna-origin, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+for (sample_id in as.character(sample_info$Sample)) {
+  p_origin <- plot_percent_pie(
+    ts_origin_sample %>% filter(as.character(Sample) == sample_id),
+    "Origin",
+    ts_origin_palette,
+    paste(sample_id, "tsRNAs derived from genomic and mitochondrial tRNAs"),
+    "No tsRNA origin data available."
+  )
+  p_genomic <- plot_percent_pie(
+    ts_genomic_cleavage_sample %>% filter(as.character(Sample) == sample_id),
+    "Cleavage",
+    ts_genomic_palette,
+    paste(sample_id, "genomic tsRNA cleavage origin"),
+    "No genomic tsRNA cleavage data available."
+  )
+  p_mito <- plot_percent_pie(
+    ts_mito_cleavage_sample %>% filter(as.character(Sample) == sample_id),
+    "Cleavage",
+    ts_mito_palette,
+    paste(sample_id, "mitochondrial tsRNA cleavage origin"),
+    "No mitochondrial tsRNA cleavage data available."
+  )
+
+  save_plot_nested(
+    p_origin,
+    "06_tsrna_origin",
+    paste0("tsRNA_genomic_vs_mito_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 6,
+    height = 5,
+    view = REPORT_VIEW
+  )
+  save_plot_nested(
+    p_genomic,
+    "06_tsrna_origin",
+    paste0("tsRNA_genomic_cleavage_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 6,
+    height = 5,
+    view = REPORT_VIEW
+  )
+  save_plot_nested(
+    p_mito,
+    "06_tsrna_origin",
+    paste0("tsRNA_mito_cleavage_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 6,
+    height = 5,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r generate-sample-rsrna-radar, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+sample_rsrna_radar_view <- sample_rsrna_visual_by_view[[REPORT_VIEW]] %>%
+  mutate(RsRNAClass = collapse_rsrna_radar_class(as.character(RsRNAClass))) %>%
+  group_by(Sample, RsRNAClass) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), Percent = sum(Percent, na.rm = TRUE), .groups = "drop")
+
+rsrna_radar_max <- max(c(
+  20,
+  if (nrow(sample_rsrna_radar_view) == 0) 0 else max(sample_rsrna_radar_view$Percent, na.rm = TRUE)
+), na.rm = TRUE)
+rsrna_radar_max <- max(ceiling(rsrna_radar_max / 5) * 5, 20)
+rsrna_radar_breaks <- unique(round(seq(0, rsrna_radar_max, length.out = 5), 2))
+
+for (sample_id in as.character(sample_info$Sample)) {
+  save_plot_nested(
+    plot_rsrna_sector_radar_sample(
+      sample_id = sample_id,
+      rsrna_plot_df = sample_rsrna_radar_view,
+      radar_max = rsrna_radar_max,
+      radar_breaks = rsrna_radar_breaks,
+      view = REPORT_VIEW
+    ),
+    "07_rsrna_sector_radar",
+    paste0("rsRNA_sector_radar_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 8.6,
+    height = 8.2,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r generate-sample-complexity-qc, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+for (sample_id in as.character(sample_info$Sample)) {
+  save_plot_nested(
+    plot_sample_sequence_dominance(sample_id, sequence_complexity_by_sample),
+    "08_complexity_qc",
+    paste0("sequence_dominance_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 7.5,
+    height = 5,
+    view = REPORT_VIEW
+  )
+  save_plot_nested(
+    plot_sample_sequence_rank_curve(sample_id, sequence_rank_by_sample),
+    "08_complexity_qc",
+    paste0("sequence_rank_accumulation_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 7.5,
+    height = 5,
+    view = REPORT_VIEW
+  )
+  save_plot_nested(
+    plot_sample_length_complexity(sample_id, sequence_length_complexity),
+    "08_complexity_qc",
+    paste0("sequence_length_complexity_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 7.5,
+    height = 5,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r generate-raw-fastq-audit, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+for (sample_id in as.character(sample_info$Sample)) {
+  save_plot_nested(
+    plot_sample_raw_length(sample_id, raw_fastq_length_distribution),
+    "09_raw_fastq_audit",
+    paste0("raw_fastq_length_distribution_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 7.5,
+    height = 5,
+    view = REPORT_VIEW
+  )
+  save_plot_nested(
+    plot_sample_raw_end_base(sample_id, raw_fastq_end_base),
+    "09_raw_fastq_audit",
+    paste0("raw_fastq_terminal_base_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 7.5,
+    height = 5,
+    view = REPORT_VIEW
+  )
+  save_plot_nested(
+    plot_sample_raw_kmer(sample_id, raw_fastq_kmer),
+    "09_raw_fastq_audit",
+    paste0("raw_fastq_terminal_kmer_", sample_id, ".pdf"),
+    sample = sample_id,
+    width = 9,
+    height = 6.5,
+    view = REPORT_VIEW
+  )
+}
+```
+
+Raw FASTQ audit status and available metrics are recorded in the output tables. Terminal k-mers, adapter seeds, and homopolymer runs in untrimmed reads are reported as library QC signals and should not be interpreted as biological non-templated tailing.
+
+```{r processing-report-index, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+processing_report_index <- sample_info %>%
+  transmute(
+    Sample = as.character(Sample),
+    Group = as.character(Group),
+    Replicate = as.character(Replicate),
+    ProcessingReport = map_chr(Sample, function(sample_id) {
+      report_dir <- sports_sample_file(sample_id, "processing_report")
+      report_files <- list.files(report_dir, pattern = "\\.txt$", full.names = TRUE)
+      if (length(report_files) == 0) NA_character_ else report_files[[1]]
+    })
+  ) %>%
+  mutate(
+    ProcessingReportExists = !is.na(ProcessingReport) & file.exists(ProcessingReport),
+    ProcessingReportSizeBytes = map_dbl(
+      ProcessingReport,
+      ~if (!is.na(.x) && file.exists(.x)) file.info(.x)$size else NA_real_
+    )
+  )
+```
+
+```{r save-csv, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+write_csv_safe(sample_qc_table, "single_sample_qc_table.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(sample_comp_view, "single_sample_composition.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(sports_length_by_sample, "single_sports_snc_length_by_sample.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(sample_length_view, "single_length_by_sample.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(ratio_all_sample_df, "single_relative_ratios.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(sequence_complexity_by_sample, "08_complexity_qc/sample_sequence_complexity.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(sequence_rank_by_sample, "08_complexity_qc/sample_top_sequence_rank.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(sequence_length_complexity, "08_complexity_qc/sample_sequence_length_complexity.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(raw_fastq_audit_by_sample, "09_raw_fastq_audit/raw_fastq_audit_by_sample.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(raw_fastq_length_distribution, "09_raw_fastq_audit/raw_fastq_length_distribution.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(raw_fastq_end_base, "09_raw_fastq_audit/raw_fastq_end_base.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(raw_fastq_kmer, "09_raw_fastq_audit/raw_fastq_terminal_kmer.csv", tab_dir = SINGLE_TAB)
+write_csv_safe(processing_report_index, "processing_report_index.csv", tab_dir = SINGLE_TAB)
+```

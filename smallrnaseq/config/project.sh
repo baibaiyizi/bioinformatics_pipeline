@@ -1,0 +1,20 @@
+# 路径相对具体数据集根；复制后按项目位置明确配置。
+PANDORA_PROJECT_NAME=new_study
+PANDORA_DESIGN=independent
+PROJECT_SPECIES='Mus musculus'
+PROJECT_STAGE=configured_stage
+PROJECT_SAMPLE_TYPE=configured_tissue
+PROJECT_MATRIX=''
+PROJECT_CONDITION=''
+SPORTS_LAYOUT=nested
+CONTRAST_BASELINE=control
+CONTRAST_CASE=case
+RUN_ENDOSIRNA=0
+DB_ROOT=resources/smallrna/Mus_musculus
+REFERENCE_ROOT=resources/genome/GRCm39
+SPORTS_PL=resources/sports/source/sports.pl
+# 启用 endo 时填写标签=相对 FASTA 前缀（不带 .fa/.fasta），多参考用分号分隔。
+ENDOSIRNA_REFS=''
+PRETRIM_FASTQ=1
+TRIM_ADAPTER=0
+CUTADAPT_NEXTSEQ_TRIM=20

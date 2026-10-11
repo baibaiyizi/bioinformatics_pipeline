@@ -13,7 +13,7 @@
 ## 运行
 
 ```bash
-cd /home/h1028/workspace/model/ml
+cd ml
 python scripts/run_ml.py --config config/example.yml
 ```
 

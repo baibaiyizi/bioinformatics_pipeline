@@ -1,0 +1,3 @@
+[1] TRUE TRUE TRUE
+[1] TRUE
+current receipt PASS; failed receipt blocked; changed MD5 blocked; missing input blocked

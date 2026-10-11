@@ -1,16 +1,27 @@
-# 生物信息学分析脚本模板
+# 分析模板：只复制需要的模块
 
-这里保存从实际项目提取、按输入和统计边界整理的分析模板。复制某一个目录到新项目，修改该目录的配置和样本表后使用；无需复制整个仓库。各模板保留原有工具与模块结构。
+这里保存从实际项目提取、按输入和统计边界整理的分析模板。复制某一个目录到新项目，修改该目录的配置和样本表后使用；无需复制整个仓库。实际课题统一放在 `../projects/`。各模板保留原有工具与模块结构。
+
+## 创建一个新分析模块
+从本模板目录运行，例如：
+
+```bash
+python3 copy_template.py rnaseq ../projects/new_study/rnaseq
+```
+
+脚本拒绝覆盖现有目录，记录当前来源 commit、未提交状态和实际文件 SHA256 到 `template_snapshot.tsv`。复制后独立运行，中心更新不自动修改课题。先填配置和样本表，再执行对应模块的只读预检；占位值不能运行生产分析。
+
+配置中的相对路径以模块根为基准，smallRNA 以选定数据集根为基准；启动时所在目录不影响输入位置。参考库和公共工具配置为明确的相对路径，外部命令通过已验证环境或明确工具变量提供。运行审计中的实际绝对位置用于追溯。
 
 ## 选择模板
 
 | 分析 | 目录 | 项目配置 | 入口 | 本次验证范围 |
 |---|---|---|---|---|
-| bulk RNA / 样本级 Smart-seq | [bulkrnaseq](bulkrnaseq/README.md) | `config/project.env`、`samples.tsv` | 三段 `rnaseq_*.sh`、`run_rmd.sh` | counts 下游与方向/身份；FASTQ 全流程未重跑 |
-| WGBS | [wgbsseq](wgbsseq/README.md) | `config/project.env`、`samples.tsv` | `run_upstream.sh`、`run_wgbs.sh` | GRCm39 两组核心、预检与小数据；真实上游未重跑 |
-| bulk ATAC | [bulkatacseq](bulkatacseq/README.md) | `config/project.env`、`samples.tsv` | `run_upstream.sh`、`run_rmd.sh` | 两组核心、配置和隔离验证；真实上游未重跑 |
+| bulk RNA / 样本级 Smart-seq | [rnaseq](rnaseq/README.md) | `config/project.env`、`samples.tsv` | 三段 `rnaseq_*.sh`、`run_rmd.sh` | counts 下游与方向/身份；FASTQ 全流程未重跑 |
+| WGBS | [wgbs](wgbs/README.md) | `config/project.env`、`samples.tsv` | `run_upstream.sh`、`run_wgbs.sh` | GRCm39 两组核心、预检与小数据；真实上游未重跑 |
+| bulk ATAC | [atac](atac/README.md) | `config/project.env`、`samples.tsv` | `run_upstream.sh`、`run_rmd.sh` | 两组核心、配置和隔离验证；真实上游未重跑 |
 | scRNA | [scrnaseq](scrnaseq/README.md) | `config/project.yml`、`samples.tsv`、markers | `run_scrna.sh` | 合成输入至报告、技术文库聚合和实际 pseudobulk 推断 |
-| PANDORA / smallRNA | [smallrnaseq](smallrnaseq/README.md) | `config/project.env`、`samples.tsv` | `sports.sh`、`run_rmd.sh` | SPORTS 表至描述报告；原始序列上游未重跑 |
+| PANDORA / smallRNA | [smallrnaseq](smallrnaseq/README.md) | `config/project.sh`、`samples.tsv` | `run.sh --project … --stage …` | 新版 PANDORA 描述／独立差异／富集；验证范围见模块记录 |
 | 非靶向 LC-MS | [metabolomics](metabolomics/README.md) | `config/project.yml`、`samples.tsv` | `run.sh` | 显式峰表至 limma/图表/报告；真实 XCMS 上游未重跑 |
 | 空间转录组 | [spatial_transcriptomics](spatial_transcriptomics/README.md) | `config/spatial_config.yaml`、manifest | `run_spatial.sh` | counts 来源、样本描述、marker-score 身份；条件组间推断未实现 |
 | scATAC / multiome 最小入口 | [singlecell_multiome](singlecell_multiome/README.md) | `config/example.yml` | `scripts/run_multiome.py` | 已有 RNA/ATAC counts 的两项测试；fragments 上游未实现 |

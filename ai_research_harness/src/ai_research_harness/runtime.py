@@ -15,7 +15,7 @@ from .storage import MemoryStore, RunStore, atomic_write, model_sha256, sha256_f
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 ASSETS = PACKAGE_ROOT / "assets"
-DEFAULT_AGENT_CONFIG = Path("/home/h1028/.codex/agents/ai_research.toml")
+DEFAULT_AGENT_CONFIG = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser() / "agents/ai_research.toml"
 ARTIFACT_CLAIM_MARKERS = (
     "创建文件",
     "生成文件",

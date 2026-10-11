@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读验证模板语法、来源基线和用户预存修改；结果写到指定审计 JSON。"""
+"""验证当前模板源码语法；旧提取来源及旧生产验收不作当前运行证明。"""
 from pathlib import Path
 import argparse
 import ast
@@ -10,12 +10,12 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATES = ('bulkrnaseq','wgbsseq','bulkatacseq','scrnaseq','smallrnaseq','metabolomics','spatial_transcriptomics','singlecell_multiome','spatial_metabolomics')
-EXCLUDED = {'__pycache__','.venv','.cache','.pytest_cache','result','runs'}
+TEMPLATES = ('rnaseq','wgbs','atac','scrnaseq','smallrnaseq','metabolomics','spatial_transcriptomics','singlecell_multiome','spatial_metabolomics')
+EXCLUDED = {'__pycache__','.venv','.cache','.pytest_cache','result','runs','history'}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--output',type=Path,default=ROOT/'template_audit/syntax_and_integrity.json')
+    parser.add_argument('--output',type=Path,default=ROOT/'template_audit/current_syntax.json')
     args = parser.parse_args()
     checks = []
     rfiles = []
@@ -66,33 +66,18 @@ for (f in files) {
         for line in p.stdout.splitlines():
             status, file, error = line.split('\t',2)
             checks.append({'kind':'R/Rmd','path':str(Path(file).relative_to(ROOT)),'status':status,'error':error})
-    baseline = json.loads((ROOT/'template_audit/baseline.json').read_text())
-    external = [x for x in baseline['sources'] if not Path(x['path']).is_relative_to(ROOT)]
-    changed = [x['path'] for x in external if not Path(x['path']).is_file() or hashlib.sha256(Path(x['path']).read_bytes()).hexdigest()!=x['sha256']]
-    provenance_errors = []
-    provenance_external = {}
-    for name in TEMPLATES[:7]:
-        manifest = ROOT/name/'provenance.tsv'
-        if not manifest.is_file():
-            provenance_errors.append(f"MISSING {name}/provenance.tsv")
-            continue
-        for row in csv.DictReader(manifest.open(), delimiter='\t'):
-            path = Path(row['source_path'])
-            if not path.is_absolute(): path = ROOT.parent/path
-            if path.is_relative_to(ROOT): continue  # Original template hashes intentionally change.
-            provenance_external[str(path)] = row['sha256']
-    for raw, expected in provenance_external.items():
-        path = Path(raw)
-        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest()!=expected:
-            provenance_errors.append(raw)
-    dirty = baseline['preexisting_dirty_file']
-    preserved = hashlib.sha256(Path(dirty['path']).read_bytes()).hexdigest()==dirty['sha256']
     diff = subprocess.run(['git','diff','--check'],cwd=ROOT,capture_output=True,text=True)
-    payload = {'checks':checks,'syntax_pass':sum(x['status']=='PASS' for x in checks),'syntax_fail':sum(x['status']!='PASS' for x in checks),'external_source_files_checked':len(external),'external_source_changes':changed,'preexisting_dirty_file_preserved':preserved,'provenance_external_files_checked':len(provenance_external),'provenance_errors':provenance_errors,'git_diff_check':diff.returncode,'git_diff_errors':diff.stdout+diff.stderr}
+    signatures = {x['path']:hashlib.sha256((ROOT/x['path']).read_bytes()).hexdigest()
+                  for x in checks if 'path' in x and (ROOT/x['path']).is_file()}
+    payload = {'checks':checks,'syntax_pass':sum(x['status']=='PASS' for x in checks),
+               'syntax_fail':sum(x['status']!='PASS' for x in checks),
+               'source_sha256':signatures,'git_diff_check':diff.returncode,
+               'git_diff_errors':diff.stdout+diff.stderr,
+               'boundary':'当前语法检查；不证明生产数据重跑。旧来源校验见 history/20260929。'}
     args.output.parent.mkdir(parents=True,exist_ok=True)
     args.output.write_text(json.dumps(payload,ensure_ascii=False,indent=2)+'\n')
-    print(json.dumps({k:v for k,v in payload.items() if k!='checks'},ensure_ascii=False))
-    return int(bool(payload['syntax_fail'] or changed or not preserved or provenance_errors or diff.returncode))
+    print(json.dumps({k:v for k,v in payload.items() if k not in {'checks','source_sha256'}},ensure_ascii=False))
+    return int(bool(payload['syntax_fail'] or diff.returncode))
 
 if __name__=='__main__':
     raise SystemExit(main())

@@ -1,0 +1,306 @@
+---
+title: "07 miRNA Compare"
+output: pdf_document
+---
+
+```{r init, include=FALSE, pandora_stage="prepare"}
+PANDORA_ANALYSIS_STAGE <- get0("PANDORA_ANALYSIS_STAGE", inherits = TRUE,
+  ifnotfound = Sys.getenv("PANDORA_ANALYSIS_STAGE", unset = "describe"))
+stopifnot(PANDORA_ANALYSIS_STAGE %in% c("describe", "differential", "enrichment"))
+initialize_profile_comparison_module(
+  environment(),
+  MIRNA_COMPARE_FIG,
+  MIRNA_COMPARE_TAB,
+  "07_mirna_compare",
+  c(
+    "01_composition",
+    "02_annotation_trends",
+    "03_length_distribution",
+    "04_sample_qc",
+    "05_top_annotations"
+  )
+)
+PANDORA_CAN_PCA <- nrow(sample_info) >= 3L
+pandora_group_n <- table(as.character(sample_info$Group))
+PANDORA_CAN_COMPARE <- length(pandora_group_n) >= 2L && all(pandora_group_n >= 2L)
+write_csv_safe(tibble(
+  AnalysisStage = PANDORA_ANALYSIS_STAGE,
+  AnalysisScope = get0("analysis_scope", inherits = TRUE, ifnotfound = "all"),
+  LibraryN = nrow(sample_info), GroupN = length(pandora_group_n),
+  PCAApplicable = PANDORA_CAN_PCA, GroupComparisonApplicable = PANDORA_CAN_COMPARE
+), "analysis_stage_status.csv")
+
+```
+
+```{r build-mirna-inputs, include=FALSE, pandora_stage="prepare", eval=TRUE}
+mirna_sample_total <- sample_comp_view %>%
+  filter(as.character(MainCategory) == "miRNA") %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+mirna_group_total <- mirna_sample_total %>%
+  summarise_group_mean_percent("MainCategory") %>%
+  left_join(group_clean_reads_tbl, by = "Group") %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+mirna_detail <- output_all %>%
+  filter(FeatureCategory == "miRNA", !is.na(PrimaryAnnotation), PrimaryAnnotation != "", PrimaryAnnotation != "NO_Annotation") %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+# 注释层使用 SPORTS summary 的分数计数；序列层 detail 保留原始完整注释。
+mirna_annotation_sample <- sports_annotation_counts() %>%
+  filter(FeatureCategory == "miRNA") %>%
+  mutate(Group = factor(Group, levels = group_levels)) %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+mirna_annotation_group <- mirna_annotation_sample %>%
+  summarise_group_mean_rpm("PrimaryAnnotation") %>%
+  left_join(
+    mirna_annotation_sample %>%
+      summarise_group_mean_percent("PrimaryAnnotation") %>%
+      select(Group, PrimaryAnnotation, Percent),
+    by = c("Group", "PrimaryAnnotation")
+  ) %>%
+  mutate(Percent = replace_na(Percent, 0))
+
+mirna_levels <- mirna_annotation_group %>%
+  group_by(PrimaryAnnotation) %>%
+  summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(TotalRPM), PrimaryAnnotation) %>%
+  slice_head(n = 20) %>%
+  pull(PrimaryAnnotation)
+
+if (length(mirna_levels) == 0) {
+  mirna_levels <- unique(as.character(mirna_annotation_group$PrimaryAnnotation))
+}
+
+mirna_palette <- setNames(grDevices::hcl.colors(max(1, length(mirna_levels)), palette = "Set 3"), mirna_levels)
+mirna_annotation_trend <- mirna_annotation_group %>%
+  filter(PrimaryAnnotation %in% mirna_levels) %>%
+  transmute(Group, TrendCategory = PrimaryAnnotation, Reads, Percent)
+
+mirna_length_group <- group_length_view %>%
+  filter(MainCategory == "miRNA") %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+mirna_sample_detection <- mirna_annotation_sample %>%
+  group_by(Sample, Group) %>%
+  summarise(
+    DetectedMiRNAs = n_distinct(PrimaryAnnotation[Reads > 0]),
+    MiRNAReads = sum(Reads, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  right_join(sample_info %>% transmute(Sample = as.character(Sample), Group = as.character(Group)),
+             by = c("Sample", "Group")) %>%
+  mutate(DetectedMiRNAs = coalesce(DetectedMiRNAs, 0L), MiRNAReads = coalesce(MiRNAReads, 0)) %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(
+    MiRNAReadFraction = if_else(CleanReads > 0, 100 * MiRNAReads / CleanReads, 0),
+    Group = factor(as.character(Group), levels = group_levels)
+  )
+
+mirna_feature_matrix <- build_feature_count_matrix(
+  mirna_annotation_sample,
+  feature_col = "PrimaryAnnotation",
+  sample_order = as.character(sample_info$Sample),
+  feature_order = mirna_levels,
+  min_total = 0
+)
+
+mirna_correlation_tbl <- tibble()
+if (nrow(mirna_feature_matrix$matrix) >= 2 && ncol(mirna_feature_matrix$matrix) >= 2) {
+  mirna_cor <- cor(log2(mirna_feature_matrix$matrix + 1), method = "pearson")
+  mirna_cor_order <- rownames(mirna_cor)
+  if (nrow(mirna_cor) > 1) {
+    mirna_cor_order <- rownames(mirna_cor)[hclust(as.dist(1 - mirna_cor), method = "complete")$order]
+  }
+  mirna_correlation_tbl <- expand.grid(sample_x = mirna_cor_order, sample_y = mirna_cor_order, stringsAsFactors = FALSE)
+  mirna_correlation_tbl$correlation <- as.vector(mirna_cor[mirna_cor_order, mirna_cor_order])
+}
+
+mirna_top_annotations <- mirna_annotation_group %>%
+  filter(RPM > 0 | Reads > 0) %>%
+  group_by(Group) %>%
+  slice_max(order_by = RPM, n = 12, with_ties = FALSE) %>%
+  ungroup()
+
+mirna_top_annotations_overall <- mirna_annotation_group %>%
+  group_by(PrimaryAnnotation) %>%
+  summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(TotalRPM), PrimaryAnnotation)
+```
+
+```{r mirna-composition, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (nrow(mirna_group_total) > 0) {
+  mirna_total_plot <- build_two_group_summary_bar(
+    mirna_sample_total,
+    "Percent",
+    "miRNA abundance across groups",
+    "Mean percent of clean reads per sample",
+    group_levels,
+    fill_palette = group_palette,
+    sample_info = sample_info,
+    label_digits = 1
+  )
+
+  save_plot_nested(
+    mirna_total_plot,
+    "01_composition",
+    "mirna_group_total_percent.pdf",
+    width = 7.5,
+    height = 5.2,
+    view = REPORT_VIEW
+  )
+}
+
+if (nrow(mirna_annotation_trend) > 0 && length(mirna_levels) >= 2) {
+  mirna_bar <- build_trend_bar_plot(
+    mirna_annotation_trend,
+    mirna_levels,
+    "Percent",
+    "miRNA annotation proportions across groups",
+    "Proportion within miRNA (%)",
+    group_levels,
+    fill_palette = mirna_palette
+  )
+  save_plot_nested(
+    mirna_bar,
+    "02_annotation_trends",
+    "mirna_annotation_percent_bar.pdf",
+    width = 10,
+    height = 6,
+    view = REPORT_VIEW
+  )
+
+  mirna_alluvial <- build_trend_alluvial_plot(
+    mirna_annotation_trend,
+    mirna_levels,
+    "Percent",
+    "miRNA annotation alluvial across groups",
+    "Proportion within miRNA (%)",
+    group_levels,
+    fill_palette = mirna_palette
+  )
+  save_plot_nested(
+    mirna_alluvial,
+    "02_annotation_trends",
+    "mirna_annotation_percent_alluvial.pdf",
+    width = 10.5,
+    height = 6.2,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r mirna-length, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (nrow(mirna_length_group) > 0) {
+  mirna_length_line <- ggplot(mirna_length_group %>% filter(RPM > 0), aes(x = Length, y = RPM, color = Group, group = Group)) +
+    geom_line(linewidth = 0.9) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    scale_x_continuous(expand = c(0.01, 0)) +
+    labs(x = "Length (nt)", y = "RPM", title = NULL) +
+    serum_theme_bw() +
+    theme(legend.position = "top", legend.title = element_blank(), panel.grid.minor = element_blank())
+
+  mirna_length_bar <- ggplot(mirna_length_group %>% filter(RPM > 0), aes(x = factor(Length), y = RPM, fill = Group)) +
+    geom_col(position = position_dodge(width = 0.74), width = 0.68) +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    labs(x = "Length (nt)", y = "RPM", title = NULL) +
+    serum_theme_bw() +
+    theme(legend.position = "none", legend.title = element_blank(), panel.grid.minor = element_blank())
+
+  mirna_length_plot <- build_plot_collage(
+    list(mirna_length_line, mirna_length_bar),
+    title_text = "miRNA length comparison across groups",
+    cols = 1
+  )
+
+  save_plot_nested(
+    mirna_length_plot,
+    "03_length_distribution",
+    "mirna_length_compare.pdf",
+    width = 9,
+    height = 10,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r mirna-qc, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (nrow(mirna_correlation_tbl) > 0) {
+  mirna_cor_values <- mirna_correlation_tbl$correlation[is.finite(mirna_correlation_tbl$correlation)]
+  mirna_cor_min <- if (length(mirna_cor_values) > 0) min(mirna_cor_values) else 0
+  if (!is.finite(mirna_cor_min) || mirna_cor_min >= 1) mirna_cor_min <- 0.95
+  mirna_cor_plot <- ggplot(mirna_correlation_tbl, aes(sample_x, sample_y, fill = correlation)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = ifelse(is.finite(correlation), sprintf("%.2f", correlation), "")), size = 3) +
+    scale_fill_gradientn(
+      colours = serum_diverging_palette,
+      limits = c(mirna_cor_min, 1),
+      na.value = serum_neutral_line
+    ) +
+    labs(title = "Sample correlation from miRNA annotations", x = NULL, y = NULL, fill = "Pearson r") +
+    serum_theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  save_plot_nested(
+    mirna_cor_plot,
+    "04_sample_qc",
+    "mirna_sample_correlation_heatmap.pdf",
+    width = 7.5,
+    height = 6.5,
+    view = REPORT_VIEW
+  )
+}
+
+mirna_detection_plot <- ggplot(mirna_sample_detection, aes(x = Sample, y = DetectedMiRNAs, fill = Group)) +
+  geom_col(width = 0.68) +
+  geom_text(aes(label = DetectedMiRNAs), vjust = -0.35, size = 3.4) +
+  scale_fill_manual(values = group_palette, drop = FALSE) +
+  labs(title = "Detected miRNA annotations per sample", x = NULL, y = "Number of detected miRNA annotations") +
+  serum_theme_bw() +
+  theme(legend.position = "top", legend.title = element_blank())
+
+save_plot_nested(
+  mirna_detection_plot,
+  "04_sample_qc",
+  "mirna_detected_annotations.pdf",
+  width = 8.3,
+  height = 5.2,
+  view = REPORT_VIEW
+)
+```
+
+```{r mirna-top-annotations, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (nrow(mirna_top_annotations) > 0) {
+  annotation_order <- mirna_top_annotations_overall$PrimaryAnnotation
+  mirna_top_annotations <- mirna_top_annotations %>%
+    mutate(PrimaryAnnotation = factor(PrimaryAnnotation, levels = rev(annotation_order)))
+
+  mirna_top_plot <- ggplot(mirna_top_annotations, aes(x = PrimaryAnnotation, y = RPM, fill = Group)) +
+    geom_col(width = 0.72, position = position_dodge(width = 0.78)) +
+    coord_flip() +
+    facet_wrap(~Group, scales = "free_y") +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    labs(title = "Top miRNA annotations per group", x = NULL, y = "RPM") +
+    serum_theme_bw() +
+    theme(legend.position = "none", plot.margin = margin(10, 20, 10, 10))
+
+  save_plot_nested(
+    mirna_top_plot,
+    "05_top_annotations",
+    "mirna_top_annotations.pdf",
+    width = 10,
+    height = 7.5,
+    view = REPORT_VIEW
+  )
+}
+
+write_csv_safe(mirna_group_total, "mirna_group_total.csv")
+write_csv_safe(mirna_annotation_group, "mirna_annotation_group.csv")
+write_csv_safe(mirna_sample_detection, "mirna_sample_detection.csv")
+write_csv_safe(mirna_top_annotations, "mirna_top_annotations.csv")
+```
+
+miRNA analysis completed.

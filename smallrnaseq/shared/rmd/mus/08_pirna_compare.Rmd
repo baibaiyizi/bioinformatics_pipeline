@@ -1,0 +1,612 @@
+---
+title: "08 Mouse `r PROJECT_STAGE` piRNA-Annotated Profiles | `r PANDORA_ANALYSIS_STAGE`"
+output: pdf_document
+---
+
+```{r init, include=FALSE, pandora_stage="prepare"}
+PANDORA_ANALYSIS_STAGE <- get0("PANDORA_ANALYSIS_STAGE", inherits = TRUE,
+  ifnotfound = Sys.getenv("PANDORA_ANALYSIS_STAGE", unset = "describe"))
+stopifnot(PANDORA_ANALYSIS_STAGE %in% c("describe", "differential", "enrichment"))
+OUTPUT_FIG_DIR <- PIRNA_COMPARE_FIG
+OUTPUT_TAB_DIR <- PIRNA_COMPARE_TAB
+prepare_module_outputs(
+  OUTPUT_FIG_DIR,
+  OUTPUT_TAB_DIR,
+  c(
+    "01_composition",
+"02_annotation_trends",
+"03_length_distribution",
+"04_sample_qc",
+"05_top_annotations",
+"06_sequence_pattern",
+"07_de/00_config",
+"07_de/01_annotation",
+"07_de/02_sequence",
+"08_validation/01_abundance",
+"08_validation/02_sequence_signature",
+"08_validation/03_cluster_pingpong_feasibility"
+  )
+)
+activate_mii_context(environment())
+PANDORA_CAN_PCA <- nrow(sample_info) >= 3L
+pandora_group_n <- table(as.character(sample_info$Group))
+PANDORA_CAN_COMPARE <- length(pandora_group_n) >= 2L && all(pandora_group_n >= 2L)
+write_csv_safe(tibble(
+  AnalysisStage = PANDORA_ANALYSIS_STAGE,
+  AnalysisScope = get0("analysis_scope", inherits = TRUE, ifnotfound = "all"),
+  LibraryN = nrow(sample_info), GroupN = length(pandora_group_n),
+  PCAApplicable = PANDORA_CAN_PCA, GroupComparisonApplicable = PANDORA_CAN_COMPARE
+), "analysis_stage_status.csv")
+
+```
+
+当前输入的 piRNA 注释仅到类别，不能恢复参考 piRNA ID。Top 特征、检出数量与样本相似性均使用唯一的 piRNA-annotated sequences；每条序列的 reads 计数一次。数据库匹配不等于功能性 piRNA 身份，参考 ID 层差异记为 `not_run`，符合设计要求时单独运行序列层差异。
+
+```{r build-pirna-inputs, include=FALSE, pandora_stage="prepare", eval=TRUE}
+write_csv_safe(tibble(
+  Analysis = "piRNA reference-ID annotation",
+  State = "not_run",
+  Reason = "当前 SPORTS 汇总只有 piRNA 类别标签，无法恢复参考 ID 及其分数分配；描述以唯一 piRNA-annotated sequence 为单位。"
+), "pirna_reference_annotation_status.csv")
+pirna_sample_total <- sample_comp_view %>%
+  filter(as.character(MainCategory) == "piRNA") %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+pirna_group_total <- pirna_sample_total %>%
+  summarise_group_mean_percent("MainCategory") %>%
+  left_join(group_clean_reads_tbl, by = "Group") %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+pirna_detail <- output_all %>%
+  filter(FeatureCategory == "piRNA", !is.na(Sequence), Sequence != "") %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+# 当前 SPORTS piRNA 只保留类别标签，没有参考 ID 分配；以下特征明确为实测序列。
+pirna_sequence_sample <- pirna_detail %>%
+  group_by(Sample, Group, Sequence) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), RPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+pirna_sequence_group <- pirna_sequence_sample %>%
+  summarise_group_mean_rpm("Sequence") %>%
+  left_join(
+    pirna_sequence_sample %>%
+      summarise_group_mean_percent("Sequence") %>%
+      select(Group, Sequence, Percent),
+    by = c("Group", "Sequence")
+  ) %>%
+  mutate(Percent = replace_na(Percent, 0))
+
+pirna_levels <- pirna_sequence_group %>%
+  group_by(Sequence) %>%
+  summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(TotalRPM), Sequence) %>%
+  slice_head(n = 20) %>%
+  pull(Sequence)
+
+if (length(pirna_levels) == 0) {
+  pirna_levels <- unique(as.character(pirna_sequence_group$Sequence))
+}
+
+pirna_palette <- if (length(pirna_levels)) setNames(grDevices::hcl.colors(length(pirna_levels), palette = "Set 3"), pirna_levels) else character()
+pirna_sequence_trend <- pirna_sequence_group %>%
+  filter(Sequence %in% pirna_levels) %>%
+  transmute(Group, TrendCategory = Sequence, Reads, Percent)
+
+pirna_length_group <- group_length_view %>%
+  filter(MainCategory == "piRNA") %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+pirna_sample_detection <- pirna_sequence_sample %>%
+  group_by(Sample, Group) %>%
+  summarise(
+    DetectedPiRNASequences = n_distinct(Sequence[Reads > 0]),
+    piRNAReads = sum(Reads, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  right_join(sample_info %>% transmute(Sample = as.character(Sample), Group = as.character(Group)),
+             by = c("Sample", "Group")) %>%
+  mutate(DetectedPiRNASequences = coalesce(DetectedPiRNASequences, 0L), piRNAReads = coalesce(piRNAReads, 0)) %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(
+    piRNAReadFraction = if_else(CleanReads > 0, 100 * piRNAReads / CleanReads, 0),
+    Group = factor(as.character(Group), levels = group_levels)
+  )
+
+pirna_feature_matrix <- build_feature_count_matrix(
+  pirna_sequence_sample,
+  feature_col = "Sequence",
+  sample_order = as.character(sample_info$Sample),
+  feature_order = pirna_levels,
+  min_total = 0
+)
+
+pirna_correlation_tbl <- tibble()
+if (nrow(pirna_feature_matrix$matrix) >= 2 && ncol(pirna_feature_matrix$matrix) >= 2) {
+  pirna_cor <- cor(log2(pirna_feature_matrix$matrix + 1), method = "pearson")
+  pirna_cor_order <- rownames(pirna_cor)
+  if (nrow(pirna_cor) > 1 && all(is.finite(pirna_cor))) {
+    pirna_cor_order <- rownames(pirna_cor)[hclust(as.dist(1 - pirna_cor), method = "complete")$order]
+  }
+  pirna_correlation_tbl <- expand.grid(sample_x = pirna_cor_order, sample_y = pirna_cor_order, stringsAsFactors = FALSE)
+  pirna_correlation_tbl$correlation <- as.vector(pirna_cor[pirna_cor_order, pirna_cor_order])
+}
+
+pirna_top_sequences <- pirna_sequence_group %>%
+  filter(RPM > 0 | Reads > 0) %>%
+  group_by(Group) %>%
+  slice_max(order_by = RPM, n = 12, with_ties = FALSE) %>%
+  ungroup()
+
+pirna_top_sequences_overall <- pirna_sequence_group %>%
+  group_by(Sequence) %>%
+  summarise(TotalRPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(TotalRPM), Sequence)
+```
+
+```{r pirna-composition, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (nrow(pirna_group_total) > 0) {
+  pirna_total_plot <- build_two_group_summary_bar(
+    pirna_sample_total,
+    "Percent",
+    "piRNA abundance across groups",
+    "Mean percent of clean reads per sample",
+    group_levels,
+    fill_palette = group_palette,
+    sample_info = sample_info,
+    label_digits = 1
+  )
+
+  save_plot_nested(
+    pirna_total_plot,
+    "01_composition",
+    "pirna_group_total_percent.pdf",
+    width = 7.5,
+    height = 5.2,
+    view = REPORT_VIEW
+  )
+}
+
+if (nrow(pirna_sequence_trend) > 0 && length(pirna_levels) >= 2) {
+  pirna_bar <- build_trend_bar_plot(
+    pirna_sequence_trend,
+    pirna_levels,
+    "Percent",
+    "Top piRNA-annotated sequence proportions across groups",
+    "Proportion within piRNA (%)",
+    group_levels,
+    fill_palette = pirna_palette
+  )
+  save_plot_nested(
+    pirna_bar,
+    "02_annotation_trends",
+    "pirna_annotation_percent_bar.pdf",
+    width = 10,
+    height = 6,
+    view = REPORT_VIEW
+  )
+
+  pirna_alluvial <- build_trend_alluvial_plot(
+    pirna_sequence_trend,
+    pirna_levels,
+    "Percent",
+    "Top piRNA-annotated sequence alluvial across groups",
+    "Proportion within piRNA (%)",
+    group_levels,
+    fill_palette = pirna_palette
+  )
+  save_plot_nested(
+    pirna_alluvial,
+    "02_annotation_trends",
+    "pirna_annotation_percent_alluvial.pdf",
+    width = 10.5,
+    height = 6.2,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r pirna-length, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (nrow(pirna_length_group) > 0) {
+  pirna_length_line <- ggplot(pirna_length_group %>% filter(RPM > 0), aes(x = Length, y = RPM, color = Group, group = Group)) +
+    geom_line(linewidth = 0.9) +
+    geom_point(size = 0.85) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    sncrna_length_axis() +
+    labs(x = "Length (nt)", y = "RPM", title = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "top", legend.title = element_blank(), panel.grid.minor = element_blank())
+
+  pirna_length_bar <- ggplot(pirna_length_group %>% filter(RPM > 0), aes(x = factor(Length), y = RPM, fill = Group)) +
+    geom_col(position = position_dodge(width = 0.74), width = 0.68) +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    labs(x = "Length (nt)", y = "RPM", title = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "none", legend.title = element_blank(), panel.grid.minor = element_blank())
+
+  pirna_length_plot <- build_plot_collage(
+    list(pirna_length_line, pirna_length_bar),
+    title_text = "piRNA length comparison across groups",
+    cols = 1
+  )
+
+  save_plot_nested(
+    pirna_length_plot,
+    "03_length_distribution",
+    "pirna_length_compare.pdf",
+    width = 9,
+    height = 10,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r pirna-qc, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (nrow(pirna_correlation_tbl) > 0) {
+  pirna_cor_values <- pirna_correlation_tbl$correlation[is.finite(pirna_correlation_tbl$correlation)]
+  pirna_cor_min <- if (length(pirna_cor_values) > 0) min(pirna_cor_values) else 0
+  if (!is.finite(pirna_cor_min) || pirna_cor_min >= 1) pirna_cor_min <- 0.95
+  pirna_cor_plot <- ggplot(pirna_correlation_tbl, aes(sample_x, sample_y, fill = correlation)) +
+    geom_tile(color = "white") +
+    geom_text(aes(label = ifelse(is.finite(correlation), sprintf("%.2f", correlation), "")), size = 3) +
+    scale_fill_gradientn(
+      colours = mii_diverging_palette,
+      limits = c(pirna_cor_min, 1),
+      na.value = mii_neutral_line
+    ) +
+    labs(title = "Sample correlation from top piRNA-annotated sequences", x = NULL, y = NULL, fill = "Pearson r") +
+    mii_theme_bw() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  save_plot_nested(
+    pirna_cor_plot,
+    "04_sample_qc",
+    "pirna_sample_correlation_heatmap.pdf",
+    width = 7.5,
+    height = 6.5,
+    view = REPORT_VIEW
+  )
+}
+
+pirna_detection_plot <- ggplot(pirna_sample_detection, aes(x = Sample, y = DetectedPiRNASequences, fill = Group)) +
+  geom_col(width = 0.68) +
+  geom_text(aes(label = DetectedPiRNASequences), vjust = -0.35, size = 3.4) +
+  scale_fill_manual(values = group_palette, drop = FALSE) +
+  labs(title = "Detected piRNA-annotated sequences per sample", x = NULL, y = "Unique piRNA-annotated sequences") +
+  mii_theme_bw() +
+  theme(legend.position = "top", legend.title = element_blank())
+
+save_plot_nested(
+  pirna_detection_plot,
+  "04_sample_qc",
+  "pirna_detected_annotations.pdf",
+  width = 8.3,
+  height = 5.2,
+  view = REPORT_VIEW
+)
+```
+
+```{r pirna-top-annotations, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+if (nrow(pirna_top_sequences) > 0) {
+  sequence_order <- pirna_top_sequences_overall$Sequence
+  pirna_top_sequences <- pirna_top_sequences %>%
+    mutate(Sequence = factor(Sequence, levels = rev(sequence_order)))
+
+  pirna_top_plot <- ggplot(pirna_top_sequences, aes(x = Sequence, y = RPM, fill = Group)) +
+    geom_col(width = 0.72, position = position_dodge(width = 0.78)) +
+    coord_flip() +
+    facet_wrap(~Group, scales = "free_y") +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    labs(title = "Top piRNA-annotated sequences per group", x = NULL, y = "RPM") +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+
+  save_plot_nested(
+    pirna_top_plot,
+    "05_top_annotations",
+    "pirna_top_annotations.pdf",
+    width = 10,
+    height = 7.5,
+    view = REPORT_VIEW
+  )
+}
+
+```
+
+```{r pirna-sequence-pattern, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+pirna_sequence_pattern <- pirna_detail %>%
+  filter(!is.na(Sequence), Sequence != "", nchar(Sequence) >= 3) %>%
+  mutate(
+    SequenceClean = toupper(gsub("U", "T", Sequence)),
+    FirstBase = substr(SequenceClean, 1, 1),
+    FivePrimeTriplet = substr(SequenceClean, 1, 3)
+  ) %>%
+  filter(str_detect(FirstBase, "^[ACGT]$"), str_detect(FivePrimeTriplet, "^[ACGT]{3}$"))
+
+pirna_first_base_sample <- pirna_sequence_pattern %>%
+  group_by(Sample, Group, FirstBase) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), SequenceCount = n_distinct(SequenceClean), .groups = "drop") %>%
+  group_by(Sample, Group) %>%
+  mutate(ReadPercent = group_percent(Reads), SequencePercent = group_percent(SequenceCount)) %>%
+  ungroup()
+
+pirna_first_base_group <- pirna_first_base_sample %>%
+  summarise_group_mean_percent("FirstBase", percent_col = "ReadPercent") %>%
+  select(Group, FirstBase, Reads, ReadPercent = Percent) %>%
+  left_join(
+    pirna_first_base_sample %>%
+      summarise_group_mean_percent("FirstBase", percent_col = "SequencePercent", reads_col = "SequenceCount") %>%
+      select(Group, FirstBase, SequenceCount = Reads, SequencePercent = Percent),
+    by = c("Group", "FirstBase")
+  )
+
+pirna_triplet_sample <- pirna_sequence_pattern %>%
+  group_by(Sample, Group, FivePrimeTriplet) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), SequenceCount = n_distinct(SequenceClean), .groups = "drop") %>%
+  group_by(Sample, Group) %>%
+  mutate(ReadPercent = group_percent(Reads), SequencePercent = group_percent(SequenceCount)) %>%
+  ungroup()
+
+pirna_triplet_group <- pirna_triplet_sample %>%
+  summarise_group_mean_percent("FivePrimeTriplet", percent_col = "ReadPercent") %>%
+  select(Group, FivePrimeTriplet, Reads, ReadPercent = Percent) %>%
+  left_join(
+    pirna_triplet_sample %>%
+      summarise_group_mean_percent("FivePrimeTriplet", percent_col = "SequencePercent", reads_col = "SequenceCount") %>%
+      select(Group, FivePrimeTriplet, SequenceCount = Reads, SequencePercent = Percent),
+    by = c("Group", "FivePrimeTriplet")
+  )
+
+if (nrow(pirna_first_base_group) > 0) {
+  base_palette <- c(A = mii_green, C = mii_blue, G = mii_orange, T = mii_red)
+  first_base_plot <- ggplot(
+    pirna_first_base_group %>% mutate(FirstBase = factor(FirstBase, levels = c("A", "C", "G", "T"))),
+    aes(x = Group, y = ReadPercent, fill = FirstBase)
+  ) +
+    geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+    scale_fill_manual(values = base_palette, drop = FALSE) +
+    labs(
+      x = "Group",
+      y = "Percent of piRNA-annotated reads",
+      title = "piRNA 5-prime first-base composition",
+      fill = "Base"
+    ) +
+    mii_theme_bw() +
+    theme(legend.position = "top")
+
+  save_plot_nested(
+    first_base_plot,
+    "06_sequence_pattern",
+    "pirna_first_base_read_percent.pdf",
+    width = 7.5,
+    height = 5.2,
+    view = REPORT_VIEW
+  )
+} else {
+  save_plot_nested(
+    plot_note("piRNA-annotated sequence pattern", "No piRNA-annotated sequences were available for first-base composition."),
+    "06_sequence_pattern",
+    "pirna_first_base_read_percent.pdf",
+    width = 7.5,
+    height = 5.2,
+    view = REPORT_VIEW
+  )
+}
+
+top_triplets <- pirna_triplet_group %>%
+  group_by(FivePrimeTriplet) %>%
+  summarise(TotalReadPercent = sum(ReadPercent, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(TotalReadPercent), FivePrimeTriplet) %>%
+  slice_head(n = 20) %>%
+  pull(FivePrimeTriplet)
+
+if (length(top_triplets) > 0) {
+  triplet_plot_df <- pirna_triplet_group %>%
+    filter(FivePrimeTriplet %in% top_triplets) %>%
+    mutate(
+      Group = factor(as.character(Group), levels = group_levels),
+      FivePrimeTriplet = factor(FivePrimeTriplet, levels = rev(top_triplets))
+    )
+
+  triplet_plot <- ggplot(triplet_plot_df, aes(x = FivePrimeTriplet, y = ReadPercent, fill = Group)) +
+    geom_col(position = position_dodge(width = 0.78), width = 0.72) +
+    coord_flip() +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    labs(
+      x = NULL,
+      y = "Percent of piRNA-annotated reads",
+      title = "Top piRNA 5-prime triplets across groups"
+    ) +
+    mii_theme_bw() +
+    theme(legend.position = "top", legend.title = element_blank())
+
+  save_plot_nested(
+    triplet_plot,
+    "06_sequence_pattern",
+    "pirna_top_5prime_triplets.pdf",
+    width = 9.5,
+    height = 6.6,
+    view = REPORT_VIEW
+  )
+} else {
+  save_plot_nested(
+    plot_note("piRNA 5-prime triplets", "No piRNA triplet pattern could be calculated."),
+    "06_sequence_pattern",
+    "pirna_top_5prime_triplets.pdf",
+    width = 8,
+    height = 5,
+    view = REPORT_VIEW
+  )
+}
+
+write_csv_safe(pirna_group_total, "pirna_group_total.csv")
+write_csv_safe(pirna_sequence_group, "pirna_sequence_group.csv")
+write_csv_safe(pirna_sample_detection, "pirna_sample_detection.csv")
+write_csv_safe(pirna_top_sequences, "pirna_top_sequences.csv")
+write_csv_safe(pirna_first_base_group, "pirna_first_base_group.csv")
+write_csv_safe(pirna_triplet_group, "pirna_5prime_triplet_group.csv")
+```
+
+piRNA analysis completed.
+
+```{r pirna-de, include=FALSE, pandora_stage="differential", eval=PANDORA_ANALYSIS_STAGE == "differential" && PANDORA_CAN_COMPARE}
+contrast_specs <- resolve_mii_contrast_specs()
+write_de_run_config(contrast_specs, section = "07_de/00_config")
+
+write_csv_safe(tibble(
+  State = "not_run",
+  Reason = "当前 SPORTS 未提供参考 piRNA ID 的分数分配，无法运行参考 ID 层差异；序列层差异单独计算。"
+), "07_de/01_annotation/annotation_de_status.csv")
+save_plot_nested(
+  plot_note("piRNA reference-ID differential analysis", "Not run: reference-ID allocations are unavailable; sequence-level DE is separate."),
+  "07_de/01_annotation", "pirna_annotation_de_not_run.pdf", width = 8.5, height = 5, view = REPORT_VIEW
+)
+
+pirna_sequence_de <- run_sequence_de_categories("piRNA", layer_prefix = "07_de/02_sequence")
+write_csv_safe(pirna_sequence_de$results, "07_de/02_sequence/sequence_de_all_results.csv")
+write_csv_safe(pirna_sequence_de$summary, "07_de/02_sequence/sequence_de_all_summary.csv")
+write_csv_safe(pirna_sequence_de$manifest, "07_de/02_sequence/sequence_de_all_manifest.csv")
+```
+
+```{r pirna-validation-pirna-abundance, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+pirna_fraction_by_sample <- sample_comp_view %>%
+  mutate(MainCategory = as.character(MainCategory)) %>%
+  filter(MainCategory == "piRNA") %>%
+  transmute(Sample = as.character(Sample), Group = as.character(Group), piRNA_Reads = Reads, piRNA_Percent = Percent) %>%
+  right_join(sample_qc_table %>% transmute(Sample = as.character(Sample), Group = as.character(Group), CleanReads), by = c("Sample", "Group")) %>%
+  mutate(
+    piRNA_Reads = replace_na(piRNA_Reads, 0),
+    piRNA_Percent = replace_na(piRNA_Percent, 0),
+    low_abundance_flag = piRNA_Reads < 1000 | piRNA_Percent < 0.1,
+    interpretation = if_else(
+      low_abundance_flag,
+      "Low abundance; validate before interpreting piRNA biology.",
+      "Abundance is sufficient for basic composition review."
+    )
+  )
+
+write_csv_safe(pirna_fraction_by_sample, "08_validation/01_abundance/pirna_abundance_by_sample.csv")
+
+pi_abundance_plot <- ggplot(pirna_fraction_by_sample, aes(x = Sample, y = piRNA_Percent, fill = low_abundance_flag)) +
+  geom_col(width = 0.72) +
+  scale_fill_manual(values = c(`TRUE` = mii_red, `FALSE` = mii_green), drop = FALSE) +
+  labs(title = "piRNA fraction by sample", x = NULL, y = "Percent of clean reads", fill = "Low abundance") +
+  mii_theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+save_plot_nested(pi_abundance_plot, "08_validation/01_abundance", "pirna_fraction_by_sample.pdf", width = 9, height = 5.5, view = REPORT_VIEW)
+```
+
+```{r pirna-validation-sequence-signature, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+pirna_rows <- output_all %>%
+  filter(FeatureCategory == "piRNA", !is.na(Sequence), Sequence != "") %>%
+  mutate(
+    first_base = substr(Sequence, 1, 1),
+    tenth_base = if_else(nchar(Sequence) >= 10, substr(Sequence, 10, 10), NA_character_),
+    is_1U = first_base %in% c("T", "U"),
+    is_10A = tenth_base == "A"
+  )
+
+pirna_sequence_signature <- pirna_rows %>%
+  summarise(
+    total_reads = sum(Reads, na.rm = TRUE),
+    sequence_n = n_distinct(Sequence),
+    sample_n = n_distinct(Sample),
+    median_length = median(Length, na.rm = TRUE),
+    one_U_read_fraction = if_else(total_reads > 0, sum(Reads[is_1U], na.rm = TRUE) / total_reads, 0),
+    ten_A_read_fraction = if_else(total_reads > 0, sum(Reads[is_10A], na.rm = TRUE) / total_reads, 0)
+  ) %>%
+  mutate(
+    evidence_grade = case_when(
+      total_reads < 1000 ~ "low_abundance",
+      one_U_read_fraction >= 0.45 | ten_A_read_fraction >= 0.25 ~ "signature_supportive",
+      TRUE ~ "weak_signature"
+    ),
+    interpretation = case_when(
+      evidence_grade == "signature_supportive" ~ "Basic piRNA sequence signature is supportive.",
+      evidence_grade == "low_abundance" ~ "Low piRNA abundance limits signature interpretation.",
+      TRUE ~ "1U/10A signature is weak; treat as annotation-only evidence."
+    )
+  )
+
+pirna_base_position <- tidyr::expand_grid(
+  pirna_rows %>% select(Sequence, Reads) %>% distinct(),
+  Position = c(1L, 10L)
+) %>%
+  mutate(Base = if_else(nchar(Sequence) >= Position, substr(Sequence, Position, Position), NA_character_)) %>%
+  filter(!is.na(Base)) %>%
+  group_by(Position, Base) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Position) %>%
+  mutate(Fraction = Reads / sum(Reads, na.rm = TRUE)) %>%
+  ungroup()
+
+pirna_length_distribution <- pirna_rows %>%
+  group_by(Length) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), SequenceN = n_distinct(Sequence), .groups = "drop") %>%
+  arrange(Length)
+
+write_csv_safe(pirna_sequence_signature, "08_validation/02_sequence_signature/pirna_1U_10A_signature_summary.csv")
+write_csv_safe(pirna_base_position, "08_validation/02_sequence_signature/pirna_position_1_10_base_fraction.csv")
+write_csv_safe(pirna_length_distribution, "08_validation/02_sequence_signature/pirna_length_distribution.csv")
+
+if (nrow(pirna_base_position) > 0) {
+  base_plot <- ggplot(pirna_base_position, aes(x = Base, y = Fraction, fill = Base)) +
+    geom_col(width = 0.72) +
+    facet_wrap(~ Position, labeller = labeller(Position = c(`1` = "Position 1", `10` = "Position 10"))) +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_fill_manual(values = c(A = mii_green, C = mii_blue, G = mii_orange, T = mii_red, U = mii_red), drop = FALSE) +
+    labs(title = "piRNA 1U / 10A signature proxy", x = NULL, y = "Read fraction", fill = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+  save_plot_nested(base_plot, "08_validation/02_sequence_signature", "pirna_1U_10A_signature_proxy.pdf", width = 8, height = 5.5, view = REPORT_VIEW)
+}
+
+if (nrow(pirna_length_distribution) > 0) {
+  length_plot <- ggplot(pirna_length_distribution, aes(x = Length, y = Reads)) +
+    geom_col(width = 0.8, fill = mii_purple) +
+    scale_y_continuous(labels = scales::comma) +
+    labs(title = "piRNA length distribution", x = "Length", y = "Reads") +
+    mii_theme_bw()
+  save_plot_nested(length_plot, "08_validation/02_sequence_signature", "pirna_length_distribution.pdf", width = 8, height = 5.5, view = REPORT_VIEW)
+} else {
+  save_plot_nested(plot_note("piRNA validation", "No piRNA rows were available."), "08_validation/02_sequence_signature", "pirna_signature_note.pdf", width = 8.5, height = 5, view = REPORT_VIEW)
+}
+```
+
+```{r pirna-validation-cluster-pingpong-feasibility, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+alignment_files <- list.files(SPORTS_SAMPLE_ROOT, pattern = "[.](bam|sam)$", recursive = TRUE, full.names = TRUE, ignore.case = TRUE)
+total_pirna_reads <- sum(pirna_fraction_by_sample$piRNA_Reads, na.rm = TRUE)
+
+cluster_pingpong_feasibility <- tibble(
+  analysis = c("piRNA cluster analysis", "ping-pong signature"),
+  status = c(
+    if_else(length(alignment_files) > 0 && total_pirna_reads >= 10000, "ready_for_coordinate_analysis", "skipped"),
+    if_else(length(alignment_files) > 0 && total_pirna_reads >= 10000, "ready_for_coordinate_analysis", "skipped")
+  ),
+  reason = c(
+    if_else(length(alignment_files) > 0, "Alignment files detected.", "No genome-coordinate BAM/SAM files detected."),
+    if_else(total_pirna_reads >= 10000, "piRNA-annotated read threshold met.", "piRNA-annotated reads are too low for stable ping-pong review.")
+  ),
+  next_requirement = c(
+    "Use genome-coordinate BAM plus piRNA cluster annotation.",
+    "Use strand-aware genome coordinates and 5' overlap statistics."
+  )
+)
+write_csv_safe(cluster_pingpong_feasibility, "08_validation/03_cluster_pingpong_feasibility/pirna_cluster_pingpong_feasibility.csv")
+
+save_plot_nested(
+  plot_note(
+    "piRNA cluster / ping-pong feasibility",
+    "Cluster and ping-pong analyses are enabled only with genome-coordinate BAM/SAM and adequate piRNA abundance."
+  ),
+  "08_validation/03_cluster_pingpong_feasibility",
+  "pirna_cluster_pingpong_skipped_reason.pdf",
+  width = 8.5,
+  height = 5,
+  view = REPORT_VIEW
+)
+```
+
+piRNA validation completed.

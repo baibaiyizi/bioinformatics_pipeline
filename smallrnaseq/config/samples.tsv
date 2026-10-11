@@ -1,3 +1,1 @@
-sample	group	biological_sample_id	unit_type	batch	raw_fq	condition	age_group	species	stage	replicate
-control_lib	control	unknown	unknown	unknown	inputs/vendor_control.fastq.gz	control		Mus musculus	configured_tissue	1
-case_lib	case	unknown	unknown	unknown	inputs/vendor_case.fastq.gz	case		Mus musculus	configured_tissue	1
+sample	group	condition	age_group	species	stage	sample_type	matrix	method	biological_sample	replicate	batch	analysis_role	pair_id	spikein_sequence	spikein_input_fmol	raw_fastq_gz

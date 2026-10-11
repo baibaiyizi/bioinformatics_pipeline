@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import json
 import shutil
 import tempfile
@@ -39,7 +41,7 @@ REGISTERED_CHECKERS = {"agent_response_present", "no_blocked_marker"}
 
 
 def _load_evolver_instructions() -> str:
-    path = Path("/home/h1028/.codex/agents/ai_research_memory_evolver.toml")
+    path = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser() / "agents/ai_research_memory_evolver.toml"
     return str(tomllib.loads(path.read_text(encoding="utf-8"))["developer_instructions"])
 
 

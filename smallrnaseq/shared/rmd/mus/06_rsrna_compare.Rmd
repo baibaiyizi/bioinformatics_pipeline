@@ -1,0 +1,548 @@
+---
+title: "06 Mouse `r PROJECT_STAGE` rsRNA Profiles | `r PANDORA_ANALYSIS_STAGE`"
+output: pdf_document
+---
+
+```{r init, include=FALSE, pandora_stage="prepare"}
+PANDORA_ANALYSIS_STAGE <- get0("PANDORA_ANALYSIS_STAGE", inherits = TRUE,
+  ifnotfound = Sys.getenv("PANDORA_ANALYSIS_STAGE", unset = "describe"))
+stopifnot(PANDORA_ANALYSIS_STAGE %in% c("describe", "differential", "enrichment"))
+OUTPUT_FIG_DIR <- RSRNA_COMPARE_FIG
+OUTPUT_TAB_DIR <- RSRNA_COMPARE_TAB
+prepare_module_outputs(
+  OUTPUT_FIG_DIR,
+  OUTPUT_TAB_DIR,
+  c(
+    "01_sector_radar",
+"02_length_distribution",
+"03_mapping_position",
+"04_bar_rsrna",
+"05_alluvial_rsrna",
+"06_rsrna_trend",
+"07_de/00_config",
+"07_de/01_subtype",
+"07_de/02_sequence",
+"08_resource_status",
+"09_function_exploratory",
+"10_evidence_notes"
+  )
+)
+activate_mii_context(environment())
+PANDORA_CAN_PCA <- nrow(sample_info) >= 3L
+pandora_group_n <- table(as.character(sample_info$Group))
+PANDORA_CAN_COMPARE <- length(pandora_group_n) >= 2L && all(pandora_group_n >= 2L)
+write_csv_safe(tibble(
+  AnalysisStage = PANDORA_ANALYSIS_STAGE,
+  AnalysisScope = get0("analysis_scope", inherits = TRUE, ifnotfound = "all"),
+  LibraryN = nrow(sample_info), GroupN = length(pandora_group_n),
+  PCAApplicable = PANDORA_CAN_PCA, GroupComparisonApplicable = PANDORA_CAN_COMPARE
+), "analysis_stage_status.csv")
+
+```
+
+```{r rsrna-sector-radar-compare, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+compare_rsrna_group_visual <- group_rsrna_visual_view %>%
+  mutate(RsRNAClass = collapse_rsrna_radar_class(as.character(RsRNAClass))) %>%
+  group_by(Group, RsRNAClass) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), Percent = sum(Percent, na.rm = TRUE), .groups = "drop")
+rsrna_radar_angle_offset <- -pi / length(rsrna_radar_levels)
+
+rsrna_radar_max <- max(c(20, if (nrow(compare_rsrna_group_visual) == 0) 0 else max(compare_rsrna_group_visual$Percent, na.rm = TRUE)), na.rm = TRUE)
+rsrna_radar_max <- max(ceiling(rsrna_radar_max / 5) * 5, 20)
+rsrna_radar_breaks <- unique(round(seq(0, rsrna_radar_max, length.out = 5), 2))
+
+for (group_name in group_levels) {
+  group_df <- compare_rsrna_group_visual %>% filter(Group == group_name)
+  if (nrow(group_df) == 0) next
+
+  plot_df <- build_sector_radar_df(
+    group_df %>% mutate(Sample = paste0("Group_", group_name)) %>% transmute(Sample, PieCategory = as.character(RsRNAClass), Reads, Percent),
+    radar_max = rsrna_radar_max,
+    sector_levels = rsrna_radar_levels,
+    sector_labels = rsrna_radar_labels,
+    sector_palette = rsrna_radar_palette,
+    bottom_anchor_category = "18S-rRNA",
+    angle_offset = rsrna_radar_angle_offset
+  )
+
+  group_plot <- plot_sector_radar_core(
+    plot_df = plot_df,
+    title_text = paste0("rsRNA Proportion of Group ", group_name),
+    radar_max = rsrna_radar_max,
+    radar_breaks = rsrna_radar_breaks,
+    sector_levels = rsrna_radar_levels,
+    sector_palette = rsrna_radar_palette,
+    axis_label = "Relative Abundance within total rsRNA (%)"
+  )
+  save_plot_nested(group_plot, "01_sector_radar", paste0("group_", safe_dir_name(group_name), ".pdf"), width = 8.6, height = 8.2, view = REPORT_VIEW)
+}
+
+shared_radar <- plot_group_sector_radar(
+  prepare_group_sector_radar(
+    compare_rsrna_group_visual %>% transmute(Group, PieCategory = as.character(RsRNAClass), Percent),
+    radar_max = rsrna_radar_max,
+    sector_levels = rsrna_radar_levels,
+    sector_labels = rsrna_radar_labels,
+    bottom_anchor_category = "18S-rRNA",
+    sector_palette = rsrna_radar_palette,
+    angle_offset = rsrna_radar_angle_offset
+  ),
+  title_text = paste0("rsRNA Proportion Across Groups", view_title_suffix(REPORT_VIEW)),
+  radar_max = rsrna_radar_max,
+  radar_breaks = rsrna_radar_breaks,
+  axis_label = "Relative Abundance within total rsRNA (%)",
+  sector_palette = rsrna_radar_palette
+)
+save_plot_nested(shared_radar, "01_sector_radar", "group_compare.pdf", width = 9.2, height = 8.6, view = REPORT_VIEW)
+```
+
+```{r rsrna-bar-and-alluvial, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+rsrna_trend_all_df <- group_rsrna_visual_merged %>%
+  transmute(Group, TrendCategory = as.character(RsRNAClass), Reads, Percent)
+
+rsrna_all_levels <- rsrna_visual_levels[rsrna_visual_levels %in% unique(rsrna_trend_all_df$TrendCategory)]
+if (length(rsrna_all_levels) == 0) rsrna_all_levels <- rsrna_visual_levels
+
+rsrna_major_candidates <- rsrna_trend_all_df %>%
+  group_by(TrendCategory) %>%
+  summarise(TotalReads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  arrange(desc(TotalReads), match(TrendCategory, rsrna_visual_levels)) %>%
+  slice_head(n = 8) %>%
+  pull(TrendCategory)
+
+rsrna_major_levels <- rsrna_visual_levels[rsrna_visual_levels %in% rsrna_major_candidates]
+if (length(rsrna_major_levels) == 0) rsrna_major_levels <- rsrna_all_levels
+
+rsrna_trend_major_df <- sample_rsrna_visual_view %>%
+  mutate(TrendCategory = as.character(RsRNAClass)) %>%
+  filter(TrendCategory %in% rsrna_major_levels) %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup() %>%
+  summarise_group_mean_percent("TrendCategory")
+
+compare_rsrna_trend_overview_plots <- list(
+  all_percent_bar = build_trend_bar_plot(rsrna_trend_all_df, rsrna_all_levels, "Percent", "Stacked bar plot of all rsRNA subtype proportions across groups", "Proportion within total rsRNA (%)", group_levels, fill_palette = rsrna_visual_palette),
+  all_percent_alluvial = build_trend_alluvial_plot(rsrna_trend_all_df, rsrna_all_levels, "Percent", "Alluvial plot of all rsRNA subtype proportions across groups", "Proportion within total rsRNA (%)", group_levels, fill_palette = rsrna_visual_palette),
+  major_percent_bar = build_trend_bar_plot(rsrna_trend_major_df, rsrna_major_levels, "Percent", "Stacked bar plot of major rsRNA subtype proportions across groups", "Proportion within major rsRNA (%)", group_levels, fill_palette = rsrna_visual_palette),
+  major_percent_alluvial = build_trend_alluvial_plot(rsrna_trend_major_df, rsrna_major_levels, "Percent", "Alluvial plot of major rsRNA subtype proportions across groups", "Proportion within major rsRNA (%)", group_levels, fill_palette = rsrna_visual_palette)
+)
+
+save_plot_nested(compare_rsrna_trend_overview_plots$all_percent_bar, "04_bar_rsrna", "all_rsrna_percent.pdf", width = 10, height = 6, view = REPORT_VIEW)
+save_plot_nested(compare_rsrna_trend_overview_plots$major_percent_bar, "04_bar_rsrna", "major_rsrna_percent.pdf", width = 9.2, height = 5.6, view = REPORT_VIEW)
+
+save_plot_nested(compare_rsrna_trend_overview_plots$all_percent_alluvial, "05_alluvial_rsrna", "all_rsrna_percent.pdf", width = 10.8, height = 6.2, view = REPORT_VIEW)
+save_plot_nested(compare_rsrna_trend_overview_plots$major_percent_alluvial, "05_alluvial_rsrna", "major_rsrna_percent.pdf", width = 10, height = 5.9, view = REPORT_VIEW)
+
+for (rsrna_name in intersect(rsrna_major_levels, rsrna_visual_levels)) {
+  rsrna_data <- sample_rsrna_visual_view %>% filter(as.character(RsRNAClass) == rsrna_name)
+  if (nrow(rsrna_data) == 0) next
+
+  percent_bar <- build_two_group_summary_bar(
+    rsrna_data,
+    "Percent",
+    paste0(rsrna_name, " abundance across groups"),
+    "Mean percent within total rsRNA per sample",
+    group_levels,
+    fill_palette = group_palette,
+    sample_info = sample_info,
+    label_digits = 1
+  )
+
+  reads_bar <- build_two_group_summary_bar(
+    rsrna_data,
+    "Reads",
+    paste0(rsrna_name, " reads across groups"),
+    "Mean reads per sample",
+    group_levels,
+    fill_palette = group_palette,
+    sample_info = sample_info,
+    comma_labels = TRUE,
+    label_digits = 0
+  )
+
+  save_plot_nested(percent_bar, "04_bar_rsrna", paste0(safe_dir_name(rsrna_name), "_percent_bar.pdf"), width = 7, height = 5, view = REPORT_VIEW)
+  save_plot_nested(reads_bar, "04_bar_rsrna", paste0(safe_dir_name(rsrna_name), "_reads_bar.pdf"), width = 7, height = 5, view = REPORT_VIEW)
+}
+```
+
+```{r rsrna-mapping-position-compare, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+rsrna_mapping_levels <- setdiff(rsrna_radar_levels, "other-rRNA")
+rsrna_mapping_labels <- unname(rsrna_radar_labels[rsrna_mapping_levels])
+names(rsrna_mapping_labels) <- rsrna_mapping_levels
+
+classify_rsrna_reference <- function(reference_text) {
+  ref <- as.character(reference_text)
+  case_when(
+    str_detect(ref, "45S") ~ "45S-rRNA",
+    str_detect(ref, "28S") ~ "28S-rRNA",
+    str_detect(ref, "18S") ~ "18S-rRNA",
+    str_detect(ref, "16S") ~ "16S-rRNA",
+    str_detect(ref, "12S") ~ "12S-rRNA",
+    str_detect(ref, "5\\.8S") ~ "5.8S-rRNA",
+    str_detect(ref, "5S") ~ "5S-rRNA",
+    TRUE ~ "other-rRNA"
+  )
+}
+
+mapping_file_suffixes <- switch(
+  REPORT_VIEW,
+  sense = "output_rRNA_match_genome",
+  antisense = "output_rRNA-antisense_match_genome",
+  merged = c("output_rRNA_match_genome", "output_rRNA-antisense_match_genome"),
+  "output_rRNA_match_genome"
+)
+
+load_rsrna_mapping_rows <- function(sample_tbl, file_suffixes) {
+  file_suffixes <- unique(as.character(file_suffixes))
+  col_names <- c("ID", "Reads", "Strand", "Reference", "Start", "Sequence", "Quality", "Mismatch", "Extra")
+
+  map_dfr(seq_len(nrow(sample_tbl)), function(i) {
+    sample_id <- as.character(sample_tbl$Sample[i])
+    group_id <- as.character(sample_tbl$Group[i])
+    clean_total <- sample_tbl$CleanReads[i] %||% 0
+    sample_dir <- sports_sample_processed_dir(sample_id)
+
+    map_dfr(file_suffixes, function(file_suffix) {
+      file_path <- file.path(sample_dir, paste0(sample_id, "_", file_suffix))
+      if (!file.exists(file_path)) return(tibble())
+
+      align_df <- read_alignment_tsv_flex(file_path, col_names)
+      if (nrow(align_df) == 0) return(tibble())
+      rpm_values <- if (is.na(clean_total) || clean_total <= 0) rep(0, nrow(align_df)) else 1e6 * clean_numeric(align_df$Reads) / clean_total
+
+      align_df %>%
+        transmute(
+          Sample = sample_id,
+          Group = group_id,
+          Reads = clean_numeric(Reads),
+          Reference = as.character(Reference),
+          Start = clean_numeric(Start),
+          Sequence = as.character(Sequence),
+          RPM = rpm_values
+        )
+    })
+  })
+}
+
+expand_rsrna_mapping_coverage <- function(mapping_df) {
+  if (nrow(mapping_df) == 0) {
+    return(tibble(Sample = character(), Group = character(), RsRNAClass = character(), Position = integer(), RPM = numeric()))
+  }
+
+  mapping_df <- mapping_df %>%
+    filter(!is.na(Start), !is.na(End), End >= Start, !is.na(RPM), RPM > 0) %>%
+    mutate(Start = as.integer(Start), End = as.integer(End))
+  if (nrow(mapping_df) == 0) {
+    return(tibble(Sample = character(), Group = character(), RsRNAClass = character(), Position = integer(), RPM = numeric()))
+  }
+
+  if (pkg_has("data.table")) {
+    dt <- data.table::as.data.table(mapping_df)
+    dt[, row_id := .I]
+    out <- dt[, .(Position = seq.int(Start[[1]], End[[1]])), by = .(row_id, Sample, Group, RsRNAClass, RPM)]
+    out[, row_id := NULL]
+    return(as_tibble(out))
+  }
+
+  pmap_dfr(
+    list(mapping_df$Sample, mapping_df$Group, mapping_df$RsRNAClass, mapping_df$Start, mapping_df$End, mapping_df$RPM),
+    function(Sample, Group, RsRNAClass, Start, End, RPM) {
+      tibble(Sample = Sample, Group = Group, RsRNAClass = RsRNAClass, Position = seq.int(Start, End), RPM = RPM)
+    }
+  )
+}
+
+rsrna_mapping_raw <- sample_info %>%
+  transmute(Sample = as.character(Sample), Group = as.character(Group)) %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  load_rsrna_mapping_rows(mapping_file_suffixes) %>%
+  mutate(
+    RsRNAClass = classify_rsrna_reference(Reference),
+    End = Start + nchar(Sequence) - 1
+  ) %>%
+  filter(RsRNAClass %in% rsrna_mapping_levels, !is.na(Start), !is.na(End), RPM > 0)
+
+rsrna_mapping_coverage_sample <- expand_rsrna_mapping_coverage(rsrna_mapping_raw) %>%
+  group_by(Sample, Group, RsRNAClass, Position) %>%
+  summarise(RPM = sum(RPM, na.rm = TRUE), .groups = "drop")
+
+rsrna_mapping_coverage <- rsrna_mapping_coverage_sample %>%
+  summarise_group_mean_rpm(c("RsRNAClass", "Position")) %>%
+  select(-Reads) %>%
+  mutate(
+    Group = factor(as.character(Group), levels = group_levels),
+    RsRNAClass = factor(as.character(RsRNAClass), levels = rsrna_mapping_levels)
+  )
+
+if (nrow(rsrna_mapping_coverage) > 0) {
+  mapping_plot_list <- map(rsrna_mapping_levels, function(rsrna_name) {
+    subtype_df <- rsrna_mapping_coverage %>%
+      filter(as.character(RsRNAClass) == rsrna_name, RPM > 0)
+    if (nrow(subtype_df) == 0) return(NULL)
+
+    ggplot(subtype_df, aes(x = Position, y = RPM, color = Group, group = Group)) +
+      geom_line(linewidth = 0.85, alpha = 0.95) +
+      scale_color_manual(values = group_palette, drop = FALSE) +
+      scale_x_continuous(expand = expansion(mult = c(0.01, 0.02))) +
+      labs(
+        x = "Position on parent rRNA (nt)",
+        y = "RPM",
+        title = rsrna_mapping_labels[[rsrna_name]]
+      ) +
+      mii_theme_bw() +
+      theme(
+        legend.position = "none",
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 12),
+        panel.grid.minor = element_blank()
+      )
+  })
+
+  mapping_plot_list <- compact(mapping_plot_list)
+
+  if (length(mapping_plot_list) > 0) {
+    save_plot_nested(
+      build_plot_collage(mapping_plot_list, title_text = "rsRNA mapping position across groups", cols = 3),
+      "03_mapping_position",
+      "rsrna_mapping_position_compare.pdf",
+      width = 15,
+      height = 10,
+      view = REPORT_VIEW
+    )
+  }
+
+  walk(rsrna_mapping_levels, function(rsrna_name) {
+    subtype_df <- rsrna_mapping_coverage %>%
+      filter(as.character(RsRNAClass) == rsrna_name, RPM > 0)
+    if (nrow(subtype_df) == 0) return(invisible(NULL))
+
+    subtype_plot <- ggplot(subtype_df, aes(x = Position, y = RPM, color = Group, group = Group)) +
+      geom_line(linewidth = 0.9, alpha = 0.95) +
+      scale_color_manual(values = group_palette, drop = FALSE) +
+      scale_x_continuous(expand = expansion(mult = c(0.01, 0.02))) +
+      labs(
+        x = "Position on parent rRNA (nt)",
+        y = "RPM",
+        title = paste0(rsrna_mapping_labels[[rsrna_name]], " rsRNA mapping position across groups")
+      ) +
+      mii_theme_bw() +
+      theme(
+        legend.position = "top",
+        legend.title = element_blank(),
+        panel.grid.minor = element_blank()
+      )
+
+    save_plot_nested(
+      subtype_plot,
+      "03_mapping_position",
+      paste0("mapping_position_", safe_dir_name(rsrna_mapping_labels[[rsrna_name]]), ".pdf"),
+      width = 8.8,
+      height = 5.4,
+      view = REPORT_VIEW
+    )
+  })
+}
+```
+
+```{r rsrna-length-compare, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+rsrna_length_detail <- length_all %>%
+  filter(
+    MainCategory == "rsRNA",
+    !str_starts(as.character(Class), "rRNAdb-rRNA_")
+  ) %>%
+  left_join(clean_reads_tbl, by = "Sample") %>%
+  mutate(
+    RPM = if_else(CleanReads > 0, 1e6 * Reads / CleanReads, 0),
+    RsRNAClass = parse_rsrna_class(Class, Class)
+  )
+
+rsrna_length_sample <- rsrna_length_detail %>%
+  group_by(Sample, Group, RsRNAClass, Length) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), RPM = sum(RPM, na.rm = TRUE), .groups = "drop")
+
+group_rsrna_length <- rsrna_length_sample %>%
+  group_by(Sample, Group, Length) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), RPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  summarise_group_mean_rpm("Length") %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+if (nrow(group_rsrna_length) > 0) {
+  line_plot <- ggplot(group_rsrna_length %>% filter(RPM > 0), aes(x = Length, y = RPM, color = Group, group = Group)) +
+    geom_line(linewidth = 0.9, alpha = 0.95) +
+    geom_point(size = 0.85) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    sncrna_length_axis() +
+    labs(x = "Length (nt)", y = "RPM", title = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "top", legend.title = element_blank(), panel.grid.minor = element_blank())
+
+  bar_plot <- ggplot(group_rsrna_length %>% filter(RPM > 0), aes(x = factor(Length), y = RPM, fill = Group)) +
+    geom_col(position = position_dodge(width = 0.74), width = 0.68) +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    labs(x = "Length (nt)", y = "RPM", title = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "none", legend.title = element_blank(), panel.grid.minor = element_blank())
+
+  combined_plot <- build_plot_collage(
+    list(line_plot, bar_plot),
+    title_text = "rsRNA length comparison across groups",
+    cols = 1
+  )
+  save_plot_nested(combined_plot, "02_length_distribution", "length_compare_rsrna.pdf", width = 9, height = 10, view = REPORT_VIEW)
+}
+
+rsrna_length_levels <- setdiff(rsrna_radar_levels, "other-rRNA")
+for (rsrna_name in rsrna_length_levels) {
+  rsrna_label <- unname(rsrna_radar_labels[[rsrna_name]])
+  subtype_length_df <- rsrna_length_sample %>%
+    filter(RsRNAClass == rsrna_name) %>%
+    summarise_group_mean_rpm(c("RsRNAClass", "Length")) %>%
+    mutate(Group = factor(as.character(Group), levels = group_levels))
+
+  if (nrow(subtype_length_df %>% filter(RPM > 0)) == 0) next
+
+  subtype_line_plot <- ggplot(subtype_length_df %>% filter(RPM > 0), aes(x = Length, y = RPM, color = Group, group = Group)) +
+    geom_line(linewidth = 0.9, alpha = 0.95) +
+    geom_point(size = 0.85) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    sncrna_length_axis() +
+    labs(x = "Length (nt)", y = "RPM", title = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "top", legend.title = element_blank(), panel.grid.minor = element_blank())
+
+  subtype_bar_plot <- ggplot(subtype_length_df %>% filter(RPM > 0), aes(x = factor(Length), y = RPM, fill = Group)) +
+    geom_col(position = position_dodge(width = 0.74), width = 0.68) +
+    scale_fill_manual(values = group_palette, drop = FALSE) +
+    labs(x = "Length (nt)", y = "RPM", title = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "none", legend.title = element_blank(), panel.grid.minor = element_blank())
+
+  subtype_combined_plot <- build_plot_collage(
+    list(subtype_line_plot, subtype_bar_plot),
+    title_text = paste0(rsrna_label, " rsRNA length comparison across groups"),
+    cols = 1
+  )
+  save_plot_nested(
+    subtype_combined_plot,
+    "02_length_distribution",
+    paste0("length_compare_", safe_dir_name(rsrna_label), ".pdf"),
+    width = 9,
+    height = 10,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r save-csv, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+write_csv_safe(group_rsrna_view, "compare_group_rsrna.csv")
+write_csv_safe(group_rsrna_visual_view, "compare_group_rsrna_visual.csv")
+write_csv_safe(rsrna_trend_all_df, "compare_group_all_rsrna_percentages.csv")
+write_csv_safe(rsrna_trend_major_df, "compare_group_major_rsrna_percentages.csv")
+write_csv_safe(group_top_features, "compare_group_top_features.csv")
+write_csv_safe(legacy_pdf_index, "compare_legacy_pdf_index.csv")
+write_csv_safe(rsrna_mapping_coverage, "compare_group_rsrna_mapping_coverage.csv")
+```
+
+```{r rsrna-de, include=FALSE, pandora_stage="differential", eval=PANDORA_ANALYSIS_STAGE == "differential" && PANDORA_CAN_COMPARE}
+contrast_specs <- resolve_mii_contrast_specs()
+write_de_run_config(contrast_specs, section = "07_de/00_config")
+
+rsrna_subtype_input <- build_rsrna_subtype_de_input()
+rsrna_subtype_meta <- rsrna_subtype_input %>% distinct(Feature, FeatureCategory)
+rsrna_subtype_de <- run_layer_de(
+  layer_name = "07_de/01_subtype",
+  layer_title = "rsRNA subtype-level DE",
+  layer_input = rsrna_subtype_input,
+  feature_order = rsrna_visual_levels,
+  feature_meta = rsrna_subtype_meta,
+  min_total = 0
+)
+
+rsrna_sequence_de <- run_sequence_de_categories("rsRNA", layer_prefix = "07_de/02_sequence")
+sequence_de_results <- rsrna_sequence_de$results
+sequence_de_summary <- rsrna_sequence_de$summary
+sequence_de_manifest <- rsrna_sequence_de$manifest
+write_csv_safe(sequence_de_results, "07_de/02_sequence/sequence_de_all_results.csv")
+write_csv_safe(sequence_de_summary, "07_de/02_sequence/sequence_de_all_summary.csv")
+write_csv_safe(sequence_de_manifest, "07_de/02_sequence/sequence_de_all_manifest.csv")
+```
+
+```{r rsrna-function-resource-status, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+resource_status <- tibble(
+  resource = c("tRFUniverse", "tRFtarget", "AGO/CLIP evidence", "rsRNA functional database"),
+  env_var = c("TRFUNIVERSE_FILE", "TRFTARGET_FILE", "TRF_CLIP_FILE", "RSRNA_FUNCTION_FILE"),
+  configured_path = Sys.getenv(env_var, unset = ""),
+  available = nzchar(configured_path) & file.exists(configured_path),
+  status = if_else(available, "available", "not_available"),
+  interpretation = c(
+    "Use for tsRNA naming and cross-reference if provided.",
+    "Use for tsRNA target evidence if provided.",
+    "Use for AGO/CLIP-backed target prioritization if provided.",
+    "rsRNA functional annotation remains exploratory unless this resource is curated and sample-relevant."
+  )
+)
+write_csv_safe(resource_status, "08_resource_status/tsrna_rsrna_resource_status.csv")
+```
+
+
+```{r rsrna-function-rsrna-exploratory, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+rsrna_abundance <- output_all %>%
+  filter(FeatureCategory == "rsRNA", !is.na(Sequence), Sequence != "") %>%
+  group_by(PrimaryAnnotation, Sequence, Length) %>%
+  summarise(TotalReads = sum(Reads, na.rm = TRUE), TotalRPM = sum(RPM, na.rm = TRUE), SampleN = n_distinct(Sample), .groups = "drop") %>%
+  arrange(desc(TotalReads))
+
+rsrna_subtype_summary <- rsrna_detail %>%
+  group_by(RsRNAClass) %>%
+  summarise(TotalReads = sum(Reads, na.rm = TRUE), SampleN = n_distinct(Sample), .groups = "drop") %>%
+  mutate(Fraction = TotalReads / sum(TotalReads, na.rm = TRUE)) %>%
+  arrange(desc(TotalReads))
+
+rsrna_candidates <- rsrna_abundance %>%
+  slice_head(n = 100) %>%
+  mutate(
+    evidence_grade = "exploratory",
+    interpretation = "Abundant rsRNA fragment/hotspot; avoid mechanistic over-interpretation without coordinate-aware mapping and external evidence."
+  )
+
+write_csv_safe(rsrna_candidates, "09_function_exploratory/rsrna_exploratory_candidate_summary.csv")
+write_csv_safe(rsrna_subtype_summary, "09_function_exploratory/rsrna_subtype_function_proxy_summary.csv")
+
+if (nrow(rsrna_subtype_summary) > 0) {
+  rs_plot <- ggplot(rsrna_subtype_summary, aes(x = reorder(RsRNAClass, TotalReads), y = Fraction, fill = RsRNAClass)) +
+    geom_col(width = 0.72) +
+    coord_flip() +
+    scale_y_continuous(labels = scales::percent_format(accuracy = 1)) +
+    scale_fill_manual(values = rsrna_visual_palette, drop = FALSE) +
+    labs(title = "rsRNA subtype distribution for exploratory interpretation", x = NULL, y = "Read fraction", fill = NULL) +
+    mii_theme_bw() +
+    theme(legend.position = "none")
+  save_plot_nested(rs_plot, "09_function_exploratory", "rsrna_subtype_fraction.pdf", width = 8.5, height = 6, view = REPORT_VIEW)
+}
+```
+
+
+```{r rsrna-function-evidence-notes, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+evidence_notes <- tibble(
+  analysis_block = c("tsRNA target interpretation", "rsRNA interpretation", "DE candidate priority"),
+  evidence_level = c("moderate only if tRFUniverse/tRFtarget/CLIP resources are supplied", "exploratory", "primary candidate ranking uses FDR-controlled DE when available"),
+  next_requirement = c(
+    "Provide curated tRF target/CLIP tables or enable a dedicated tRF database workflow.",
+    "Use genome-coordinate BAM and curated rsRNA fragment resources before claiming function.",
+    "Review sequence-level DE tables together with abundance, length, and annotation specificity."
+  )
+)
+write_csv_safe(evidence_notes, "10_evidence_notes/evidence_interpretation_notes.csv")
+
+save_plot_nested(
+  plot_note(
+    "Evidence grading",
+    "tsRNA candidates can be prioritized, but targets require external evidence. rsRNA is reported as exploratory unless coordinate-aware validation is added."
+  ),
+  "10_evidence_notes",
+  "evidence_grading_note.pdf",
+  width = 8.5,
+  height = 5,
+  view = REPORT_VIEW
+)
+```

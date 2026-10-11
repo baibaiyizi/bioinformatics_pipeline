@@ -1,0 +1,1612 @@
+---
+title: "13 cel-miR-39 外参与成对工艺重复 QC"
+output: pdf_document
+---
+
+```{r init, include=FALSE, pandora_stage="prepare"}
+PANDORA_ANALYSIS_STAGE <- get0("PANDORA_ANALYSIS_STAGE", inherits = TRUE,
+  ifnotfound = Sys.getenv("PANDORA_ANALYSIS_STAGE", unset = "describe"))
+stopifnot(PANDORA_ANALYSIS_STAGE %in% c("describe", "differential", "enrichment"))
+# Academic Figure Skill Asset Confirmation (verified against assets/figures/)
+# (a) Composition bars -> assets/figures/BarComposition -> parameter inheritance
+# (b) Paired profiles and point ranges -> assets/figures/LineTrend -> parameter inheritance
+# (c) Agreement scatter/MA plots -> cross-type inheritance -> parameter inheritance
+# (d) Workflow output comparison -> assets/figures/BarComparison -> parameter inheritance
+# (e) Spike-in endpoint signal -> assets/figures/BarCategorical -> cross-type parameter inheritance
+# (f) Full-depth versus depth-matched agreement -> assets/figures/LineTrend -> parameter inheritance
+# (g) Paired subtype dumbbells -> assets/figures/LineTrend -> cross-type parameter inheritance
+# (h) RNA-class and cleavage composition -> assets/figures/BarComposition -> parameter inheritance
+# (i) Ranked subtype deviations -> assets/figures/BarCategorical -> cross-type parameter inheritance
+# RULE: All publication-facing text is English; vector PDF and 300-dpi PNG are exported together.
+
+# Academic Figure Skill Typography Baseline — COPY VERBATIM, place at TOP of script
+library(ggplot2)
+theme_cns <- theme_bw(base_size = 8, base_family = FIGURE_FONT) +
+  theme(
+    axis.title = element_text(size = 8),
+    axis.text = element_text(size = 7, color = "#333333"),
+    legend.title = element_text(size = 8, face = "bold"),
+    legend.text = element_text(size = 7),
+    strip.text = element_text(size = 8, face = "bold"),
+    panel.grid = element_blank(),
+    legend.background = element_blank(),
+    legend.key = element_blank()
+  )
+
+# Academic Figure Skill Nature/Cell/Science Color Palette -- COPY VERBATIM
+categorical <- c("#2166AC", "#B2182B", "#1B7837", "#F1A340", "#762A83", "#666666")
+categorical_extended <- c(
+  "#2166AC", "#B2182B", "#1B7837", "#F1A340", "#762A83", "#666666",
+  "#4393C3", "#D6604D", "#5AAE61", "#B35806", "#9970AB", "#999999"
+)
+diverging  <- c("#2166AC", "#F7F7F7", "#B2182B")
+sequential <- c("#F7FBFF", "#6BAED6", "#08306B")
+accent_red <- "#B2182B"
+grey       <- "#999999"
+black      <- "#222222"
+
+# All devices and dimensions are handled by the shared figure contract.
+save_spikein_figure <- function(plot, filename, width_mm = 183, height_mm = NULL) {
+  if (is.null(height_mm)) stop("A figure height must be specified.")
+  save_ggplot_file(plot, paste0(filename, ".pdf"),
+    width = width_mm / 25.4, height = height_mm / 25.4, dpi = 300)
+}
+
+OUTPUT_FIG_DIR <- SPIKEIN_FIG
+OUTPUT_TAB_DIR <- SPIKEIN_TAB
+prepare_module_outputs(
+  OUTPUT_FIG_DIR,
+  OUTPUT_TAB_DIR,
+  c(
+    "01_spikein_detection", "02_pair_qc", "03_pair_agreement",
+    "04_detection_overlap", "05_depth_sensitivity", "06_descriptive_profiles"
+  )
+)
+activate_serum_context(environment(), analysis_scope = "all")
+if (!pkg_has("patchwork") || !pkg_has("edgeR")) stop("模块 13 需要 patchwork 和 edgeR 生成成对 QC 与深度匹配敏感性分析。")
+library(patchwork)
+PANDORA_CAN_PCA <- nrow(sample_info) >= 3L
+pandora_group_n <- table(as.character(sample_info$Group))
+PANDORA_CAN_COMPARE <- length(pandora_group_n) >= 2L && all(pandora_group_n >= 2L)
+write_csv_safe(tibble(
+  AnalysisStage = PANDORA_ANALYSIS_STAGE,
+  AnalysisScope = get0("analysis_scope", inherits = TRUE, ifnotfound = "all"),
+  LibraryN = nrow(sample_info), GroupN = length(pandora_group_n),
+  PCAApplicable = PANDORA_CAN_PCA, GroupComparisonApplicable = PANDORA_CAN_COMPARE
+), "analysis_stage_status.csv")
+
+```
+
+# 分析边界
+
+Normal3_1_1 与 Normal3_1_spikein 来自同一 3 号血清的等体积分装，独立完成提取和建库；唯一设计差异是后者在 TRIzol/QIAzol 阶段加入 60 fmol cel-miR-39（序列 TCACCGGGTGTAAATCAGCTTG）。本模块把它们作为一对成对工艺重复，不作为生物学重复或方法 1 的组均值样本。
+
+cel-miR-39 只用于监测外参在提取—建库—测序流程中的观察信号。单点、单序列数据不能换算分子回收比例，也不能支持跨方法的 spike-in 归一化。
+
+```{r helpers, include=FALSE, pandora_stage="prepare", eval=TRUE}
+pair_samples <- c(SPIKEIN_CONTROL_SAMPLE, SPIKEIN_SAMPLE)
+pair_labels <- c(
+  spikein_pair_control = "Control (Normal3_1_1)",
+  spikein_pair_test = "Spike-in, 60 fmol (Normal3_1_spikein)"
+)
+pair_label_levels <- unname(pair_labels[c("spikein_pair_control", "spikein_pair_test")])
+
+# Publication palette: the same semantic color is used in every module-13 panel.
+publication_blue <- "#2166AC"
+publication_red <- "#B2182B"
+publication_shared <- "#4D4D4D"
+publication_light_grey <- "#BDBDBD"
+pair_color_values <- setNames(c(publication_blue, publication_red), pair_label_levels)
+
+edit_distance <- function(x, y = SPIKEIN_SEQ) as.numeric(adist(x, y))
+
+classify_spikein_variant <- function(sequence) {
+  sequence <- as.character(sequence)
+  len <- nchar(sequence)
+  target_len <- nchar(SPIKEIN_SEQ)
+  dist <- edit_distance(sequence)
+  if (identical(sequence, SPIKEIN_SEQ)) return("exact")
+  if (!is.finite(dist) || dist != 1) return(NA_character_)
+  if (len == target_len) return("one_base_substitution")
+  if (len == target_len - 1) return("one_base_deletion")
+  if (len == target_len + 1) return("one_base_insertion")
+  NA_character_
+}
+
+classify_detection <- function(control_cpm, spike_cpm, threshold) {
+  dplyr::case_when(
+    control_cpm >= threshold & spike_cpm >= threshold ~ "shared",
+    control_cpm >= threshold & spike_cpm < threshold ~ "control_only",
+    control_cpm < threshold & spike_cpm >= threshold ~ "spike_only",
+    TRUE ~ "neither"
+  )
+}
+
+pair_meta <- sample_info %>%
+  filter(as.character(Sample) %in% pair_samples) %>%
+  transmute(
+    Sample = as.character(Sample),
+    AnalysisRole,
+    BiologicalSample = as.character(BiologicalSample),
+    Method = as.character(Method)
+  )
+if (nrow(pair_meta) != 2 || !setequal(pair_meta$Sample, pair_samples)) {
+  stop("成对工艺重复必须恰好包含 Normal3_1_1 和 Normal3_1_spikein。")
+}
+
+candidate_sequences <- output_all %>%
+  filter(Sequence %in% spikein_edit1_sequences(SPIKEIN_SEQ)) %>%
+  distinct(Sequence) %>%
+  mutate(
+    Length = nchar(Sequence),
+    EditDistance = vapply(Sequence, edit_distance, numeric(1)),
+    VariantClass = vapply(Sequence, classify_spikein_variant, character(1))
+  ) %>%
+  filter(!is.na(VariantClass)) %>%
+  arrange(match(VariantClass, c("exact", "one_base_substitution", "one_base_deletion", "one_base_insertion")), Sequence)
+
+candidate_counts <- output_all %>%
+  filter(Sequence %in% candidate_sequences$Sequence) %>%
+  left_join(candidate_sequences %>% select(Sequence, EditDistance, VariantClass), by = "Sequence") %>%
+  group_by(Sample, Sequence, Length, EditDistance, VariantClass) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), RPM = sum(RPM, na.rm = TRUE), .groups = "drop")
+
+spi_detection <- spikein_counts_by_sample %>%
+  transmute(
+    Sample = as.character(Sample),
+    Group = as.character(Group),
+    BiologicalSample = as.character(BiologicalSample),
+    AnalysisRole = sample_info$AnalysisRole[match(as.character(Sample), as.character(sample_info$Sample))],
+    Spikein = Spikein,
+    CleanReads,
+    SpikeinExactReads,
+    SpikeinNearReads,
+    SpikeinCandidateReads = SpikeinExactReads + SpikeinNearReads,
+    SpikeinExactRPM = SpikeinRPM,
+    SpikeinCandidateRPM = if_else(CleanReads > 0, 1e6 * SpikeinCandidateReads / CleanReads, 0),
+    ExactDetected = SpikeinExactReads > 0,
+    CandidateDetected = SpikeinCandidateReads > 0
+  ) %>%
+  arrange(match(Sample, as.character(sample_info$Sample)))
+write_csv_safe(spi_detection, "spikein_detection_by_sample.csv")
+
+spike_sample <- spi_detection %>% filter(Sample == SPIKEIN_SAMPLE) %>% slice(1)
+negative_samples <- spi_detection %>% filter(!Spikein)
+spikein_qc_summary <- tibble(
+  SpikeinSample = SPIKEIN_SAMPLE,
+  ControlSample = SPIKEIN_CONTROL_SAMPLE,
+  SpikeinInputFmol = SPIKEIN_AMOUNT_FMOL,
+  CleanReads = spike_sample$CleanReads,
+  ExactReads = spike_sample$SpikeinExactReads,
+  NearMatchReads = spike_sample$SpikeinNearReads,
+  CandidateReads = spike_sample$SpikeinCandidateReads,
+  ExactRPM = spike_sample$SpikeinExactRPM,
+  CandidateRPM = spike_sample$SpikeinCandidateRPM,
+  ExactFractionOfCandidatesPct = if_else(
+    spike_sample$SpikeinCandidateReads > 0,
+    100 * spike_sample$SpikeinExactReads / spike_sample$SpikeinCandidateReads,
+    NA_real_
+  ),
+  NonSpikeinSampleN = nrow(negative_samples),
+  NonSpikeinExactPositiveN = sum(negative_samples$SpikeinExactReads > 0),
+  NonSpikeinCandidatePositiveN = sum(negative_samples$SpikeinCandidateReads > 0)
+)
+write_csv_safe(spikein_qc_summary, "spikein_qc_summary.csv")
+
+variant_tbl <- candidate_counts %>%
+  filter(Sample == SPIKEIN_SAMPLE) %>%
+  left_join(
+    output_all %>% filter(Sample == SPIKEIN_SAMPLE) %>% distinct(Sequence, PrimaryAnnotation, FullAnnotation = Annotation),
+    by = "Sequence"
+  ) %>%
+  arrange(match(VariantClass, c("exact", "one_base_substitution", "one_base_deletion", "one_base_insertion")), desc(Reads), Sequence)
+write_csv_safe(variant_tbl, "spikein_sequence_variants.csv")
+```
+
+# 1. cel-miR-39 跨库检出
+
+本表同时报告精确序列和编辑距离 1 的同长替换、单碱基插入/缺失近邻。未加外参的 11 个库只用于观察跨库 exact/candidate 信号，不等同于提取空白。
+
+```{r spikein-overview-plot, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+detect_plot_df <- spi_detection %>%
+  mutate(
+    Sample = factor(Sample, levels = rev(as.character(sample_info$Sample))),
+    Role = if_else(Sample == SPIKEIN_SAMPLE, "spike-in library", "no spike-in"),
+    Role = factor(Role, levels = c("no spike-in", "spike-in library")),
+    LogCandidateReads = log10(SpikeinCandidateReads + 1)
+  )
+
+p_detect <- ggplot(detect_plot_df, aes(x = Sample, y = LogCandidateReads, fill = Role)) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.25) +
+  coord_flip() +
+  scale_fill_manual(values = c("no spike-in" = publication_blue, "spike-in library" = publication_red)) +
+  labs(
+    title = "cel-miR-39 candidate reads across all libraries",
+    subtitle = "Bar height: log10(candidate reads + 1); 11 non-spiked libraries screen for cross-library carryover",
+    x = NULL, y = "log10(candidate reads + 1)", fill = NULL
+  ) +
+  serum_theme_bw() +
+  theme(legend.position = "bottom")
+
+p_variants <- variant_tbl %>%
+  mutate(
+    VariantLabel = dplyr::case_when(
+      VariantClass == "exact" ~ "exact",
+      VariantClass == "one_base_substitution" ~ "one-base substitution",
+      VariantClass == "one_base_deletion" ~ "one-base deletion",
+      VariantClass == "one_base_insertion" ~ "one-base insertion",
+      TRUE ~ VariantClass
+    ),
+    VariantLabel = factor(VariantLabel, levels = c("exact", "one-base substitution", "one-base deletion", "one-base insertion"))
+  ) %>%
+  ggplot(aes(x = reorder(Sequence, Reads), y = Reads, fill = VariantLabel)) +
+  geom_col(width = 0.72) +
+  coord_flip() +
+  scale_fill_manual(
+    values = c(
+      exact = publication_red,
+      "one-base substitution" = "#F1A340",
+      "one-base deletion" = publication_blue,
+      "one-base insertion" = "#762A83"
+    ),
+    drop = FALSE
+  ) +
+  labs(title = "Normal3_1_spikein candidate sequence composition", x = "sequence", y = "reads", fill = NULL) +
+  serum_theme_bw() +
+  theme(legend.position = "bottom")
+
+save_plot((p_detect / p_variants) + plot_layout(heights = c(1, 1.3)), "spikein_detection_overview.pdf", width = 11, height = 10)
+```
+
+精确 cel-miR-39 只用于特异性检出判断；candidate 总量和变体组成用于 QC 记录，不解释为提取效率或成熟 miRNA 的天然异构体生物学。
+
+# 2. 成对工艺重复的库级 profile
+
+```{r pair-profile-tables, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+candidate_reads_by_sample <- candidate_counts %>%
+  group_by(Sample) %>%
+  summarise(CandidateReads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+candidate_class_reads <- output_all %>%
+  filter(Sample %in% pair_samples, Sequence %in% candidate_sequences$Sequence) %>%
+  group_by(Sample, MainCategory = FeatureCategory) %>%
+  summarise(CandidateClassReads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+candidate_length_reads <- candidate_counts %>%
+  filter(Sample %in% pair_samples) %>%
+  group_by(Sample, Length) %>%
+  summarise(CandidateLengthReads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+pair_library_qc <- pair_meta %>%
+  left_join(clean_reads_tbl %>% mutate(Sample = as.character(Sample)), by = "Sample") %>%
+  left_join(match_reads_tbl %>% mutate(Sample = as.character(Sample)), by = "Sample") %>%
+  left_join(candidate_reads_by_sample, by = "Sample") %>%
+  mutate(
+    CandidateReads = replace_na(CandidateReads, 0),
+    EndogenousCleanReads = CleanReads - CandidateReads,
+    GenomeMappingRatePct = 100 * MatchGenome / CleanReads,
+    Label = unname(pair_labels[AnalysisRole])
+  )
+write_csv_safe(pair_library_qc, "paired_library_qc.csv")
+
+paired_class_composition <- sample_comp_view %>%
+  filter(as.character(Sample) %in% pair_samples) %>%
+  mutate(Sample = as.character(Sample), MainCategory = as.character(MainCategory)) %>%
+  left_join(candidate_class_reads, by = c("Sample", "MainCategory")) %>%
+  left_join(pair_library_qc %>% select(Sample, EndogenousCleanReads), by = "Sample") %>%
+  mutate(
+    CandidateClassReads = replace_na(CandidateClassReads, 0),
+    ReadsBeforeSpikeinExclusion = Reads,
+    Reads = ReadsBeforeSpikeinExclusion - CandidateClassReads,
+    Percent = if_else(EndogenousCleanReads > 0, 100 * Reads / EndogenousCleanReads, 0),
+    Label = unname(pair_labels[match(Sample, pair_meta$Sample)])
+  ) %>%
+  arrange(match(Sample, pair_samples), desc(Percent), MainCategory)
+if (any(paired_class_composition$Reads < 0)) {
+  stop("外参候选序列扣除后出现负的 RNA 类别计数。")
+}
+write_csv_safe(paired_class_composition, "paired_class_composition.csv")
+
+paired_length_profile <- length_all_raw %>%
+  filter(Sample %in% pair_samples, Class == "Clean_Reads") %>%
+  group_by(Sample, Length) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  left_join(candidate_length_reads, by = c("Sample", "Length")) %>%
+  left_join(pair_library_qc %>% select(Sample, EndogenousCleanReads), by = "Sample") %>%
+  mutate(
+    Sample = as.character(Sample),
+    CandidateLengthReads = replace_na(CandidateLengthReads, 0),
+    ReadsBeforeSpikeinExclusion = Reads,
+    Reads = ReadsBeforeSpikeinExclusion - CandidateLengthReads,
+    Percent = if_else(EndogenousCleanReads > 0, 100 * Reads / EndogenousCleanReads, 0),
+    Label = unname(pair_labels[match(Sample, pair_meta$Sample)])
+  ) %>%
+  arrange(Sample, Length)
+if (any(paired_length_profile$Reads < 0)) {
+  stop("外参候选序列扣除后出现负的长度计数。")
+}
+write_csv_safe(paired_length_profile, "paired_length_profile.csv")
+```
+
+```{r pair-profile-plot, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+p_comp <- paired_class_composition %>%
+  mutate(
+    Label = factor(Label, levels = pair_label_levels),
+    MainCategory = factor(MainCategory, levels = category_levels)
+  ) %>%
+  ggplot(aes(x = Label, y = Percent, fill = MainCategory)) +
+  geom_col(width = 0.7, color = "white", linewidth = 0.2) +
+  scale_fill_manual(values = category_palette, drop = FALSE) +
+  labs(title = "Paired library RNA-class composition", x = NULL, y = "% of clean reads", fill = NULL) +
+  serum_theme_bw() +
+  theme(axis.text.x = element_text(angle = 18, hjust = 1), legend.position = "bottom")
+
+p_length <- paired_length_profile %>%
+  mutate(Label = factor(Label, levels = pair_label_levels)) %>%
+  ggplot(aes(x = Length, y = Percent, color = Label)) +
+  geom_line(linewidth = 0.8) +
+  geom_point(size = 1.2) +
+  scale_color_manual(values = pair_color_values) +
+  labs(title = "Paired clean-read length profile", x = "Length (nt)", y = "% of clean reads", color = NULL) +
+  serum_theme_bw() +
+  theme(legend.position = "bottom")
+
+save_plot((p_comp / p_length) + plot_layout(heights = c(1.1, 1)), "paired_library_profile.pdf", width = 10.5, height = 9)
+```
+
+# 3. CPM 校正后的 annotation / sequence 一致性
+
+```{r paired-abundance, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+pair_endogenous <- output_all %>%
+  filter(Sample %in% pair_samples, !is.na(Sequence), Sequence != "", !Sequence %in% candidate_sequences$Sequence)
+
+# 外参 exact/near 均在 sequence 层排除。SPORTS annotation 表未收录
+# NO_Annotation，因此不得再次按首标签/均分 token 从有效注释中扣读数。
+paired_annotation_exclusion_status <- output_all %>%
+  filter(Sample %in% pair_samples, Sequence %in% candidate_sequences$Sequence) %>%
+  group_by(Sample) %>%
+  summarise(
+    ExactCandidateReads = sum(Reads[Sequence == SPIKEIN_SEQ], na.rm = TRUE),
+    NearCandidateReads = sum(Reads[Sequence != SPIKEIN_SEQ], na.rm = TRUE),
+    UnannotatedCandidateReads = sum(Reads[is.na(Annotation) | Annotation %in% c("", "NO_Annotation")], na.rm = TRUE),
+    AnnotatedExactReads = sum(Reads[Sequence == SPIKEIN_SEQ & !is.na(Annotation) & !Annotation %in% c("", "NO_Annotation")], na.rm = TRUE),
+    AnnotatedNearReads = sum(Reads[Sequence != SPIKEIN_SEQ & !is.na(Annotation) & !Annotation %in% c("", "NO_Annotation")], na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  right_join(tibble(Sample = pair_samples), by = "Sample") %>%
+  mutate(
+    ExactCandidateReads = replace_na(ExactCandidateReads, 0),
+    NearCandidateReads = replace_na(NearCandidateReads, 0),
+    UnannotatedCandidateReads = replace_na(UnannotatedCandidateReads, 0),
+    AnnotatedExactReads = replace_na(AnnotatedExactReads, 0),
+    AnnotatedNearReads = replace_na(AnnotatedNearReads, 0),
+    AnnotationCountSource = "SPORTS allocated SubClass counts",
+    Status = if_else(AnnotatedExactReads + AnnotatedNearReads > 0,
+                     "annotated_spikein_candidate_requires_review", "no_spikein_candidate_in_annotation_counts")
+  )
+write_csv_safe(paired_annotation_exclusion_status, "paired_annotation_exclusion_status.csv")
+if (any(paired_annotation_exclusion_status$AnnotatedExactReads + paired_annotation_exclusion_status$AnnotatedNearReads > 0)) {
+  stop("外参 exact/near 候选存在有效注释；无法从 SPORTS 分配计数精确扣除，见 paired_annotation_exclusion_status.csv。")
+}
+paired_annotation_counts <- sports_annotation_counts(summary_all, clean_reads_tbl) %>%
+  filter(Sample %in% pair_samples)
+
+build_pair_abundance <- function(df, feature_col, feature_level) {
+  feature_meta <- df %>%
+    transmute(Feature = as.character(.data[[feature_col]]), FeatureCategory = as.character(FeatureCategory)) %>%
+    group_by(Feature) %>%
+    summarise(FeatureCategory = first(FeatureCategory), .groups = "drop")
+  counts <- df %>%
+    transmute(Sample = as.character(Sample), Feature = as.character(.data[[feature_col]]), Reads = Reads) %>%
+    group_by(Sample, Feature) %>%
+    summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+    pivot_wider(names_from = Sample, values_from = Reads, values_fill = 0)
+  for (sample_name in pair_samples) if (!sample_name %in% names(counts)) counts[[sample_name]] <- 0
+  denom <- pair_library_qc %>% select(Sample, EndogenousCleanReads)
+  control_denom <- denom$EndogenousCleanReads[match(SPIKEIN_CONTROL_SAMPLE, denom$Sample)]
+  spike_denom <- denom$EndogenousCleanReads[match(SPIKEIN_SAMPLE, denom$Sample)]
+  if (!is.finite(control_denom) || !is.finite(spike_denom) || control_denom <= 0 || spike_denom <= 0) {
+    stop("成对 abundance 的 clean-read 分母必须为正数。")
+  }
+  counts %>%
+    transmute(
+      Feature,
+      ControlReads = .data[[SPIKEIN_CONTROL_SAMPLE]],
+      SpikeinReads = .data[[SPIKEIN_SAMPLE]],
+      ControlCPM = 1e6 * ControlReads / control_denom,
+      SpikeinCPM = 1e6 * SpikeinReads / spike_denom
+    ) %>%
+    left_join(feature_meta, by = "Feature") %>%
+    mutate(
+      FeatureLevel = feature_level,
+      Log2FC_Spikein_vs_Control = log2((SpikeinCPM + 0.5) / (ControlCPM + 0.5)),
+      DetectionCategory_CPM1 = classify_detection(ControlCPM, SpikeinCPM, 1)
+    ) %>%
+    arrange(desc(pmax(ControlCPM, SpikeinCPM)), Feature)
+}
+
+paired_annotation_abundance <- build_pair_abundance(paired_annotation_counts, "PrimaryAnnotation", "annotation")
+paired_sequence_abundance <- build_pair_abundance(pair_endogenous, "Sequence", "unique_sequence")
+write_csv_safe(paired_annotation_abundance, "paired_annotation_abundance.csv")
+write_csv_safe(paired_sequence_abundance, "paired_sequence_abundance.csv")
+
+paired_agreement_metrics <- bind_rows(
+  compute_pair_agreement_metrics(
+    paired_annotation_abundance, "ControlCPM", "SpikeinCPM", "annotation",
+    SPIKEIN_CONTROL_SAMPLE, SPIKEIN_SAMPLE
+  ),
+  compute_pair_agreement_metrics(
+    paired_sequence_abundance, "ControlCPM", "SpikeinCPM", "unique_sequence",
+    SPIKEIN_CONTROL_SAMPLE, SPIKEIN_SAMPLE
+  )
+)
+write_csv_safe(paired_agreement_metrics, "paired_agreement_metrics.csv")
+
+primary_annotation_metric <- paired_agreement_metrics %>% filter(FeatureLevel == "annotation", CPMThreshold == 1) %>% slice(1)
+primary_sequence_metric <- paired_agreement_metrics %>% filter(FeatureLevel == "unique_sequence", CPMThreshold == 1) %>% slice(1)
+
+# 两库内源 clean-read 深度相差约三分之一。完整深度结果是主分析；这里仅将较深库
+# 随机稀释到较浅库深度，检查检出重叠与丰度一致性对深度差异是否敏感。
+DEPTH_SENSITIVITY_ITERATIONS <- 200L
+DEPTH_SENSITIVITY_SEED <- 20260830L
+pair_endogenous_depths <- pair_library_qc$EndogenousCleanReads[match(pair_samples, pair_library_qc$Sample)]
+names(pair_endogenous_depths) <- pair_samples
+if (any(!is.finite(pair_endogenous_depths)) || any(pair_endogenous_depths <= 0)) {
+  stop("深度匹配敏感性分析要求两个库均有正的内源 clean-read 深度。")
+}
+depth_sensitivity_target <- min(pair_endogenous_depths)
+depth_sensitivity_prob <- depth_sensitivity_target / pair_endogenous_depths
+
+simulate_depth_matched_metrics <- function(abundance_df, feature_level, seed_offset = 0L) {
+  if (feature_level != "unique_sequence") stop("随机稀释仅支持逐序列整数计数，annotation 分数分配不可直接稀释。")
+  count_matrix <- cbind(
+    control = as.numeric(abundance_df$ControlReads),
+    spikein = as.numeric(abundance_df$SpikeinReads)
+  )
+  if (any(!is.finite(count_matrix) | count_matrix < 0 | count_matrix != floor(count_matrix))) {
+    stop("逐序列随机稀释要求有限非负整数计数。")
+  }
+  target_column_sums <- floor(
+    colSums(count_matrix) * unname(depth_sensitivity_prob[pair_samples])
+  )
+  set.seed(DEPTH_SENSITIVITY_SEED + as.integer(seed_offset))
+  purrr::map_dfr(seq_len(DEPTH_SENSITIVITY_ITERATIONS), function(simulation_id) {
+    thinned <- edgeR::thinCounts(
+      count_matrix,
+      target.size = target_column_sums
+    )
+    simulated_abundance <- tibble(
+      ControlCPM = 1e6 * thinned[, "control"] / depth_sensitivity_target,
+      SpikeinCPM = 1e6 * thinned[, "spikein"] / depth_sensitivity_target
+    )
+    compute_pair_agreement_metrics(
+      simulated_abundance, "ControlCPM", "SpikeinCPM", feature_level,
+      SPIKEIN_CONTROL_SAMPLE, SPIKEIN_SAMPLE
+    ) %>%
+      mutate(Simulation = simulation_id)
+  })
+}
+
+depth_sensitivity_simulations <- simulate_depth_matched_metrics(
+  paired_sequence_abundance, "unique_sequence", 1000L
+)
+
+depth_metric_columns <- c(
+  "SampleADetected", "SampleBDetected", "SampleAOnly", "SharedDetected",
+  "SampleBOnly", "UnionDetected", "Jaccard", "SharedSpearman",
+  "UnionSpearman", "SharedMedianLog2FC", "SharedMedianAbsLog2FC",
+  "SharedWithinTwoFoldPct"
+)
+finite_median <- function(x) if (all(!is.finite(x))) NA_real_ else stats::median(x[is.finite(x)])
+finite_quantile <- function(x, probability) {
+  if (all(!is.finite(x))) return(NA_real_)
+  as.numeric(stats::quantile(x[is.finite(x)], probs = probability, names = FALSE, type = 7))
+}
+
+depth_sensitivity_summary <- depth_sensitivity_simulations %>%
+  group_by(FeatureLevel, CPMThreshold) %>%
+  summarise(
+    across(
+      all_of(depth_metric_columns),
+      list(
+        Median = finite_median,
+        P025 = ~ finite_quantile(.x, 0.025),
+        P975 = ~ finite_quantile(.x, 0.975)
+      ),
+      .names = "{.col}_{.fn}"
+    ),
+    .groups = "drop"
+  ) %>%
+  left_join(
+    paired_agreement_metrics %>%
+      select(FeatureLevel, CPMThreshold, all_of(depth_metric_columns)) %>%
+      rename_with(~ paste0("FullDepth_", .x), all_of(depth_metric_columns)),
+    by = c("FeatureLevel", "CPMThreshold")
+  ) %>%
+  mutate(
+    TargetEndogenousCleanReads = depth_sensitivity_target,
+    Simulations = DEPTH_SENSITIVITY_ITERATIONS,
+    RandomSeed = DEPTH_SENSITIVITY_SEED,
+    ControlOriginalEndogenousCleanReads = unname(pair_endogenous_depths[SPIKEIN_CONTROL_SAMPLE]),
+    SpikeinOriginalEndogenousCleanReads = unname(pair_endogenous_depths[SPIKEIN_SAMPLE]),
+    ControlThinningProbability = unname(depth_sensitivity_prob[SPIKEIN_CONTROL_SAMPLE]),
+    SpikeinThinningProbability = unname(depth_sensitivity_prob[SPIKEIN_SAMPLE])
+  ) %>%
+  relocate(
+    FeatureLevel, CPMThreshold, TargetEndogenousCleanReads, Simulations, RandomSeed,
+    ControlOriginalEndogenousCleanReads, SpikeinOriginalEndogenousCleanReads,
+    ControlThinningProbability, SpikeinThinningProbability
+  )
+annotation_depth_not_run <- paired_agreement_metrics %>%
+  filter(FeatureLevel == "annotation") %>%
+  select(FeatureLevel, CPMThreshold, all_of(depth_metric_columns)) %>%
+  rename_with(~ paste0("FullDepth_", .x), all_of(depth_metric_columns)) %>%
+  mutate(
+    Simulations = 0L, Status = "not_run",
+    Reason = "SPORTS fractional annotation allocations lack per-read multimapping assignments for valid random thinning"
+  )
+depth_sensitivity_summary <- bind_rows(
+  depth_sensitivity_summary %>% mutate(Status = "completed", Reason = "integer unique-sequence thinning"),
+  annotation_depth_not_run
+)
+write_csv_safe(depth_sensitivity_summary, "paired_depth_matched_agreement_metrics.csv")
+```
+
+```{r agreement-plots, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+annotation_plot_df <- paired_annotation_abundance %>%
+  mutate(
+    Detection = case_when(
+      DetectionCategory_CPM1 == "shared" ~ "shared",
+      DetectionCategory_CPM1 == "control_only" ~ "control only",
+      DetectionCategory_CPM1 == "spike_only" ~ "spike-in only",
+      TRUE ~ "neither"
+    ),
+    Detection = factor(Detection, levels = c("control only", "shared", "spike-in only", "neither")),
+    x = log2(ControlCPM + 0.5),
+    y = log2(SpikeinCPM + 0.5)
+  )
+
+p_annotation <- ggplot(annotation_plot_df, aes(x = x, y = y, color = Detection)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = serum_neutral_text) +
+  geom_point(alpha = 0.75, size = 2) +
+  scale_color_manual(
+    values = c(
+      "control only" = publication_blue,
+      shared = publication_shared,
+      "spike-in only" = publication_red,
+      neither = publication_light_grey
+    ),
+    drop = FALSE
+  ) +
+  labs(
+    title = "Annotation-level abundance agreement",
+    subtitle = paste0("log2(CPM + 0.5); CPM>=1 shared Spearman = ", round(primary_annotation_metric$SharedSpearman, 3), "; Jaccard = ", round(primary_annotation_metric$Jaccard, 3)),
+    x = "Normal3_1_1 log2 CPM", y = "Normal3_1_spikein log2 CPM", color = NULL
+  ) +
+  serum_theme_bw() +
+  theme(legend.position = "bottom")
+save_plot(p_annotation, "paired_annotation_agreement.pdf", width = 7.5, height = 6.5)
+
+sequence_plot_df <- paired_sequence_abundance %>%
+  filter(pmax(ControlCPM, SpikeinCPM) >= 1) %>%
+  mutate(
+    MeanLog2CPM = 0.5 * (log2(ControlCPM + 0.5) + log2(SpikeinCPM + 0.5)),
+    Detection = case_when(
+      DetectionCategory_CPM1 == "shared" ~ "shared",
+      DetectionCategory_CPM1 == "control_only" ~ "control only",
+      DetectionCategory_CPM1 == "spike_only" ~ "spike-in only",
+      TRUE ~ "neither"
+    ),
+    Detection = factor(Detection, levels = c("control only", "shared", "spike-in only", "neither"))
+  )
+
+p_sequence <- ggplot(sequence_plot_df, aes(x = MeanLog2CPM, y = Log2FC_Spikein_vs_Control, color = Detection)) +
+  geom_hline(yintercept = c(-1, 0, 1), linetype = c("dotted", "dashed", "dotted"), color = c(serum_neutral_line, serum_neutral_text, serum_neutral_line)) +
+  geom_point(alpha = 0.35, size = 1.1) +
+  scale_color_manual(
+    values = c(
+      "control only" = publication_blue,
+      shared = publication_shared,
+      "spike-in only" = publication_red,
+      neither = publication_light_grey
+    ),
+    drop = FALSE
+  ) +
+  labs(
+    title = "Unique-sequence agreement (MA view)",
+    subtitle = paste0("CPM>=1 union; shared median |log2FC| = ", round(primary_sequence_metric$SharedMedianAbsLog2FC, 3), "; within 2-fold = ", round(primary_sequence_metric$SharedWithinTwoFoldPct, 1), "%"),
+    x = "Mean log2 CPM", y = "log2FC (spike-in / control)", color = NULL
+  ) +
+  serum_theme_bw() +
+  theme(legend.position = "bottom")
+save_plot(p_sequence, "paired_sequence_agreement.pdf", width = 8, height = 6.5)
+```
+
+# 4. 检出重叠
+
+```{r overlap-plot, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+overlap_bar_df <- bind_rows(
+  paired_agreement_metrics %>% filter(CPMThreshold == 1) %>% transmute(FeatureLevel, DetectionSet = "control only", Features = SampleAOnly),
+  paired_agreement_metrics %>% filter(CPMThreshold == 1) %>% transmute(FeatureLevel, DetectionSet = "shared", Features = SharedDetected),
+  paired_agreement_metrics %>% filter(CPMThreshold == 1) %>% transmute(FeatureLevel, DetectionSet = "spike-in only", Features = SampleBOnly)
+) %>%
+  mutate(FeatureLevel = recode(FeatureLevel, annotation = "annotation", unique_sequence = "unique sequence"))
+
+p_overlap <- ggplot(overlap_bar_df, aes(x = "detected features", y = Features, fill = DetectionSet)) +
+  geom_col(width = 0.65, color = "white", linewidth = 0.25) +
+  geom_text(
+    aes(label = Features),
+    position = position_stack(vjust = 0.5),
+    size = 3,
+    color = "white",
+    fontface = "bold"
+  ) +
+  facet_wrap(~ FeatureLevel, nrow = 1, scales = "free_y") +
+  scale_fill_manual(values = c("control only" = publication_blue, shared = publication_shared, "spike-in only" = publication_red)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.08))) +
+  labs(
+    title = "CPM>=1 detection overlap",
+    subtitle = "Jaccard = shared / union; one paired process comparison (n=1)",
+    x = NULL, y = "features", fill = NULL
+  ) +
+  serum_theme_bw() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank()
+  )
+save_plot(p_overlap, "paired_detection_overlap.pdf", width = 7.2, height = 5.5)
+```
+
+本模块的主解释同时报告 abundance agreement 和 detection overlap：共同检出的高丰度特征可以具有较高排序相关性，但较低的 Jaccard 表示不能把两个库视作完全等价的序列谱。由于只有一对库，所有指标均为描述性 QC。
+
+# 5. 深度匹配敏感性分析
+
+完整深度下，未加外参库的内源 clean reads 多于外参库。逐序列整数计数固定随机种子，将较深库随机稀释到两库中较低的内源 clean-read 深度，并重复 200 次。SPORTS 注释为分数分配计数，缺少逐 read 多重比对分配，不能通过取整来随机稀释；annotation 深度敏感性明确记录为 `not_run`，完整深度 annotation 主结果保留。模拟分位范围只反映序列随机稀释的不确定性，不是生物学置信区间，也不能估计提取或建库工艺方差。
+
+```{r depth-sensitivity-plot, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+build_sensitivity_plot_df <- function(summary_df, metric_names, metric_labels, scale_divisor = 1) {
+  scale_divisor <- rep_len(scale_divisor, length(metric_names))
+  purrr::map_dfr(seq_along(metric_names), function(metric_index) {
+    metric_name <- metric_names[[metric_index]]
+    metric_label <- metric_labels[[metric_index]]
+    divisor <- scale_divisor[[metric_index]]
+    summary_df %>%
+      transmute(
+        FeatureLevel,
+        Metric = metric_label,
+        FullDepth = .data[[paste0("FullDepth_", metric_name)]] / divisor,
+        Median = .data[[paste0(metric_name, "_Median")]] / divisor,
+        Lower = .data[[paste0(metric_name, "_P025")]] / divisor,
+        Upper = .data[[paste0(metric_name, "_P975")]] / divisor
+      )
+  }) %>%
+    mutate(
+      FeatureLevel = recode(FeatureLevel, annotation = "annotation", unique_sequence = "unique sequence"),
+      Metric = factor(Metric, levels = metric_labels)
+    )
+}
+
+depth_plot_primary <- depth_sensitivity_summary %>% filter(CPMThreshold == 1)
+agreement_sensitivity_plot_df <- build_sensitivity_plot_df(
+  depth_plot_primary,
+  c("Jaccard", "SharedSpearman", "UnionSpearman", "SharedWithinTwoFoldPct"),
+  c("Jaccard", "shared\nSpearman", "union\nSpearman", "within\n2-fold"),
+  scale_divisor = c(1, 1, 1, 100)
+)
+detection_sensitivity_plot_df <- build_sensitivity_plot_df(
+  depth_plot_primary,
+  c("SampleADetected", "SampleBDetected", "SharedDetected", "UnionDetected"),
+  c("control", "spike-in", "shared", "union")
+)
+
+depth_shape_scale <- c("Full depth" = 23, "Depth-matched median" = 21)
+p_depth_agreement <- ggplot(agreement_sensitivity_plot_df, aes(x = Metric)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.35, color = serum_neutral_line) +
+  geom_linerange(
+    aes(ymin = Lower, ymax = Upper),
+    linewidth = 0.8,
+    color = publication_red,
+    position = position_nudge(x = -0.10)
+  ) +
+  geom_point(
+    aes(y = Median, shape = "Depth-matched median"),
+    size = 2.5,
+    fill = publication_red,
+    color = serum_text_primary,
+    position = position_nudge(x = -0.10)
+  ) +
+  geom_point(
+    aes(y = FullDepth, shape = "Full depth"),
+    size = 2.7,
+    fill = "white",
+    color = publication_blue,
+    stroke = 0.9,
+    position = position_nudge(x = 0.10)
+  ) +
+  facet_wrap(~ FeatureLevel, nrow = 1) +
+  scale_shape_manual(values = depth_shape_scale) +
+  coord_cartesian(ylim = c(-1, 1.05)) +
+  labs(
+    title = "Agreement metrics after depth matching",
+    subtitle = "CPM >= 1; sequence ranges: 200 thinning simulations; annotation thinning not run",
+    x = NULL, y = "agreement metric", shape = NULL
+  ) +
+  serum_theme_bw() +
+  theme(legend.position = "bottom")
+
+p_depth_detection <- ggplot(detection_sensitivity_plot_df, aes(x = Metric)) +
+  geom_linerange(
+    aes(ymin = Lower, ymax = Upper),
+    linewidth = 0.8,
+    color = publication_red,
+    position = position_nudge(x = -0.10)
+  ) +
+  geom_point(
+    aes(y = Median, shape = "Depth-matched median"),
+    size = 2.5,
+    fill = publication_red,
+    color = serum_text_primary,
+    position = position_nudge(x = -0.10)
+  ) +
+  geom_point(
+    aes(y = FullDepth, shape = "Full depth"),
+    size = 2.7,
+    fill = "white",
+    color = publication_blue,
+    stroke = 0.9,
+    position = position_nudge(x = 0.10)
+  ) +
+  facet_wrap(~ FeatureLevel, nrow = 1, scales = "free_y") +
+  scale_shape_manual(values = depth_shape_scale) +
+  labs(
+    title = "Detected features after depth matching",
+    subtitle = "CPM >= 1; annotation: full depth only; sequence: integer-count thinning",
+    x = NULL, y = "detected features", shape = NULL,
+    caption = "One paired process comparison (n=1); ranges are simulation percentiles, not biological confidence intervals"
+  ) +
+  serum_theme_bw() +
+  theme(legend.position = "bottom")
+
+save_plot(
+  (p_depth_agreement / p_depth_detection) + plot_layout(heights = c(1, 1)),
+  "paired_depth_sensitivity.pdf", width = 7.2, height = 8.5
+)
+```
+
+深度匹配结果用于判断较低的检出重叠是否主要由库深度差异驱动。无论敏感性结果是否接近完整深度值，都只能说明该指标对本次深度差异的稳健程度，不能把单个配对升级为可推广的工艺重复性估计。
+
+# 6. 方法 1 流程性能总结
+
+3 号供体的两个库均使用方法 1，因此本节不进行方法间排序，而是把分散在库级 QC、外参、agreement、深度敏感性和 RNA 组成表中的结果整合为方法 1 的单实例流程性能画像。生物学样本量为 1，流程库为 2，不进行显著性检验。
+
+```{r method1-process-performance-summary, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+control_qc <- pair_library_qc %>% filter(Sample == SPIKEIN_CONTROL_SAMPLE) %>% slice(1)
+spikein_library_qc <- pair_library_qc %>% filter(Sample == SPIKEIN_SAMPLE) %>% slice(1)
+control_rsrna <- paired_class_composition %>%
+  filter(Sample == SPIKEIN_CONTROL_SAMPLE, MainCategory == "rsRNA") %>%
+  slice(1)
+spikein_rsrna <- paired_class_composition %>%
+  filter(Sample == SPIKEIN_SAMPLE, MainCategory == "rsRNA") %>%
+  slice(1)
+sequence_depth_primary <- depth_sensitivity_summary %>%
+  filter(FeatureLevel == "unique_sequence", CPMThreshold == 1) %>%
+  slice(1)
+
+if (
+  nrow(control_qc) != 1 || nrow(spikein_library_qc) != 1 ||
+  nrow(control_rsrna) != 1 || nrow(spikein_rsrna) != 1 ||
+  nrow(primary_annotation_metric) != 1 || nrow(primary_sequence_metric) != 1 ||
+  nrow(sequence_depth_primary) != 1 || nrow(spikein_qc_summary) != 1
+) {
+  stop("方法 1 流程性能总结要求每个主结果恰好有一条记录。")
+}
+
+method1_process_performance_summary <- tibble(
+  Dimension = c(
+    "Library construction and genome mapping",
+    "Spike-in endpoint observability",
+    "Shared-feature abundance ordering",
+    "Detection-set stability",
+    "Depth robustness",
+    "Capture profile"
+  ),
+  ObservedEvidence = c(
+    sprintf(
+      "Genome mapping: %.2f%% (control) and %.2f%% (spike-in)",
+      control_qc$GenomeMappingRatePct,
+      spikein_library_qc$GenomeMappingRatePct
+    ),
+    sprintf(
+      "60 fmol cel-miR-39: %d exact reads and %d edit-distance-1 reads; %d candidates in 11 non-spiked libraries",
+      spikein_qc_summary$ExactReads,
+      spikein_qc_summary$NearMatchReads,
+      spikein_qc_summary$NonSpikeinCandidatePositiveN
+    ),
+    sprintf(
+      "Shared-feature Spearman at CPM>=1: %.3f (sequence) and %.3f (annotation)",
+      primary_sequence_metric$SharedSpearman,
+      primary_annotation_metric$SharedSpearman
+    ),
+    sprintf(
+      "Sequence Jaccard=%.3f and union Spearman=%.3f at CPM>=1",
+      primary_sequence_metric$Jaccard,
+      primary_sequence_metric$UnionSpearman
+    ),
+    sprintf(
+      "Sequence Jaccard: %.4f full depth versus %.4f depth-matched median; shared Spearman: %.4f versus %.4f",
+      primary_sequence_metric$Jaccard,
+      sequence_depth_primary$Jaccard_Median,
+      primary_sequence_metric$SharedSpearman,
+      sequence_depth_primary$SharedSpearman_Median
+    ),
+    sprintf(
+      "rsRNA: %.2f%% (control) and %.2f%% (spike-in)",
+      control_rsrna$Percent,
+      spikein_rsrna$Percent
+    )
+  ),
+  SupportedInterpretation = c(
+    "Method 1 generated two high-mapping libraries for this serum aliquot pair.",
+    "The method 1 workflow produced a sequence-specific terminal signal for the 22-nt unmodified spike-in in the positive library.",
+    "Abundance ranks were consistent among features detected in both libraries.",
+    "The complete sequence detection sets were not interchangeable across the two independently processed libraries.",
+    "The observed library-depth imbalance alone did not explain the low sequence overlap.",
+    "Method 1 produced rsRNA-dominant profiles in this donor."
+  ),
+  InterpretationBoundary = c(
+    "A single donor and two process libraries do not establish population-level mapping performance.",
+    "This is not a detection limit, absolute recovery estimate, step-specific yield, or cross-sample normalization factor.",
+    "Shared-feature correlation does not measure agreement for one-sided detections or overall process repeatability.",
+    "This n=1 comparison does not estimate a reproducibility distribution or prove poor performance for all samples.",
+    "Thinning percentiles quantify simulation uncertainty, not biological confidence intervals.",
+    "The profile cannot be generalized to all donors or attributed causally to spike-in addition."
+  ),
+  EvidenceSource = c(
+    "paired_library_qc.csv",
+    "spikein_qc_summary.csv; spikein_detection_by_sample.csv",
+    "paired_agreement_metrics.csv",
+    "paired_agreement_metrics.csv",
+    "paired_depth_matched_agreement_metrics.csv",
+    "paired_class_composition.csv"
+  ),
+  BiologicalN = 1L,
+  ProcessLibraryN = 2L,
+  StatisticalTest = "None; descriptive paired process QC"
+)
+write_csv_safe(method1_process_performance_summary, "method1_process_performance_summary.csv")
+
+performance_profile_df <- bind_rows(
+  pair_library_qc %>%
+    transmute(
+      Sample,
+      DisplayGroup = if_else(Sample == SPIKEIN_CONTROL_SAMPLE, "Control", "Spike-in"),
+      Metric = "Genome mapping",
+      Value = GenomeMappingRatePct
+    ),
+  paired_class_composition %>%
+    filter(MainCategory == "rsRNA") %>%
+    transmute(
+      Sample,
+      DisplayGroup = if_else(Sample == SPIKEIN_CONTROL_SAMPLE, "Control", "Spike-in"),
+      Metric = "rsRNA",
+      Value = Percent
+    )
+) %>%
+  mutate(
+    DisplayGroup = factor(DisplayGroup, levels = c("Control", "Spike-in")),
+    Metric = factor(Metric, levels = c("Genome mapping", "rsRNA"))
+  )
+
+p_performance_profile <- ggplot(
+  performance_profile_df,
+  aes(x = DisplayGroup, y = Value, color = DisplayGroup, shape = DisplayGroup, group = Metric)
+) +
+  geom_line(color = grey, linewidth = 0.6) +
+  geom_point(size = 2.8, stroke = 0.8) +
+  geom_text(
+    aes(label = sprintf("%.1f%%", Value)),
+    vjust = -1,
+    size = 2.5,
+    show.legend = FALSE
+  ) +
+  facet_wrap(~ Metric, nrow = 1) +
+  scale_color_manual(values = c("Control" = categorical[[1]], "Spike-in" = categorical[[2]])) +
+  scale_shape_manual(values = c("Control" = 16, "Spike-in" = 17)) +
+  coord_cartesian(ylim = c(88, 101)) +
+  labs(
+    title = "Library output and rsRNA profile",
+    subtitle = "One independently processed library per condition",
+    x = NULL,
+    y = "% of clean reads",
+    color = NULL,
+    shape = NULL
+  ) +
+  theme_cns +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(color = "#333333", linewidth = 0.6),
+    legend.position = "none",
+    plot.title = element_text(face = "bold")
+  )
+
+spike_signal_df <- tibble(
+  Signal = factor(c("Exact", "Edit distance 1"), levels = c("Exact", "Edit distance 1")),
+  Reads = c(spikein_qc_summary$ExactReads, spikein_qc_summary$NearMatchReads)
+)
+p_performance_spike <- ggplot(spike_signal_df, aes(x = Signal, y = Reads, color = Signal)) +
+  geom_segment(aes(xend = Signal, y = 1, yend = Reads), linewidth = 0.8) +
+  geom_point(size = 3) +
+  geom_text(aes(label = Reads), vjust = -1, size = 2.6, color = black) +
+  scale_color_manual(values = c("Exact" = categorical[[2]], "Edit distance 1" = categorical[[4]])) +
+  scale_y_log10(limits = c(1, 1000), breaks = c(1, 10, 100, 1000)) +
+  labs(
+    title = "cel-miR-39 endpoint signal",
+    subtitle = "Positive library; all 11 non-spiked libraries had 0 candidates",
+    x = NULL,
+    y = "Reads (log10 scale)",
+    color = NULL
+  ) +
+  theme_cns +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(color = "#333333", linewidth = 0.6),
+    legend.position = "none",
+    plot.title = element_text(face = "bold")
+  )
+
+agreement_metric_levels <- c("Jaccard", "shared\nSpearman", "union\nSpearman", "within\n2-fold")
+performance_agreement_df <- bind_rows(
+  tibble(
+    Analysis = "Full depth",
+    Metric = agreement_metric_levels,
+    Value = c(
+      sequence_depth_primary$FullDepth_Jaccard,
+      sequence_depth_primary$FullDepth_SharedSpearman,
+      sequence_depth_primary$FullDepth_UnionSpearman,
+      sequence_depth_primary$FullDepth_SharedWithinTwoFoldPct / 100
+    ),
+    Lower = NA_real_,
+    Upper = NA_real_
+  ),
+  tibble(
+    Analysis = "Depth-matched median",
+    Metric = agreement_metric_levels,
+    Value = c(
+      sequence_depth_primary$Jaccard_Median,
+      sequence_depth_primary$SharedSpearman_Median,
+      sequence_depth_primary$UnionSpearman_Median,
+      sequence_depth_primary$SharedWithinTwoFoldPct_Median / 100
+    ),
+    Lower = c(
+      sequence_depth_primary$Jaccard_P025,
+      sequence_depth_primary$SharedSpearman_P025,
+      sequence_depth_primary$UnionSpearman_P025,
+      sequence_depth_primary$SharedWithinTwoFoldPct_P025 / 100
+    ),
+    Upper = c(
+      sequence_depth_primary$Jaccard_P975,
+      sequence_depth_primary$SharedSpearman_P975,
+      sequence_depth_primary$UnionSpearman_P975,
+      sequence_depth_primary$SharedWithinTwoFoldPct_P975 / 100
+    )
+  )
+) %>%
+  mutate(
+    Analysis = factor(Analysis, levels = c("Full depth", "Depth-matched median")),
+    Metric = factor(Metric, levels = agreement_metric_levels)
+  )
+
+p_performance_agreement <- ggplot(performance_agreement_df, aes(x = Metric, y = Value)) +
+  geom_hline(yintercept = 0, linetype = "dashed", linewidth = 0.35, color = grey) +
+  geom_linerange(
+    data = performance_agreement_df %>% filter(Analysis == "Depth-matched median"),
+    aes(ymin = Lower, ymax = Upper),
+    color = categorical[[2]],
+    linewidth = 0.8,
+    position = position_nudge(x = -0.10)
+  ) +
+  geom_point(
+    data = performance_agreement_df %>% filter(Analysis == "Depth-matched median"),
+    aes(color = Analysis, shape = Analysis),
+    size = 2.7,
+    position = position_nudge(x = -0.10)
+  ) +
+  geom_point(
+    data = performance_agreement_df %>% filter(Analysis == "Full depth"),
+    aes(color = Analysis, shape = Analysis),
+    size = 2.9,
+    position = position_nudge(x = 0.10)
+  ) +
+  scale_color_manual(values = c("Full depth" = categorical[[1]], "Depth-matched median" = categorical[[2]])) +
+  scale_shape_manual(values = c("Full depth" = 23, "Depth-matched median" = 21)) +
+  coord_cartesian(ylim = c(-0.4, 1.05)) +
+  labs(
+    title = "Sequence agreement after depth matching",
+    subtitle = "CPM >= 1; n=1 paired process comparison; 200 thinning simulations",
+    x = NULL,
+    y = "Agreement metric",
+    color = NULL,
+    shape = NULL,
+    caption = "Ranges are 2.5th-97.5th simulation percentiles, not biological confidence intervals"
+  ) +
+  theme_cns +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(color = "#333333", linewidth = 0.6),
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    plot.caption = element_text(size = 6, color = "#555555")
+  )
+
+method1_process_performance_plot <-
+  (p_performance_profile | p_performance_spike) /
+  p_performance_agreement +
+  plot_layout(heights = c(1, 1.15)) +
+  plot_annotation(
+    title = "Method 1 workflow performance in donor 3",
+    subtitle = "One serum sample, two independently processed aliquots; descriptive process QC (biological n=1)",
+    tag_levels = "A",
+    theme = theme(
+      text = element_text(family = FIGURE_FONT, color = black),
+      plot.title = element_text(size = 10, face = "bold"),
+      plot.subtitle = element_text(size = 7),
+      plot.tag = element_text(size = 9, face = "bold")
+    )
+  )
+
+save_spikein_figure(
+  method1_process_performance_plot,
+  file.path(SPIKEIN_FIG, "method1_process_performance_summary"),
+  width_mm = 183,
+  height_mm = 190
+)
+```
+
+该汇总将“方法 1 在本次 3 号血清中表现如何”落为独立结果接口：可以评价本次建库产出、外参终点可观测性、共同特征排序、检出集合稳定性、深度敏感性和捕获谱；不能据此比较方法 1 与其他方法的相对优劣，也不能推广为方法 1 的人群性能参数。
+
+# 7. 3 号供体的描述性 RNA 分型
+
+本节在模块 13 内复现模块 4–8 所覆盖的主要分型维度，但只比较 `Normal3_1_1` 与 `Normal3_1_spikein`。所有外参 exact 和编辑距离 1 候选序列均从内源计数与分母中扣除；CSV 保留全部分型，图中对高维 annotation、氨基酸和 anticodon 只显示按两库最高 CPM 排名的前若干项。生物学样本量为 1，因此不计算显著性，也不把两库差异解释为 cel-miR-39 的生物学效应。
+
+```{r paired-descriptive-profile-helpers, include=FALSE, pandora_stage="prepare", eval=TRUE}
+pair_depth_table <- pair_library_qc %>%
+  select(Sample, EndogenousCleanReads) %>%
+  mutate(Sample = as.character(Sample))
+control_endogenous_depth <- pair_depth_table$EndogenousCleanReads[match(SPIKEIN_CONTROL_SAMPLE, pair_depth_table$Sample)]
+spikein_endogenous_depth <- pair_depth_table$EndogenousCleanReads[match(SPIKEIN_SAMPLE, pair_depth_table$Sample)]
+if (
+  !is.finite(control_endogenous_depth) || control_endogenous_depth <= 0 ||
+  !is.finite(spikein_endogenous_depth) || spikein_endogenous_depth <= 0
+) {
+  stop("描述性 RNA 分型要求两个库均有正的内源 clean-read 深度。")
+}
+
+empty_pair_profile <- function() {
+  tibble(
+    ProfileClass = character(), Dimension = character(), Feature = character(),
+    ControlReads = numeric(), SpikeinReads = numeric(),
+    ControlCPM = numeric(), SpikeinCPM = numeric(),
+    ControlWithinProfilePct = numeric(), SpikeinWithinProfilePct = numeric(),
+    Log2FC_Spikein_vs_Control = numeric(), DetectionCategory_CPM1 = character(),
+    CPMPseudocount = numeric(), BiologicalN = integer(), ProcessLibraryN = integer(),
+    StatisticalTest = character()
+  )
+}
+
+build_pair_profile <- function(long_df, profile_class, dimension, feature_col = "Feature") {
+  counts_long <- long_df %>%
+    transmute(
+      Sample = as.character(Sample),
+      Feature = as.character(.data[[feature_col]]),
+      Reads = as.numeric(Reads)
+    ) %>%
+    filter(
+      Sample %in% pair_samples,
+      !is.na(Feature), Feature != "",
+      is.finite(Reads), Reads >= 0
+    ) %>%
+    group_by(Sample, Feature) %>%
+    summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+  if (nrow(counts_long) == 0) return(empty_pair_profile())
+
+  counts <- counts_long %>%
+    pivot_wider(names_from = Sample, values_from = Reads, values_fill = 0)
+  for (sample_name in pair_samples) {
+    if (!sample_name %in% names(counts)) counts[[sample_name]] <- 0
+  }
+
+  counts %>%
+    transmute(
+      ProfileClass = profile_class,
+      Dimension = dimension,
+      Feature,
+      ControlReads = as.numeric(.data[[SPIKEIN_CONTROL_SAMPLE]]),
+      SpikeinReads = as.numeric(.data[[SPIKEIN_SAMPLE]])
+    ) %>%
+    mutate(
+      ControlCPM = 1e6 * ControlReads / control_endogenous_depth,
+      SpikeinCPM = 1e6 * SpikeinReads / spikein_endogenous_depth,
+      ControlWithinProfilePct = if (sum(ControlReads) > 0) 100 * ControlReads / sum(ControlReads) else 0,
+      SpikeinWithinProfilePct = if (sum(SpikeinReads) > 0) 100 * SpikeinReads / sum(SpikeinReads) else 0,
+      Log2FC_Spikein_vs_Control = log2((SpikeinCPM + 0.5) / (ControlCPM + 0.5)),
+      DetectionCategory_CPM1 = classify_detection(ControlCPM, SpikeinCPM, 1),
+      CPMPseudocount = 0.5,
+      BiologicalN = 1L,
+      ProcessLibraryN = 2L,
+      StatisticalTest = "None; descriptive paired process comparison"
+    ) %>%
+    arrange(desc(pmax(ControlCPM, SpikeinCPM)), Feature)
+}
+
+pair_display_levels <- c("Control", "Spike-in")
+pair_display_colors <- c("Control" = publication_blue, "Spike-in" = publication_red)
+pair_display_shapes <- c("Control" = 16, "Spike-in" = 17)
+
+profile_figure_theme <- theme_cns +
+  theme(
+    panel.border = element_blank(),
+    axis.line = element_line(color = "#333333", linewidth = 0.6),
+    legend.position = "bottom",
+    plot.title = element_text(face = "bold"),
+    plot.subtitle = element_text(size = 6.5, color = "#555555")
+  )
+
+build_paired_feature_plot <- function(
+  profile_df, dimension, title_text, top_n = Inf,
+  value_mode = c("log2_cpm", "within_percent")
+) {
+  value_mode <- match.arg(value_mode)
+  plot_wide <- profile_df %>%
+    filter(Dimension == dimension) %>%
+    arrange(desc(pmax(ControlCPM, SpikeinCPM)), Feature)
+  if (nrow(plot_wide) == 0) return(plot_note(title_text, "No detected features."))
+
+  display_n <- if (is.finite(top_n)) min(nrow(plot_wide), as.integer(top_n)) else nrow(plot_wide)
+  display_features <- plot_wide %>% slice_head(n = display_n) %>% pull(Feature)
+  display_subtitle <- if (display_n < nrow(plot_wide)) {
+    paste0("Top ", display_n, " of ", nrow(plot_wide), " features by maximum CPM; full profile in CSV")
+  } else {
+    paste0("All ", nrow(plot_wide), " detected profile features")
+  }
+
+  value_columns <- if (value_mode == "log2_cpm") {
+    c(Control = "ControlCPM", `Spike-in` = "SpikeinCPM")
+  } else {
+    c(Control = "ControlWithinProfilePct", `Spike-in` = "SpikeinWithinProfilePct")
+  }
+  x_label <- if (value_mode == "log2_cpm") "log2(CPM + 0.5)" else "Within-profile reads (%)"
+
+  plot_long <- plot_wide %>%
+    filter(Feature %in% display_features) %>%
+    mutate(Feature = factor(Feature, levels = rev(display_features))) %>%
+    select(Feature, all_of(unname(value_columns))) %>%
+    pivot_longer(
+      cols = all_of(unname(value_columns)),
+      names_to = "ValueColumn", values_to = "RawValue"
+    ) %>%
+    mutate(
+      Library = names(value_columns)[match(ValueColumn, unname(value_columns))],
+      Library = factor(Library, levels = pair_display_levels),
+      PlotValue = if (value_mode == "log2_cpm") log2(RawValue + 0.5) else RawValue
+    )
+
+  ggplot(plot_long, aes(x = PlotValue, y = Feature, group = Feature)) +
+    geom_line(color = grey, linewidth = 0.55) +
+    geom_point(aes(color = Library, shape = Library), size = 2.25, stroke = 0.7) +
+    scale_color_manual(values = pair_display_colors) +
+    scale_shape_manual(values = pair_display_shapes) +
+    labs(
+      title = title_text, subtitle = str_wrap(display_subtitle, width = 62),
+      x = x_label, y = NULL, color = NULL, shape = NULL
+    ) +
+    profile_figure_theme
+}
+
+build_total_percent_plot <- function(profile_df, title_text) {
+  plot_df <- profile_df %>%
+    filter(Dimension == "Total") %>%
+    select(Feature, ControlCPM, SpikeinCPM) %>%
+    pivot_longer(c(ControlCPM, SpikeinCPM), names_to = "ValueColumn", values_to = "CPM") %>%
+    mutate(
+      Library = recode(ValueColumn, ControlCPM = "Control", SpikeinCPM = "Spike-in"),
+      Library = factor(Library, levels = pair_display_levels),
+      PercentEndogenousCleanReads = CPM / 10000
+    )
+  if (nrow(plot_df) == 0) return(plot_note(title_text, "No detected reads."))
+
+  ggplot(plot_df, aes(x = PercentEndogenousCleanReads, y = Feature, group = Feature)) +
+    geom_line(color = grey, linewidth = 0.55) +
+    geom_point(aes(color = Library, shape = Library), size = 2.5, stroke = 0.7) +
+    scale_color_manual(values = pair_display_colors) +
+    scale_shape_manual(values = pair_display_shapes) +
+    labs(
+      title = title_text,
+      subtitle = "Percentage of endogenous clean reads; no significance test",
+      x = "% of endogenous clean reads", y = NULL, color = NULL, shape = NULL
+    ) +
+    profile_figure_theme
+}
+
+build_profile_logfc_plot <- function(profile_df, dimension, title_text, top_n = Inf) {
+  plot_df <- profile_df %>%
+    filter(Dimension == dimension) %>%
+    arrange(desc(pmax(ControlCPM, SpikeinCPM)), Feature)
+  if (nrow(plot_df) == 0) return(plot_note(title_text, "No detected features."))
+  display_n <- if (is.finite(top_n)) min(nrow(plot_df), as.integer(top_n)) else nrow(plot_df)
+  display_features <- plot_df %>% slice_head(n = display_n) %>% pull(Feature)
+  plot_df <- plot_df %>%
+    filter(Feature %in% display_features) %>%
+    mutate(
+      Feature = factor(Feature, levels = rev(display_features)),
+      Direction = if_else(Log2FC_Spikein_vs_Control >= 0, "Higher in spike-in library", "Higher in control library")
+    )
+
+  ggplot(plot_df, aes(y = Feature)) +
+    geom_vline(xintercept = 0, linetype = "dashed", linewidth = 0.4, color = grey) +
+    geom_segment(
+      aes(x = 0, xend = Log2FC_Spikein_vs_Control, yend = Feature),
+      linewidth = 0.65, color = "#BDBDBD"
+    ) +
+    geom_point(aes(x = Log2FC_Spikein_vs_Control, color = Direction), size = 2.2) +
+    scale_color_manual(values = c(
+      "Higher in control library" = publication_blue,
+      "Higher in spike-in library" = publication_red
+    )) +
+    labs(
+      title = title_text,
+      subtitle = str_wrap("Descriptive effect size; CPM pseudocount = 0.5; no significance test", width = 55),
+      x = "log2FC (spike-in / control)", y = NULL, color = NULL
+    ) +
+    profile_figure_theme
+}
+
+build_profile_length_plot <- function(profile_df, title_text) {
+  plot_df <- profile_df %>%
+    filter(Dimension == "Length (nt)") %>%
+    transmute(
+      Length = suppressWarnings(as.numeric(Feature)),
+      Control = ControlCPM,
+      `Spike-in` = SpikeinCPM
+    ) %>%
+    filter(is.finite(Length)) %>%
+    pivot_longer(cols = all_of(pair_display_levels), names_to = "Library", values_to = "CPM") %>%
+    mutate(Library = factor(Library, levels = pair_display_levels))
+
+  if (nrow(plot_df) == 0) return(plot_note(title_text, "No length-profile reads."))
+
+  ggplot(plot_df, aes(x = Length, y = log2(CPM + 0.5), color = Library, linetype = Library)) +
+    geom_line(linewidth = 0.8) +
+    scale_color_manual(values = pair_display_colors) +
+    scale_linetype_manual(values = c("Control" = "solid", "Spike-in" = "22")) +
+    labs(
+      title = title_text,
+      subtitle = str_wrap("Endogenous reads only; exact and edit-distance-1 spike-in candidates excluded", width = 62),
+      x = "Length (nt)", y = "log2(CPM + 0.5)", color = NULL, linetype = NULL
+    ) +
+    profile_figure_theme
+}
+
+add_profile_annotation <- function(plot_object, title_text, subtitle_text) {
+  plot_object +
+    plot_annotation(
+      title = title_text,
+      subtitle = subtitle_text,
+      tag_levels = "A",
+      theme = theme(
+        text = element_text(family = FIGURE_FONT, color = black),
+        plot.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 7),
+        plot.tag = element_text(size = 9, face = "bold")
+      )
+    )
+}
+```
+
+## 7.1 sncRNA 总体分型
+
+```{r paired-sncrna-descriptive-profile, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+paired_sncrna_descriptive_profile <- bind_rows(
+  build_pair_profile(
+    paired_class_composition %>% transmute(Sample, Feature = MainCategory, Reads),
+    "sncRNA", "RNA class"
+  ),
+  build_pair_profile(
+    paired_length_profile %>% transmute(Sample, Feature = as.character(Length), Reads),
+    "sncRNA", "Length (nt)"
+  )
+)
+write_csv_safe(paired_sncrna_descriptive_profile, "paired_sncrna_descriptive_profile.csv")
+
+p_snc_class <- build_paired_feature_plot(
+  paired_sncrna_descriptive_profile, "RNA class",
+  "Endogenous RNA-class abundance", value_mode = "log2_cpm"
+)
+p_snc_logfc <- build_profile_logfc_plot(
+  paired_sncrna_descriptive_profile, "RNA class",
+  "RNA-class abundance shift"
+)
+p_snc_length <- build_profile_length_plot(
+  paired_sncrna_descriptive_profile,
+  "Endogenous clean-read length profile"
+)
+sncrna_profile_plot <- add_profile_annotation(
+  (p_snc_class | p_snc_logfc) / p_snc_length + plot_layout(heights = c(1.25, 1)),
+  "Donor 3 paired sncRNA profile",
+  "Normal3_1_1 versus Normal3_1_spikein; one serum sample, two independently processed libraries; descriptive only"
+)
+save_spikein_figure(
+  sncrna_profile_plot,
+  file.path(SPIKEIN_FIG, "paired_sncrna_descriptive_profile"),
+  width_mm = 183, height_mm = 175
+)
+```
+
+## 7.2 tsRNA 分型
+
+```{r paired-tsrna-descriptive-profile, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+tsrna_pair_base <- tsrna_base_detail %>%
+  filter(as.character(Sample) %in% pair_samples) %>%
+  mutate(Sample = as.character(Sample))
+tsrna_pair_cleavage <- tsrna_cleavage_detail %>%
+  filter(as.character(Sample) %in% pair_samples) %>%
+  mutate(Sample = as.character(Sample))
+tsrna_total_classes <- summary_top %>%
+  filter(as.character(MainCategory) == "tsRNA") %>%
+  distinct(Class) %>%
+  pull(Class)
+tsrna_pair_length <- length_all %>%
+  filter(as.character(Sample) %in% pair_samples, Class %in% tsrna_total_classes) %>%
+  group_by(Sample, Length) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+paired_tsrna_descriptive_profile <- bind_rows(
+  build_pair_profile(
+    tsrna_pair_base %>% group_by(Sample, Origin) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "tsRNA", "Origin", "Origin"
+  ),
+  build_pair_profile(
+    tsrna_pair_base %>% group_by(Sample, Maturity) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "tsRNA", "Maturity", "Maturity"
+  ),
+  build_pair_profile(
+    tsrna_pair_cleavage %>%
+      mutate(CleavageProfile = paste(Origin, Cleavage, sep = " | ")) %>%
+      group_by(Sample, CleavageProfile) %>%
+      summarise(Reads = sum(Reads), .groups = "drop"),
+    "tsRNA", "Origin and cleavage", "CleavageProfile"
+  ),
+  build_pair_profile(
+    tsrna_pair_base %>% group_by(Sample, AminoAcid) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "tsRNA", "Amino acid", "AminoAcid"
+  ),
+  build_pair_profile(
+    tsrna_pair_base %>% group_by(Sample, Anticodon) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "tsRNA", "Anticodon", "Anticodon"
+  ),
+  build_pair_profile(
+    tsrna_pair_length %>% transmute(Sample, Feature = as.character(Length), Reads),
+    "tsRNA", "Length (nt)"
+  )
+)
+write_csv_safe(paired_tsrna_descriptive_profile, "paired_tsrna_descriptive_profile.csv")
+
+p_ts_origin <- build_paired_feature_plot(
+  paired_tsrna_descriptive_profile, "Origin", "tsRNA origin",
+  value_mode = "within_percent"
+)
+p_ts_cleavage <- build_paired_feature_plot(
+  paired_tsrna_descriptive_profile, "Origin and cleavage", "Mutually exclusive cleavage profile",
+  value_mode = "within_percent"
+)
+p_ts_aa <- build_paired_feature_plot(
+  paired_tsrna_descriptive_profile, "Amino acid", "Top amino-acid assignments",
+  top_n = 12, value_mode = "log2_cpm"
+)
+p_ts_anticodon <- build_paired_feature_plot(
+  paired_tsrna_descriptive_profile, "Anticodon", "Top anticodon assignments",
+  top_n = 12, value_mode = "log2_cpm"
+)
+p_ts_length <- build_profile_length_plot(paired_tsrna_descriptive_profile, "tsRNA length profile")
+tsrna_profile_plot <- add_profile_annotation(
+  (p_ts_origin | p_ts_cleavage) /
+    (p_ts_aa | p_ts_anticodon) /
+    p_ts_length + plot_layout(heights = c(0.85, 1.35, 0.9)),
+  "Donor 3 paired tsRNA profile",
+  "Base tRNA totals and mutually exclusive 5-prime, 3-prime, CCA-end and internal/full cleavage counts; descriptive only"
+)
+save_spikein_figure(
+  tsrna_profile_plot,
+  file.path(SPIKEIN_FIG, "paired_tsrna_descriptive_profile"),
+  width_mm = 183, height_mm = 225
+)
+```
+
+## 7.3 rsRNA 分型
+
+```{r paired-rsrna-descriptive-profile, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+rsrna_pair_subtype <- sample_rsrna_visual_view %>%
+  filter(as.character(Sample) %in% pair_samples) %>%
+  transmute(Sample = as.character(Sample), Feature = as.character(RsRNAClass), Reads)
+rsrna_total_classes <- summary_top %>%
+  filter(as.character(MainCategory) == "rsRNA") %>%
+  distinct(Class) %>%
+  pull(Class)
+rsrna_pair_length <- length_all %>%
+  filter(as.character(Sample) %in% pair_samples, Class %in% rsrna_total_classes) %>%
+  group_by(Sample, Length) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+paired_rsrna_descriptive_profile <- bind_rows(
+  build_pair_profile(
+    paired_class_composition %>%
+      filter(MainCategory == "rsRNA") %>%
+      transmute(Sample, Feature = "rsRNA total", Reads),
+    "rsRNA", "Total"
+  ),
+  build_pair_profile(rsrna_pair_subtype, "rsRNA", "Subtype"),
+  build_pair_profile(
+    rsrna_pair_length %>% transmute(Sample, Feature = as.character(Length), Reads),
+    "rsRNA", "Length (nt)"
+  )
+)
+write_csv_safe(paired_rsrna_descriptive_profile, "paired_rsrna_descriptive_profile.csv")
+
+p_rs_total <- build_total_percent_plot(paired_rsrna_descriptive_profile, "Total rsRNA abundance")
+p_rs_subtype <- build_paired_feature_plot(
+  paired_rsrna_descriptive_profile, "Subtype", "rsRNA subtype composition",
+  value_mode = "within_percent"
+)
+p_rs_length <- build_profile_length_plot(paired_rsrna_descriptive_profile, "rsRNA length profile")
+rsrna_profile_plot <- add_profile_annotation(
+  (p_rs_total | p_rs_subtype) / p_rs_length + plot_layout(widths = c(0.55, 1.45), heights = c(1.15, 1)),
+  "Donor 3 paired rsRNA profile",
+  "Subtype proportions are conditional on rsRNA reads; one paired process comparison (biological n=1)"
+)
+save_spikein_figure(
+  rsrna_profile_plot,
+  file.path(SPIKEIN_FIG, "paired_rsrna_descriptive_profile"),
+  width_mm = 183, height_mm = 165
+)
+```
+
+## 7.4 miRNA 分型
+
+```{r paired-mirna-descriptive-profile, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+mirna_pair_endogenous <- pair_endogenous %>%
+  filter(FeatureCategory == "miRNA", !is.na(PrimaryAnnotation), PrimaryAnnotation != "", PrimaryAnnotation != "NO_Annotation")
+
+paired_mirna_descriptive_profile <- bind_rows(
+  build_pair_profile(
+    paired_class_composition %>%
+      filter(MainCategory == "miRNA") %>%
+      transmute(Sample, Feature = "miRNA total", Reads),
+    "miRNA", "Total"
+  ),
+  build_pair_profile(
+    paired_annotation_counts %>% filter(FeatureCategory == "miRNA") %>%
+      group_by(Sample, PrimaryAnnotation) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "miRNA", "Annotation", "PrimaryAnnotation"
+  ),
+  build_pair_profile(
+    mirna_pair_endogenous %>% group_by(Sample, Length) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "miRNA", "Length (nt)", "Length"
+  )
+)
+write_csv_safe(paired_mirna_descriptive_profile, "paired_mirna_descriptive_profile.csv")
+
+p_mi_total <- build_total_percent_plot(paired_mirna_descriptive_profile, "Total miRNA abundance")
+p_mi_annotation <- build_paired_feature_plot(
+  paired_mirna_descriptive_profile, "Annotation", "Top miRNA annotations",
+  top_n = 15, value_mode = "log2_cpm"
+)
+p_mi_length <- build_profile_length_plot(paired_mirna_descriptive_profile, "miRNA length profile")
+mirna_profile_plot <- add_profile_annotation(
+  (p_mi_total | p_mi_annotation) / p_mi_length + plot_layout(widths = c(0.55, 1.45), heights = c(1.35, 1)),
+  "Donor 3 paired miRNA profile",
+  "cel-miR-39 exact and edit-distance-1 candidates excluded before endogenous miRNA profiling; descriptive only"
+)
+save_spikein_figure(
+  mirna_profile_plot,
+  file.path(SPIKEIN_FIG, "paired_mirna_descriptive_profile"),
+  width_mm = 183, height_mm = 175
+)
+```
+
+## 7.5 piRNA-annotated 分型
+
+```{r paired-pirna-descriptive-profile, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+pirna_pair_endogenous <- pair_endogenous %>%
+  filter(FeatureCategory == "piRNA", !is.na(PrimaryAnnotation), PrimaryAnnotation != "", PrimaryAnnotation != "NO_Annotation") %>%
+  mutate(
+    FivePrimeNucleotide = str_sub(Sequence, 1, 1),
+    ThreePrimeNucleotide = str_sub(Sequence, -1, -1)
+  )
+
+paired_pirna_annotated_descriptive_profile <- bind_rows(
+  build_pair_profile(
+    paired_class_composition %>%
+      filter(MainCategory == "piRNA") %>%
+      transmute(Sample, Feature = "piRNA-annotated total", Reads),
+    "piRNA-annotated", "Total"
+  ),
+  build_pair_profile(
+    paired_annotation_counts %>% filter(FeatureCategory == "piRNA") %>%
+      group_by(Sample, PrimaryAnnotation) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "piRNA-annotated", "Annotation", "PrimaryAnnotation"
+  ),
+  build_pair_profile(
+    pirna_pair_endogenous %>% group_by(Sample, Length) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "piRNA-annotated", "Length (nt)", "Length"
+  ),
+  build_pair_profile(
+    pirna_pair_endogenous %>% group_by(Sample, FivePrimeNucleotide) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "piRNA-annotated", "5-prime nucleotide", "FivePrimeNucleotide"
+  ),
+  build_pair_profile(
+    pirna_pair_endogenous %>% group_by(Sample, ThreePrimeNucleotide) %>% summarise(Reads = sum(Reads), .groups = "drop"),
+    "piRNA-annotated", "3-prime nucleotide", "ThreePrimeNucleotide"
+  )
+)
+write_csv_safe(paired_pirna_annotated_descriptive_profile, "paired_pirna_annotated_descriptive_profile.csv")
+
+p_pi_total <- build_total_percent_plot(paired_pirna_annotated_descriptive_profile, "Total piRNA-annotated abundance")
+p_pi_base <- build_paired_feature_plot(
+  paired_pirna_annotated_descriptive_profile, "5-prime nucleotide", "5-prime nucleotide composition",
+  value_mode = "within_percent"
+)
+p_pi_threeprime <- build_paired_feature_plot(
+  paired_pirna_annotated_descriptive_profile, "3-prime nucleotide", "3-prime nucleotide composition",
+  value_mode = "within_percent"
+)
+p_pi_length <- build_profile_length_plot(paired_pirna_annotated_descriptive_profile, "piRNA-annotated length profile")
+pirna_profile_plot <- add_profile_annotation(
+  (p_pi_total | p_pi_base) /
+    (p_pi_threeprime | p_pi_length) + plot_layout(heights = c(0.8, 1.25)),
+  "Donor 3 paired piRNA-annotated profile",
+  "Database-annotated reads and sequences only; annotation does not establish functional piRNA identity; descriptive only"
+)
+save_spikein_figure(
+  pirna_profile_plot,
+  file.path(SPIKEIN_FIG, "paired_pirna_annotated_descriptive_profile"),
+  width_mm = 183, height_mm = 180
+)
+```
+
+这些图回答的是“同一 3 号血清的两次独立方法 1 流程，在各 RNA 类别、分型与长度谱上出现了哪些描述性差异”。它们不能区分差异来自随机低丰度抽样、提取、连接、逆转录、PCR、测序或外参加入本身，也不能替代跨供体、随机化和足够重复数的方法学比较。
+
+## 8. 模块 04--08 原生图形重放
+
+除上面的配对综合图外，本节通过共享模块执行器，在独立环境中以显式 `spikein_pair` 队列运行模块 04--08，将相同的 sncRNA、tsRNA、rsRNA、miRNA 和 piRNA-annotated 图形体系应用于 `Normal3_1_1` 与 `Normal3_1_spikein`。蓝色始终表示未加外参库，红色始终表示加 60 fmol cel-miR-39 的文库；每组只有一个文库，因此只展示描述性差异，不计算显著性。
+
+```{r replay-prior-profile-rmds, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+replay_modules <- tibble::tribble(
+  ~Module, ~SourceRmd,
+  "04_sncRNA_compare", "04_sncRNA_compare.Rmd",
+  "05_tsrna_compare", "05_tsrna_compare.Rmd",
+  "06_rsrna_compare", "06_rsrna_compare.Rmd",
+  "07_mirna_compare", "07_mirna_compare.Rmd",
+  "08_pirna_compare", "08_pirna_compare.Rmd"
+)
+
+# Run shared modules in isolated module environments with an explicit paired scope.
+for (i in seq_len(nrow(replay_modules))) {
+  source_rmd <- file.path(SHARED_RMD_DIR, "homo", replay_modules$SourceRmd[[i]])
+  run_module(source_rmd, analysis_scope = "spikein_pair", analysis_stage = "describe")
+}
+
+pair_replay_manifest <- replay_modules %>%
+  rowwise() %>%
+  mutate(
+    OutputDirectory = file.path(SPIKEIN_DIR, "prior_rmd_style", Module),
+    PDFCount = length(list.files(file.path(SPIKEIN_DIR, "prior_rmd_style", Module, "plots"), pattern = "[.]pdf$", recursive = TRUE)),
+    PNGCount = length(list.files(file.path(SPIKEIN_DIR, "prior_rmd_style", Module, "plots"), pattern = "[.]png$", recursive = TRUE)),
+    TableCount = length(list.files(file.path(SPIKEIN_DIR, "prior_rmd_style", Module, "tables"), pattern = "[.]csv$", recursive = TRUE))
+  ) %>%
+  ungroup()
+
+write_csv_safe(pair_replay_manifest, "prior_rmd_style_replay_manifest.csv", tab_dir = SPIKEIN_TAB)
+OUTPUT_FIG_DIR <- SPIKEIN_FIG
+OUTPUT_TAB_DIR <- SPIKEIN_TAB
+```

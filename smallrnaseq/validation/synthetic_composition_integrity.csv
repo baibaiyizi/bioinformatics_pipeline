@@ -1,7 +1,0 @@
-"Sample","ExclusiveClassReads","CleanReads","ReadDifference","PercentSum","PercentDifference","Pass"
-"case_library1",701,701,0,100,0,TRUE
-"case_library2",991,991,0,100,0,TRUE
-"case_library3",1217,1217,0,100,0,TRUE
-"control_library1",956,956,0,100,0,TRUE
-"control_library2",868,868,0,100,0,TRUE
-"control_library3",1174,1174,0,100,0,TRUE

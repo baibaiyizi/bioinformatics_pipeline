@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 
-CUDA_GROMACS_MARKER = Path("/home/h1028/workspace/model/environment_manifests/verification/gromacs-cuda-smoke.json")
+CUDA_GROMACS_MARKER = Path(__file__).resolve().parents[2] / "environment_manifests/verification/gromacs-cuda-smoke.json"
 
 
 def has_cuda_support(gmx_version_text: str) -> bool:

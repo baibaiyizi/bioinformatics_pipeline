@@ -7,7 +7,7 @@ import tomllib
 import unittest
 
 
-AGENT_DIR = pathlib.Path(os.environ.get("SCI_AGENT_DIR", "/home/h1028/.codex/agents"))
+AGENT_DIR = pathlib.Path(os.environ.get("SCI_AGENT_DIR", pathlib.Path.home() / ".codex/agents"))
 WORKSPACE = pathlib.Path(__file__).parents[2]
 LEARNING_ROOT = WORKSPACE / "sci_learning"
 
