@@ -1,0 +1,8 @@
+!.gitignore
+!scripts/*.py
+!SOURCE_SNAPSHOT.tsv
+result/
+.cache/
+**/__pycache__/
+!tests/*.py
+!template_snapshot.tsv

@@ -50,4 +50,4 @@ QC 根据事前配置的 UMI、检测基因数、线粒体比例过滤。Scruble
 python -m pytest tests
 ```
 
-生成器拒绝覆盖已有目录，内部构建配置，不读真实项目样本或配置。合成 Gene000 在 treated 中植入上调，只用于验证方向/计数/执行合同。`examples/islet` 保存胰岛专题参数和扩展源码；它们不作为已验证通用模块开放。实际测试结果和上游限制见 VALIDATION.md，来源及 SHA-256 见 provenance.tsv。
+生成器拒绝覆盖已有目录，内部构建配置，不读真实项目样本或配置。合成 Gene000 在 treated 中植入上调，只用于验证方向/计数/执行合同。`examples/islet` 保存胰岛专题参数和扩展源码；它们不作为已验证通用模块开放。实际测试结果和上游限制见[内部验证记录](docs/VALIDATION.md)，来源及 SHA-256 见 provenance.tsv。

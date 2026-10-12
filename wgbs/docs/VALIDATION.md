@@ -1,3 +1,5 @@
+> 下文为职责重构前的历史验证，不能代表当前源码已完成真实数据重算。当前纯汇总已通过源码/内嵌R解析、可搬运小型端到端检查；本轮验收记录位于工作区 maintenance/species_organization/pfos_single_assay。
+
 # WGBS 模板验证记录
 
 日期：2026-09-29。仅修改独立 `model` 仓库；来源项目只读。未升级环境，未启动真实项目全量分析。`provenance.tsv` 记录提取来源及原文件 SHA256；`validation/executed_source_sha256.tsv` 冻结最后一轮实际执行的模板源码、参数和合成输入哈希。

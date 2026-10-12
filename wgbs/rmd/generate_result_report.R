@@ -93,8 +93,7 @@ module_titles <- c(
   "5_enrichment" = "功能富集 / Functional enrichment",
   "6_genomecontext" = "基因组背景 / Genomic context",
   "7_regulatory" = "调控元件与 motif / Regulatory elements and motifs",
-  "8_multiomics" = "多组学整合 / Multi-omics integration",
-  "9_degfocused" = "差异基因聚焦分析 / DEG-focused analysis",
+  "8_gene_methylation" = "基因甲基化汇总 / Gene methylation summary",
   "10_browser" = "基因组浏览轨迹 / Genome browser tracks",
   "11_sperm" = "精子特异分析 / Sperm-specific analysis",
   "cross_stage_analysis" = "跨组织比较 / Cross-context comparison",
@@ -105,9 +104,7 @@ module_titles <- c(
   "06_genome_tracks" = "基因组轨迹 / Genome tracks",
   "07_peak_gene_enrichment" = "Peak-gene 富集 / Peak-gene enrichment",
   "08_motif_activity" = "Motif 活性 / Motif activity",
-  "09_rna_multiomics" = "ATAC-RNA 整合 / ATAC-RNA integration",
   "10_footprinting_tf_evidence" = "足迹与 TF 证据 / Footprinting and TF evidence",
-  "11_wgbs_integration" = "ATAC-WGBS 整合 / ATAC-WGBS integration",
   "12_tf_gene_network" = "TF-gene 网络 / TF-gene network",
   "13_sequence_conservation_gc" = "序列与保守性 / Sequence and conservation",
   "14_machine_learning" = "预测建模 / Predictive modeling",
@@ -125,7 +122,7 @@ scientific_notes <- if(identical(assay, "WGBS")) {
   c(
     "甲基化差异方向按 comparison - reference 定义；Hyper/Hypo 的数值与阈值以相邻结果表为准。",
     "DMR、区域注释和富集图分别回答区域差异、基因组位置及集合过度代表性问题，不能互相替代。",
-    "RNA/ATAC 联合图展示匹配特征间的关联或一致性，不构成调控因果证据。",
+    "基因关联和位点描述不构成调控因果证据。",
     "GO Chord/Cluster 最多显示 10 个术语和 20 个代表基因；treeplot 最多 8 个术语，cnetplot 默认 5 个术语。",
     "富集网络和 GOplot 标签仅为排版截断至 38 个字符；完整术语、统计量和成员关系以相邻结果表为准。"
   )
@@ -133,7 +130,7 @@ scientific_notes <- if(identical(assay, "WGBS")) {
   c(
     "差异可及性方向按 comparison - reference 定义；效应量、p 值/FDR 和筛选口径以相邻结果表为准。",
     "Peak 注释、motif 富集、footprint 和 TF-gene 网络属于不同证据层，网络位置或中心性不等同于因果作用。",
-    "RNA/WGBS 整合图展示匹配特征的方向一致性或统计关联，不能替代功能实验。",
+    "ATAC 候选和 motif 位点关联不能替代功能实验。",
     "图内长术语可能为排版而缩写；完整名称、统计量和成员关系以 CSV/TSV 表为准。"
   )
 }

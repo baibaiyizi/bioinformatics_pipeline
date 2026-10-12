@@ -13,4 +13,8 @@
 
 原始 mzML 的 XCMS 峰提取、WIFF 外部转换、真实注释标准品、外部通路定量均 `not_run`。上述结果为合成峰表闭环，不是独立真实数据复现。验证目录 `/tmp/model-lcms-validation-ww308d40` 属于临时执行证据，不能作为模板运行依赖。
 
-可重放脚本与本轮输出小表/哈希见 `../template_audit/replay_metabolomics.py` 和 `../template_audit/validation/metabolomics/`。
+可重放脚本与本轮输出小表/哈希见 `../../template_audit/replay_metabolomics.py` 和 `../../template_audit/validation/metabolomics/`。
+
+## 2026-10-11 入口整理复核
+
+R入口收入 `scripts/pipeline.R` 后，使用同一现有重放脚本实际通过五类检查：缺少填峰前矩阵的完整峰表闭环、具有填峰前矩阵的过滤、反向比较、重复生物学单位拒绝、失败生产步骤遗留拒绝。全部在含空格临时复制目录执行；统计参数未改，真实 mzML 上游仍为 not_run。

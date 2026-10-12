@@ -1,0 +1,208 @@
+## Module 02. 输入盘点与运行上下文
+
+```{r step0_inventory_and_context}
+atac_input_inventory <- data.frame(
+  Sample = samples,
+  Group = as.character(conditions[samples]),
+  PeakFile = peak_files[samples],
+  PeakFileExists = file.exists(peak_files[samples]),
+  BamFile = bam_files[samples],
+  BamFileExists = file.exists(bam_files[samples]),
+  BigWigFile = bigwig_files[samples],
+  BigWigFileExists = file.exists(bigwig_files[samples]),
+  stringsAsFactors = FALSE
+)
+save_step_table(atac_input_inventory, "Step2", "Input_Inventory.csv")
+
+external_inventory <- build_external_input_inventory()
+save_step_table(external_inventory, "Step2", "External_Input_Inventory.csv")
+
+scientific_reference_tbl <- data.frame(
+  Topic = c(
+    "Bulk ATAC-seq processing standard",
+    "Reproducible workflow implementation",
+    "ENCODE workflow implementation",
+    "Consensus peak count matrix",
+    "ATAC-specific QC",
+    "ATAC-specific QC implementation",
+    "Differential accessibility caveat",
+    "Motif deviation analysis",
+    "Footprinting and TF occupancy",
+    "Alternative ATAC-aware peak calling"
+  ),
+  Source = c(
+    "ENCODE ATAC-seq data standards and processing pipeline",
+    "nf-core/atacseq",
+    "ENCODE-DCC/atac-seq-pipeline",
+    "nf-core/atacseq output documentation",
+    "ParkerLab/ataqv",
+    "ataqv paper",
+    "ATAC-seq normalization benchmark",
+    "GreenleafLab/chromVAR",
+    "TOBIAS",
+    "jsh58/Genrich"
+  ),
+  URL = c(
+    "https://www.encodeproject.org/atac-seq/",
+    "https://github.com/nf-core/atacseq",
+    "https://github.com/ENCODE-DCC/atac-seq-pipeline",
+    "https://nf-co.re/atacseq/",
+    "https://github.com/ParkerLab/ataqv",
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC8245295/",
+    "https://pmc.ncbi.nlm.nih.gov/articles/PMC7178746/",
+    "https://github.com/GreenleafLab/chromVAR",
+    "https://github.com/loosolab/TOBIAS",
+    "https://github.com/jsh58/genrich"
+  ),
+  ProjectUse = c(
+    "Use as the primary external checklist for raw/clean QC, mapping, duplicate/mitochondrial filtering, peak calling, IDR, FRiP, TSS enrichment, signal tracks, and reporting caveats.",
+    "Use as a mature public reference for samplesheet-driven execution, MultiQC aggregation, software version capture, IGV-ready outputs, and portable workflow design.",
+    "Use as a reference for ENCODE-style end-to-end ATAC/DNase processing, especially IDR, reproducibility reporting, and pipeline provenance.",
+    "Use as support for exporting a stable consensus peak set and featureCounts-style count matrix outside the internal DiffBind object.",
+    "Use as an optional future ATAC-specific QC layer for standardized TSS enrichment and assay-quality reports beyond the current deepTools approximation.",
+    "Use as scientific support for standardized ATAC-specific QC metrics and cross-sample reportability.",
+    "Record that normalization choices can change differential accessibility calls; keep full, p-value, FDR, and FDR-plus-effect-size DiffBind tables separate.",
+    "Use as the preferred motif-deviation method when chromVAR and its compiled dependencies are available; otherwise keep the current fallback labelled.",
+    "Use for bias-corrected footprinting and optional BINDetect; interpret TF evidence only after checking motif, footprint, and gene-level concordance.",
+    "Track as an optional ATAC-aware peak-calling cross-check, not as a replacement for the current MACS2/blacklist/IDR path."
+  ),
+  CurrentProjectStatus = c(
+    "Implemented for most upstream stages; TSS metric is explicitly labelled as a deepTools approximation and should not be treated as ENCODE TSSE without recalculation.",
+    "Partially implemented: this project has manifests, MultiQC, module logs, paired PDF/PNG outputs, and final manifests, but remains a local shell/Rmd workflow rather than Nextflow.",
+    "Partially implemented by local shell steps; no WDL/Cromwell execution is used here.",
+    "Implemented as upstream step 14: consensus peak BEDs, presence/absence matrix, raw counts, CPM counts, library-size table, and method/status tables.",
+    "Not run in the current workflow; listed as a recommended optional enhancement.",
+    "Package installation was attempted; ataqv command-line tool is still optional and requires a configured supported organism/build.",
+    "Implemented as transparent tiered outputs in Module05 and downstream summaries.",
+    "Check R_Package_Installation_Status.csv for current availability and Module08 ChromVAR_Status.csv for execution status.",
+    "Partially implemented: TOBIAS footprint preparation/tracks exist; BINDetect is optional and only used when available.",
+    "Not run in the current workflow; listed as an optional sensitivity analysis."
+  ),
+  SearchProvenance = "Static reference catalog inherited from project source; not a retrieval performed by this run",
+  RetrievalDate = NA_character_,
+  stringsAsFactors = FALSE
+)
+save_step_table(scientific_reference_tbl, "Step2", "Scientific_Standards_and_Repositories.csv")
+
+r_package_audit_tbl <- data.frame(
+  Package = c(
+    "preseqR", "ATACseqQC", "chromVAR", "nabor", "SummarizedExperiment",
+    "motifmatchr", "DiffBind", "ChIPseeker"
+  ),
+  Installed = c(
+    "preseqR", "ATACseqQC", "chromVAR", "nabor", "SummarizedExperiment",
+    "motifmatchr", "DiffBind", "ChIPseeker"
+  ) %in% rownames(utils::installed.packages()),
+  IntendedUse = c(
+    "ATACseqQC dependency / library complexity support",
+    "Optional standardized ATAC-specific TSS enrichment/QC",
+    "Preferred motif deviation analysis when available",
+    "chromVAR nearest-neighbor dependency",
+    "chromVAR and count-matrix container support",
+    "Motif overlap support",
+    "Primary differential accessibility workflow",
+    "Peak annotation"
+  ),
+  HistoricalInstallationNote = c(
+    "Installed from CRAN Archive preseqR_4.0.0 because current CRAN did not expose a package for R 4.5.1.",
+    "Attempted through BiocManager; blocked by slow/partial Bioconductor download and remaining compiled dependencies.",
+    "Attempted through BiocManager and direct Bioconductor mirror; blocked by nabor compilation in current system R.",
+    "Attempted CRAN source compile with default flags and temporary -O0 flags; compilation was stopped after prolonged template compilation.",
+    "Already available in current R library.",
+    "Already available in current R library.",
+    "Already available in current R library.",
+    "Already available in current R library."
+  ),
+  Evidence = c(
+    "result/logs/install_preseqR_archive_*.log",
+    "result/logs/install_chromVAR_*.log and install_preseqR_*.log",
+    "result/logs/install_chromVAR_*.log and install_nabor_O0_*.log",
+    "result/logs/install_nabor_O0_*.log",
+    "installed.packages()",
+    "installed.packages()",
+    "installed.packages()",
+    "installed.packages()"
+  ),
+  stringsAsFactors = FALSE
+)
+save_step_table(r_package_audit_tbl, "Step2", "R_Package_Installation_Status.csv")
+
+analysis_context_tbl <- data.frame(
+  Key = c(
+    "report_file",
+    "work_dir",
+    "rna_seq_dir",
+    "wgbs_dir",
+    "sample_count",
+    "group_levels",
+    "primary_chromosomes",
+    "run_profile",
+    "reuse_step_tables",
+    "strict_mode",
+    "save_png_previews",
+    "png_dpi",
+    "external_reference_count",
+    "required_r_package_installed_count"
+  ),
+  Value = c(
+    normalizePath(file.path(work_dir, "run_upstream.sh"), mustWork = FALSE),
+    work_dir,
+    rna_seq_dir,
+    wgbs_dir,
+    length(samples),
+    paste(levels(conditions), collapse = ","),
+    paste(primary_chr_ucsc, collapse = ","),
+    run_profile,
+    reuse_step_tables,
+    strict_mode,
+    save_png_previews,
+    plot_png_dpi,
+    nrow(scientific_reference_tbl),
+    sum(r_package_audit_tbl$Installed)
+  ),
+  stringsAsFactors = FALSE
+)
+save_step_table(analysis_context_tbl, "Step2", "Analysis_Context.csv")
+```
+
+# 分析路线总览
+
+这份报告按下面的顺序组织，尽量让结果阅读和代码执行保持同一条主线：
+
+1. `阶段 A / Step2-3`：先确认项目设置、样本质量和 ATAC 数据整体是否可靠。
+2. `阶段 B / Step4-6`：再描述开放图谱、差异 peak 和功能层解释。
+3. `阶段 C / Step8-13`：继续向 motif、footprint、network、保守性和机器学习机制层推进。
+4. `阶段 D / Step9-14`：整合 RNA、WGBS 和候选基因证据。
+5. `阶段 E / Step16`：在文档最后统一刷新交付对象和结果清单。
+
+阅读时如果只想快速把握主结论，建议优先看 `Step5`、`Step7-9`、`Step15`。
+
+```{r run_configuration_summary}
+run_config_tbl <- data.frame(
+  Parameter = c(
+    "ATAC work_dir",
+    "RNA-seq dir",
+    "WGBS dir",
+    "run_profile",
+    "reuse_step_tables",
+    "strict_mode",
+    "emit_light_plots",
+    "save_png_previews",
+    "png_dpi"
+  ),
+  Value = c(
+    work_dir,
+    rna_seq_dir,
+    wgbs_dir,
+    run_profile,
+    reuse_step_tables,
+    strict_mode,
+    emit_light_plots,
+    save_png_previews,
+    plot_png_dpi
+  ),
+  stringsAsFactors = FALSE
+)
+save_step_table(run_config_tbl, "Step2", "Run_Configuration_Summary.csv")
+knitr::kable(run_config_tbl, caption = "本次运行配置摘要")
+```

@@ -102,13 +102,9 @@ config <- list(
 
   # 外部数据路径
   stage = project_stage,
-  rna_seq_file = Sys.getenv("WGBS_RNA_SEQ_FILE"),
-  rna_kegg_file = Sys.getenv("WGBS_RNA_KEGG_FILE"),
   wgbs_kegg_file = "result/5_enrichment/tables/1/enrichment_ora_long.csv",
 
-  # ATAC-seq 数据路径 (可选，如不存在则跳过)
-  atac_peak_dir = Sys.getenv("WGBS_ATAC_PEAK_DIR"),
-  atac_diff_dir = Sys.getenv("WGBS_ATAC_DIFF_DIR"),
+  # 下游仅消费本组学输入
 
   # 样本分组定义
   group1_name  = NULL,
@@ -144,10 +140,6 @@ config <- list(
   # 下游展示/筛选阈值
   # 默认保持既有 pvalue 口径；WGBS_SIGNIFICANCE_MODE=padj 可切换为 FDR/padj。
   significance_mode = tolower(Sys.getenv("WGBS_SIGNIFICANCE_MODE", unset = "pvalue")),
-  rna_p_threshold = as.numeric(Sys.getenv("WGBS_RNA_P_THRESHOLD", "0.05")),
-  rna_p_adjust_threshold = as.numeric(Sys.getenv("WGBS_RNA_FDR_THRESHOLD", "0.05")),
-  rna_log2fc_threshold = as.numeric(Sys.getenv("WGBS_RNA_LOG2FC_THRESHOLD", "0.58")),
-  multiomics_methyl_delta = 0.10,
   cgi_diff_methyl_pct = 15L,
   enrichment_p_threshold = as.numeric(Sys.getenv("WGBS_ENRICHMENT_P_THRESHOLD", "0.05")),
   enrichment_adjust_threshold = as.numeric(Sys.getenv("WGBS_ENRICHMENT_FDR_THRESHOLD", "0.05")),
@@ -216,8 +208,7 @@ if(!file.exists(reads_info_path)) {
 # 4. 功能富集与 GSEA
 # 5. 全局基因组上下文
 # 6. 特定区域与调控注释
-# 7. 多组学联合分析
-# 8. DEG-focused 甲基化分析
+# 7. 基因甲基化纯汇总
 # 9. 轨道导出与代表性位点浏览图
 # ==============================================================================
 # ==============================================================================
@@ -320,23 +311,17 @@ ensure_step_dirs <- function(...) {
   invisible(lapply(dirs, dir.create, recursive = TRUE, showWarnings = FALSE))
 }
 
-significance_spec <- function(domain = c("rna", "enrichment"), config_arg = config) {
-  domain <- match.arg(domain)
-  if(domain == "rna") {
-    if(config_arg$significance_mode == "padj") {
-      return(list(column = "padj", threshold = config_arg$rna_p_adjust_threshold, mode = "padj"))
-    }
-    return(list(column = "pvalue", threshold = config_arg$rna_p_threshold, mode = "pvalue"))
-  }
+significance_spec <- function(domain = "enrichment", config_arg = config) {
+  domain <- match.arg(domain, "enrichment")
   if(config_arg$significance_mode == "padj") {
     return(list(column = "p.adjust", threshold = config_arg$enrichment_adjust_threshold, mode = "padj"))
   }
   list(column = "pvalue", threshold = config_arg$enrichment_p_threshold, mode = "pvalue")
 }
 
-selected_significance_mask <- function(df, domain = c("rna", "enrichment"), inclusive = FALSE,
+selected_significance_mask <- function(df, domain = "enrichment", inclusive = FALSE,
                                        config_arg = config, context = "data") {
-  domain <- match.arg(domain)
+  domain <- match.arg(domain, "enrichment")
   spec <- significance_spec(domain, config_arg)
   if(!spec$column %in% colnames(df)) {
     stop(
@@ -348,7 +333,7 @@ selected_significance_mask <- function(df, domain = c("rna", "enrichment"), incl
   !is.na(values) & if(inclusive) values <= spec$threshold else values < spec$threshold
 }
 
-filter_selected_significance <- function(df, domain = c("rna", "enrichment"), inclusive = FALSE,
+filter_selected_significance <- function(df, domain = "enrichment", inclusive = FALSE,
                                          config_arg = config, context = "data") {
   df[selected_significance_mask(df, domain, inclusive, config_arg, context), , drop = FALSE]
 }
@@ -1557,55 +1542,6 @@ standardize_dmr_result_columns <- function(dmr_df) {
   dmr_df
 }
 
-read_expr_results <- function(file) {
-  if(grepl("\\.csv$", file, ignore.case = TRUE)) {
-    expr_df <- read_csv(file, show_col_types = FALSE)
-  } else {
-    expr_df <- read_tsv(file, show_col_types = FALSE)
-  }
-  required_cols <- c("log2FoldChange", "pvalue")
-  missing_cols <- setdiff(required_cols, colnames(expr_df))
-  if(length(missing_cols) > 0) {
-    stop("RNA-seq 结果缺少必要列: ", paste(missing_cols, collapse = ", "), call. = FALSE)
-  }
-  if(anyNA(expr_df$sampleA) || anyNA(expr_df$sampleB)) stop("RNA DE 方向标签不能包含 NA")
-  if(all(c("sampleA", "sampleB") %in% colnames(expr_df)) &&
-     !is.null(config$group1_name) && !is.null(config$group2_name)) {
-    rna_sample_a <- unique(na.omit(as.character(expr_df$sampleA)))
-    rna_sample_b <- unique(na.omit(as.character(expr_df$sampleB)))
-    expected_a <- config$group2_name
-    expected_b <- config$group1_name
-    if(length(rna_sample_a) == 1 && length(rna_sample_b) == 1) {
-      same_direction <- identical(tolower(rna_sample_a), tolower(expected_a)) &&
-        identical(tolower(rna_sample_b), tolower(expected_b))
-      if(!same_direction) {
-        stop(
-          "RNA-seq 对比方向与 WGBS 方向不一致。WGBS diffMethy 为 ",
-          expected_a, " - ", expected_b,
-          "，但 RNA 文件为 ", rna_sample_a, " - ", rna_sample_b,
-          "。请先确认 RNA log2FoldChange 方向，避免四象限解释反向。",
-          call. = FALSE
-        )
-      }
-      expr_df$rna_contrast <- paste(rna_sample_a, rna_sample_b, sep = "_vs_")
-    } else {
-      stop("RNA-seq 文件 sampleA/sampleB 不唯一，无法自动验证 log2FoldChange 对比方向。", call. = FALSE)
-    }
-  } else {
-    stop("RNA-seq 文件缺少 sampleA/sampleB，无法自动验证 log2FoldChange 对比方向。", call. = FALSE)
-  }
-  if(!("gene_id_clean" %in% colnames(expr_df))) {
-    if("gene_id" %in% colnames(expr_df)) {
-      expr_df$gene_id_clean <- str_replace(expr_df$gene_id, "\\..*$", "")
-    } else {
-      expr_df$gene_id_clean <- str_replace(rownames(expr_df), "\\..*$", "")
-    }
-  }
-  for(col in intersect(c("SYMBOL", "ENTREZID", "GENENAME"), colnames(expr_df))) {
-    colnames(expr_df)[colnames(expr_df) == col] <- paste0("RNA_", col)
-  }
-  expr_df
-}
 
 feature_levels_main <- c("Promoter", "UTR", "Exon", "Intron", "Downstream", "Intergenic", "Other")
 feature_layer_levels <- c("Promoter", "Gene Body", "Distal", "Other")
@@ -2002,38 +1938,7 @@ ensure_dmr_outputs_loaded <- function() {
   ))
 }
 
-ensure_expr_loaded <- function(required = FALSE) {
-  if(!exists('expr_df', envir = .GlobalEnv, inherits = FALSE)) {
-    if(!file.exists(config$rna_seq_file)) {
-      if(required) stop("RNA-seq 结果文件未找到: ", config$rna_seq_file)
-      return(invisible(NULL))
-    }
-    message("⏳ 按需恢复 RNA-seq 结果: ", config$rna_seq_file)
-    assign('expr_df', read_expr_results(config$rna_seq_file), envir = .GlobalEnv)
-  }
-  expr_df <- get('expr_df', envir = .GlobalEnv)
-  significance_spec_rna <- significance_spec("rna")
-  if(!significance_spec_rna$column %in% colnames(expr_df)) {
-    stop(
-      "RNA-seq 结果缺少 ", significance_spec_rna$column,
-      "，无法使用 WGBS_SIGNIFICANCE_MODE=", config$significance_mode
-    )
-  }
-  invisible(expr_df)
-}
 
-ensure_gene_centric_loaded <- function(required = FALSE) {
-  if(!exists('gene_centric_long', envir = .GlobalEnv, inherits = FALSE)) {
-    gene_centric_file <- file.path(config$work_dir, "result/8_multiomics/tables/1/gene_centric_long.csv")
-    if(!file.exists(gene_centric_file)) {
-      if(required) stop("gene-centric 结果未找到: ", gene_centric_file, "；请先运行 Step 8")
-      return(invisible(NULL))
-    }
-    message("⏳ 按需恢复 gene_centric_long: ", gene_centric_file)
-    assign('gene_centric_long', read_csv(gene_centric_file, show_col_types = FALSE), envir = .GlobalEnv)
-  }
-  invisible(get('gene_centric_long', envir = .GlobalEnv))
-}
 
 ensure_dmr_cgi_context <- function(required = FALSE, persist = TRUE) {
   ensure_dmr_outputs_loaded()
@@ -2403,4 +2308,30 @@ auto_y_axis <- function(values, padding = 0.2, min_span = 1.5, bounds = c(0, 100
     breaks = pretty(limits, n = n_breaks)
   )
 }
+```
+
+```{r pure_gene_methylation_helpers}
+build_gene_methylation_summary <- function(dmr_df) {
+  required <- c("gene_id_clean", "diffMethy", "annotation", "DMR_id")
+  if(!all(required %in% names(dmr_df))) stop("DMR 缺少纯甲基化汇总字段: ", paste(setdiff(required, names(dmr_df)), collapse = ","))
+  if(!"CGI_context" %in% names(dmr_df)) dmr_df$CGI_context <- NA_character_
+  if(!"SYMBOL" %in% names(dmr_df)) dmr_df$SYMBOL <- NA_character_
+  gene_df <- dmr_df %>% filter(!is.na(gene_id_clean), gene_id_clean != "", is.finite(diffMethy)) %>%
+    mutate(Layer = derive_feature_layer(annotation))
+  parts <- list(gene_df %>% filter(Layer %in% c("Promoter", "Gene Body", "Distal")),
+                gene_df %>% filter(!is.na(CGI_context), CGI_context != "Open_Sea") %>% mutate(Layer = "CGI"))
+  bind_rows(parts) %>% group_by(gene_id_clean, Layer) %>%
+    mutate(RegionCount = n_distinct(DMR_id), DirectionConflict = any(diffMethy > 0) & any(diffMethy < 0)) %>%
+    arrange(desc(abs(diffMethy)), DMR_id, .by_group = TRUE) %>% slice_head(n = 1) %>% ungroup()
+}
+
+ensure_gene_methylation_loaded <- function() {
+  if(!exists("gene_methylation_long", inherits = TRUE)) {
+    ensure_dmr_outputs_loaded()
+    ensure_dmr_cgi_context(required = FALSE, persist = TRUE)
+    assign("gene_methylation_long", build_gene_methylation_summary(dmr_anno_df), envir = .GlobalEnv)
+  }
+  invisible(gene_methylation_long)
+}
+
 ```

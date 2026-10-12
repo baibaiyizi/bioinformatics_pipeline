@@ -9,7 +9,7 @@ has_flag <- function(flag) flag %in% args
 script_file <- grep("^--file=", commandArgs(FALSE), value = TRUE)
 script_path <- if (length(script_file)) sub("^--file=", "", script_file[[1]]) else "pipeline.R"
 script_path <- gsub("~+~", " ", script_path, fixed=TRUE)
-root_dir <- normalizePath(dirname(script_path), winslash = "/", mustWork = TRUE)
+root_dir <- normalizePath(dirname(dirname(script_path)), winslash = "/", mustWork = TRUE)
 
 known <- c(
   "--config", "--module", "--result-dir", "--qc-role", "--qc-filter",
@@ -20,7 +20,7 @@ known <- c(
 unknown <- args[grepl("^--", args) & !args %in% c(known, "--help")]
 if (length(unknown)) stop("Unknown option: ", paste(unique(unknown), collapse = ", "), call. = FALSE)
 if (has_flag("--help")) {
-  cat("LC-MS 模板\n", "Usage: Rscript pipeline.R --config config/project.yml --module MODULE [options]\n", "Modules: audit inventory xcms preprocess plots annotate stats pathway report all\n", sep = "")
+  cat("LC-MS 模板\n", "Usage: Rscript scripts/pipeline.R --config config/project.yml --module MODULE [options]\n", "Modules: audit inventory xcms preprocess plots annotate stats pathway report all\n", sep = "")
   quit(status = 0)
 }
 
@@ -28,7 +28,7 @@ source(file.path(root_dir, "R", "template_contract.R"), local = TRUE)
 source(file.path(root_dir, "R", "metabo_core.R"), local = TRUE)
 opts <- list(
   root_dir = root_dir,
-  config_file = normalizePath(value_after("--config", file.path(root_dir, "config/project.yml")), winslash = "/", mustWork = TRUE),
+  config_file = normalizePath({ p <- value_after("--config", "config/project.yml"); if (grepl("^/", p)) p else file.path(root_dir, p) }, winslash = "/", mustWork = TRUE),
   module = value_after("--module", "all"),
   result_dir = value_after("--result-dir", NULL),
   qc_role = value_after("--qc-role", NULL),

@@ -1,0 +1,5 @@
+# 血清方法比较冻结实现
+
+仅维护方法比较的capture、capture_bias、similarity和spikein四个模块，以及外参成对QC所需的4–8类别profile重放。来源于已运行的SPORTS下游R实现；单组学生产代码在所属smallrnaseq中独立维护，联合运行不引用其源码。
+
+这里的common、setup_homo及runtime为本地冻结支持代码。当前输入签名、标准类别计数逐值核对和队列门全部通过后才能生成当前联合报告。

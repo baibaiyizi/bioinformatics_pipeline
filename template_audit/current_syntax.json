@@ -1,0 +1,1231 @@
+{
+  "checks": [
+    {
+      "kind": ".sh",
+      "path": "rnaseq/rnaseq_first.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "rnaseq/rnaseq_second.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "rnaseq/rnaseq_third.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "rnaseq/run_rmd.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "rnaseq/scripts/config.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "rnaseq/scripts/input_contract.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "rnaseq/validation/contract_checks.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "rnaseq/validation/replay_core.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "wgbs/examples/synthetic_core/run_example.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "wgbs/run_upstream.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "wgbs/run_wgbs.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "wgbs/scripts/input_audit.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "wgbs/scripts/load_config.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "atac/run_rmd.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "atac/run_upstream.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "atac/scripts/input_audit.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "atac/scripts/load_config.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "atac/scripts/run_counts.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_beta.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_enrichment.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_networks.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_velocity.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/extension_velocity_model.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/source_annotation.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/examples/islet/optional/source_plotting.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "scrnaseq/run_scrna.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/__init__.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/__main__.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/analysis.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/annotation.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/audit.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/cellranger.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/cli.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/config.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/descriptive.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/eligibility.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/fixtures.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/inference.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/inputs.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/pipeline.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/plotting.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/qc.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/reporting.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/src/scrna_template/runtime.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/tests/conftest.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "scrnaseq/tests/test_contract.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "smallrnaseq/config/project.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "smallrnaseq/run.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "smallrnaseq/scripts/make_fixture.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "smallrnaseq/scripts/verify_portability.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "smallrnaseq/shared/preflight.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "smallrnaseq/shared/upstream/sports_homo.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "smallrnaseq/shared/upstream/sports_mus.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "smallrnaseq/shared/validate_figures.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "metabolomics/metabo_first.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "metabolomics/metabo_second.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "metabolomics/run.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "spatial_transcriptomics/run_spatial.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "spatial_transcriptomics/scripts/run_rmd.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "spatial_transcriptomics/scripts/spatial_pipeline.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "spatial_transcriptomics/tests/test_descriptive_contract.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "singlecell_multiome/scripts/run_multiome.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "singlecell_multiome/tests/test_multiome.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "spatial_metabolomics/scripts/run_spatial_metabolomics.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "spatial_metabolomics/tests/test_spatial_metabolomics.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "integration/method_comparison/config/project.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "integration/method_comparison/run.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "integration/method_comparison/scripts/build_report.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "integration/method_comparison/scripts/check_inputs.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "integration/method_comparison/shared/validate_figures.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "integration/method_comparison/tests/test_input_gate.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".sh",
+      "path": "integration/run.sh",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "integration/scripts/integrate.py",
+      "status": "PASS"
+    },
+    {
+      "kind": ".py",
+      "path": "integration/tests/test_contract.py",
+      "status": "PASS"
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/01_main_setup.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/02_selection.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/03_qc.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/04_pca.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/05_de.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/06_enrichment.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/07_go.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/08_gsea.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/09_gsva.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/10_tf_regulator.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/11_ppi.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/12_wgcna.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/13_apa.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/14_der.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/15_splicing.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/16_immune.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/17_pathway_activity.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/18_circle.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/generate_result_report.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/import_counts.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/rmats_direction.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/rmd/run_module.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/scripts/run_full_cohort_de.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/validation/direction_checks.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "rnaseq/validation/generate_counts_fixture.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/10_browser.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/11_sperm.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/1_setup.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/2_qc.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/3_dmr.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/4_dmroverview.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/5_enrichment.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/6_genomecontext.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/7_regulatory.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/8_gene_methylation.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/figure_contract.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/rmd/generate_result_report.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "wgbs/scripts/run_gene_methylation.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/01_main_setup.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/02_project_inventory.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/03_atac_qc.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/04_peak_catalog_annotation.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/05_differential_accessibility.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/06_genome_tracks.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/07_peak_gene_enrichment.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/08_motif_activity.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/10_footprinting_tf_evidence.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/12_tf_gene_network.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/13_conservation_gc.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/14_machine_learning.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/15_keygenes_locus_reports.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/16_export_summary_manifest.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/generate_result_report.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/rmd/significance_helpers.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/scripts/run_counts.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/scripts/run_gene_candidates.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "atac/scripts/run_module.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/R/common.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/R/endosirna.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/R/figure_contract.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/R/report_index.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/R/run_analysis.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/R/runtime.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/R/setup_homo.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/R/setup_mus.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/09_endo_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/homo/02_single_group.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/homo/03_pca.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/homo/04_sncRNA_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/homo/05_tsrna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/homo/06_rsrna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/homo/07_mirna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/homo/08_pirna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/homo/12_snrna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/mus/02_single_group.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/mus/03_pca.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/mus/04_sncRNA_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/mus/05_tsrna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/mus/06_rsrna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/mus/07_mirna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/shared/rmd/mus/08_pirna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "smallrnaseq/validation/stage_receipt_guard.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "metabolomics/R/metabo_core.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "metabolomics/R/template_contract.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "metabolomics/scripts/pipeline.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/01_main_setup.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/02_qc_overview.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/03_spatial_domains.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/04_deconvolution_review.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/05_neighborhood_communication.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/06_segment_programs.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "spatial_transcriptomics/rmd/07_multi_sample_summary.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/R/common.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/R/endosirna.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/R/figure_contract.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/R/report_index.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/R/run_analysis.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/R/runtime.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/R/setup_homo.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/rmd/homo/04_sncRNA_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/rmd/homo/05_tsrna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/rmd/homo/06_rsrna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/rmd/homo/07_mirna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/rmd/homo/08_pirna_compare.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/rmd/homo/09_differential_capture.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/rmd/homo/10_capture_bias_diagnostics.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/rmd/homo/11_method_similarity.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/method_comparison/shared/rmd/homo/13_spikein_qc.Rmd",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/scripts/annotate_programs.R",
+      "status": "PASS",
+      "error": ""
+    },
+    {
+      "kind": "R/Rmd",
+      "path": "integration/scripts/overlap_regions.R",
+      "status": "PASS",
+      "error": ""
+    }
+  ],
+  "syntax_pass": 185,
+  "syntax_fail": 0,
+  "source_sha256": {
+    "rnaseq/rnaseq_first.sh": "bd77c9d350767cda73dcbf9b28d1bbeb6c3423b74805fefd04b6278f20177d82",
+    "rnaseq/rnaseq_second.sh": "551128262cee3f09d2cdff61f569521641b1eee58b41ceb11f77e91d2941100b",
+    "rnaseq/rnaseq_third.sh": "2fc6a2c284ced66ec69ab8ef8848d9665a58ab37a750e4048d54d37b40dc234a",
+    "rnaseq/run_rmd.sh": "2ab9118ee64f825ea5516f06df99c01c769baad751673ff161293c5371887f45",
+    "rnaseq/scripts/config.sh": "561ecdcf18b3c6825d25c4049cfdef69d16377e2dd12d651d3c1c828a2eaacc1",
+    "rnaseq/scripts/input_contract.py": "7033f423da30698c0b71322be7f6e825c59324ca6690313530d7385574655364",
+    "rnaseq/validation/contract_checks.py": "5107020b8e9689b898218e4d17a74721cd9018309f2eef394a25a1a58b8ec5bc",
+    "rnaseq/validation/replay_core.sh": "e3ab63fc2ee82bfc25c31945a514ea0f758fe30da2febb6e306b0050812314c7",
+    "wgbs/examples/synthetic_core/run_example.sh": "16f349d75c56b0cbc27f387e4d665b746eb1b1af55df195dc6f00a4f0625e5a1",
+    "wgbs/run_upstream.sh": "1dd8f54ce5ee0f6fd5ee0348bd2715d19e0a5d8bc52d3b398a5f889f235f0214",
+    "wgbs/run_wgbs.sh": "6da2abd2ac3753dd752ef345c8502f4b51195ca675a829259bf3f8bdae768f8c",
+    "wgbs/scripts/input_audit.py": "dd4a4a4eff67b920d9c66ea164d69fb4e89ebdf658bf1b7aec20c3b2041826ac",
+    "wgbs/scripts/load_config.sh": "8b48c0f3e963f5a8cdbbbefb705c87249a05a4ebdedf4754f1cb505bd6b3b91c",
+    "atac/run_rmd.sh": "1f4c57f0d0ffee464b5faa411e834d61586214c7c7742c31f0f9e982b30c3dd8",
+    "atac/run_upstream.sh": "8b0ce181e382268981c6e79fdc4eb58f881d636ac5c9414e30009c5fc5d3d88f",
+    "atac/scripts/input_audit.py": "a58906d6f9dbcee3b11482297c2681c053d126a3cb791e28fc5ed240df324461",
+    "atac/scripts/load_config.sh": "afa63ac06d24e74af28239dbc8dc3c307b8b0118ac1fa0f57ca734b27368eac7",
+    "atac/scripts/run_counts.sh": "b2abcc7fbee9dd2affc001243b89d19272599a12fd09b33c612b2c7388b759a2",
+    "scrnaseq/examples/islet/optional/extension.py": "d08e1c4dd06e5845ef0a39ddcfe56424cc7c1e6c172faa6c95d78e4cf9b09969",
+    "scrnaseq/examples/islet/optional/extension_beta.py": "346d216e41392b88eb17ad0e40125329fcd3f293fcd63211395b0402e17e679f",
+    "scrnaseq/examples/islet/optional/extension_enrichment.py": "a9ec9e6a1238648f56553fe5197f5c4b529c3f112a599509c6419d4c082796ec",
+    "scrnaseq/examples/islet/optional/extension_networks.py": "92d05fef583e922eb40ce9dafbdf4ee96d11cda8873273e3083b8d82e155bef4",
+    "scrnaseq/examples/islet/optional/extension_velocity.py": "d70b1a026f056b3dcd78be850fd4ebe62b49c09e4afa2d12a199f4665da54827",
+    "scrnaseq/examples/islet/optional/extension_velocity_model.py": "6105f57d4bec49c7c4b4473ccd7547bcea4d8ca2428209a54804279d03dcee32",
+    "scrnaseq/examples/islet/optional/source_annotation.py": "7b214c3ba5a79f92191c0e0e99a3f1d1ba56e17153fd007aee525c40735fa877",
+    "scrnaseq/examples/islet/optional/source_plotting.py": "89ffea1263ac31461b37d61acc78c9f911591ad3d1dcdff051691ac55ab31a4a",
+    "scrnaseq/run_scrna.sh": "74b81ad5a1ec60bb43259d88ba44cca33ad376b7479e8b9825ab1273ef0ca1de",
+    "scrnaseq/src/scrna_template/__init__.py": "db4b93c4fc89cc450af27e804b07a4f674b13aad64fb8633657dd8ee6aa1c2ed",
+    "scrnaseq/src/scrna_template/__main__.py": "79ee6f134c5c5193377cf9b189cbdcc3e2095e49ba9cec310114441c15a917c4",
+    "scrnaseq/src/scrna_template/analysis.py": "28197c1fdfc71cd5932f07862f2472015977eb173548e3637f95925f544f0d4e",
+    "scrnaseq/src/scrna_template/annotation.py": "0f401397c3a07f3f11d425be69e36b042173d574acd9e1e7a0f1485e96cd3b14",
+    "scrnaseq/src/scrna_template/audit.py": "c90d1d2f2512f028d26cedf2504e789f2dbce972defe88b9f881a5a137dbe68e",
+    "scrnaseq/src/scrna_template/cellranger.py": "03f4f466f7ee8d249c0ea754d5e1ff1586c80226dab067e180e9244b2c90d4ad",
+    "scrnaseq/src/scrna_template/cli.py": "e79e4038818b6c568ef2dfb8f539758dfe463f472089778c1a48b35d4d8e3b00",
+    "scrnaseq/src/scrna_template/config.py": "8b3b95657a45392a77881bbe77a8bf9fdc0dc4224a097512a179d2733c2e829d",
+    "scrnaseq/src/scrna_template/descriptive.py": "9d28f6c4ea9680d46e1b1bbea3003abca315b450150d7c27865e033ed56510cd",
+    "scrnaseq/src/scrna_template/eligibility.py": "bbf2cd2d647336f08debac11913a5b6fd112872ce12207d30271cb1bfe6609f8",
+    "scrnaseq/src/scrna_template/fixtures.py": "414e606de5f8d76dd2a2543fe4e77cdd8f597e31eea2dc18f79893f6371e0b2a",
+    "scrnaseq/src/scrna_template/inference.py": "5b3ae55355d8518530d7e0def8dc355d5f3bb8d223214d070603c861db7c7e8e",
+    "scrnaseq/src/scrna_template/inputs.py": "e183f228bdd8558a092892aec9ba9158dd6eb658da4714a98e1d1447dd28b8f3",
+    "scrnaseq/src/scrna_template/pipeline.py": "a98ac63a7b20ff0b73730e71dfe800914417604405290ccb41f44b9a13be29c2",
+    "scrnaseq/src/scrna_template/plotting.py": "7d712ab5588c412a0734a1d75e4b496d0687db1a9bbe9bcb69220f9eeeef648f",
+    "scrnaseq/src/scrna_template/qc.py": "dd6e517e76f754b9c065331bbdffa529940168c5d7e373157ef2e41495481b3f",
+    "scrnaseq/src/scrna_template/reporting.py": "d4c3349b9a6d006e1965f9641d8c128e0aba0d090377a84732b53cf1f3d58f2e",
+    "scrnaseq/src/scrna_template/runtime.py": "b2be1859649e164350a5e34fe6e2415926d9894e1f13d10f64e8b5986a5f8472",
+    "scrnaseq/tests/conftest.py": "b7c8211c9a9b5a8b514fb0c0bfcebb945a38bffa361724b73cc390bfe1853ffb",
+    "scrnaseq/tests/test_contract.py": "3dddb79184f2ba10f497d1e8fbcebc5c2e32e8de46ec4bf9c6ec64465c68bc88",
+    "smallrnaseq/config/project.sh": "27039d4a1d3a30c14a5a42c6095b7a233b4dee6167d94e242cb1313ebf7eefed",
+    "smallrnaseq/run.sh": "4becacabdb2a4d80475c07b845af2392167fa52e4abbb8afae22e19b2933060b",
+    "smallrnaseq/scripts/make_fixture.py": "37d109fd246c7f0c3865096d0909a64ee82cfa72a11170350372d6dae55e7892",
+    "smallrnaseq/scripts/verify_portability.py": "60c7b9e04bb7df77e6992757db8b861e2584cd819117e2d670927f464740fd46",
+    "smallrnaseq/shared/preflight.py": "ef89a3ccc6044cb6a93c02c5c6c4c80d8132e14761127e56ccfaf582681d972d",
+    "smallrnaseq/shared/upstream/sports_homo.sh": "89076a5e5b5629e0eebc38489c7c0940e82a6203362eeccfbf5709e8bc51f760",
+    "smallrnaseq/shared/upstream/sports_mus.sh": "1154813314a228a2b2cfe1a8e73413f6d59966e754272397649cf4162712a45f",
+    "smallrnaseq/shared/validate_figures.py": "9bf49442e8d045b6efa47df0e8105312b1e17b3b251b586f151a0f15c89b456c",
+    "metabolomics/metabo_first.sh": "5d4daacd4bf7795315a26acb82fbaca7563d951f623c8ff0c0cf669481554fcf",
+    "metabolomics/metabo_second.sh": "d3dd5214a66c17818ab4647e37f3fbc58af1f97476b66aa3b2b51a517d0cc0a4",
+    "metabolomics/run.sh": "ca888de0e0a2a4bbf4267b4f99b8d18d074449d0dd80f7dd150eb23b3761f9be",
+    "spatial_transcriptomics/run_spatial.sh": "b850979fa17872c50056eb3895af7ae8f407475131a8d5a3e4ea89c18b19786a",
+    "spatial_transcriptomics/scripts/run_rmd.sh": "19c1c235f685025c1210bb6b7216d9127166c30d8afbf7412a2b99d7dd92cad9",
+    "spatial_transcriptomics/scripts/spatial_pipeline.py": "5549998c0333672f917c3cccabca2a7da0749d7ccfa678935e94dd361a0f5070",
+    "spatial_transcriptomics/tests/test_descriptive_contract.py": "e7fae6d9552a5fd1ae12fdba0a775a1452f4cf5c351991ae19c05daf485a0c7d",
+    "singlecell_multiome/scripts/run_multiome.py": "64a27833774c4738077b862b03283a112cd1ad176ca33875fb752c46df9222aa",
+    "singlecell_multiome/tests/test_multiome.py": "e33f5cac2b6f7da75edc0fd041d01a4abc9f808905d70a2ff6cf3206a56603e6",
+    "spatial_metabolomics/scripts/run_spatial_metabolomics.py": "8307586031b203db395709c1872b4318173655a2feb790ccd8f6ac4bf847b3ee",
+    "spatial_metabolomics/tests/test_spatial_metabolomics.py": "7f62589674fd48f29f96f4e7bef70d58c5646ea7a64a151cfe353129bda86fc7",
+    "integration/method_comparison/config/project.sh": "a28c66b12fca1aabd3c1064fcbca402a8a2526a068c5839bdecade89ec5c6b71",
+    "integration/method_comparison/run.sh": "0b0bf3443d08930066d30dd16d40a9871a4fae0252aa013676c65cf660db7dfe",
+    "integration/method_comparison/scripts/build_report.py": "4fcf339dca90f3eae564e2260153459b2e89bfbf37eebada08875bc9e61629a4",
+    "integration/method_comparison/scripts/check_inputs.py": "4f55bf150237730cfbf30e63e36b0d8a4e6ab8840363028ffd2b1812deed86bb",
+    "integration/method_comparison/shared/validate_figures.py": "9bf49442e8d045b6efa47df0e8105312b1e17b3b251b586f151a0f15c89b456c",
+    "integration/method_comparison/tests/test_input_gate.py": "02bb11c72ca542719eb88ed9385a19a63f69e663dad2f19c4bfd361e542b710d",
+    "integration/run.sh": "6c820392d7907fb6ccbb86cc6bce516f12374c625f5552e79d984f5ac581d00b",
+    "integration/scripts/integrate.py": "fd7e811a82c8a3114f25fb3d0313fd288e88ba08b5bc08f41f086abff9626ede",
+    "integration/tests/test_contract.py": "b079816142f6a35f978cd49f3fae92e3ffbd98468e115be0f038ab704f94d2e7",
+    "rnaseq/rmd/01_main_setup.R": "2e6964040f8c289bbe1b9fed9a329534dd6ab9c5da38b7749b4de6043669687b",
+    "rnaseq/rmd/02_selection.Rmd": "0e93bc6355a76b2dd35a501b467e32c6e24783988688183f85742aaf27d6c477",
+    "rnaseq/rmd/03_qc.Rmd": "d89f330f77839f61f42e22ffe9119859077f1c9d915eaf884b4f67604319cc6c",
+    "rnaseq/rmd/04_pca.Rmd": "2e3b583a6cb915916c35136270d2427f9e0c0e5eb45021d83581458b96d195c8",
+    "rnaseq/rmd/05_de.Rmd": "455c1b46fd9803c442ca144f36159241f681577d0731c4c406548ba724ff86d8",
+    "rnaseq/rmd/06_enrichment.Rmd": "b5a536930aefdf754668f637247fb093de3c00bd7229250e932abcd9665be061",
+    "rnaseq/rmd/07_go.Rmd": "5c4ba809e4e86db8cb75734187da6f788b1e59646e53ac19c8f64897b0eacfa5",
+    "rnaseq/rmd/08_gsea.Rmd": "df8e96f305be36853ec330cec08f8abeb9fe7bc1d0b6515f11e05bcd2d5d456f",
+    "rnaseq/rmd/09_gsva.Rmd": "b423bcfb17447ba0952a7f3ec42833794c104a375f9f2e1b846907b716505ca4",
+    "rnaseq/rmd/10_tf_regulator.Rmd": "4973cab6f77754969d1f87072954b2943d09b613822ffa08f61bfe88814737fa",
+    "rnaseq/rmd/11_ppi.Rmd": "210455320784265095b80b5dc4f6df0b7550a87b77cf0d3fed89146d46b734cf",
+    "rnaseq/rmd/12_wgcna.Rmd": "b352118d5f0e92156f33b0038522b3658196a3b66198355d20e3c4886a66cf29",
+    "rnaseq/rmd/13_apa.Rmd": "d263178bd8032c14c8825052d79c2489319dec074534fdcd7131c0b6cf6bc8c5",
+    "rnaseq/rmd/14_der.Rmd": "843c4b439c6b2659f9a1a520f0088ccdcb5cd1e82bdea65eb0c490836e87fabc",
+    "rnaseq/rmd/15_splicing.Rmd": "cc1b5d27092163f859f87b9345f9f580ee16d1d91863804e4dfa1d31af9c43ef",
+    "rnaseq/rmd/16_immune.Rmd": "774e15bd8d0bf1c09172c26dbd761af5e1e480934e7d7e25c6de4c99039acf6c",
+    "rnaseq/rmd/17_pathway_activity.Rmd": "cc9d4dad8ac5004d53b61be421dd368e58dc2e6a10e8fbd7589aaf7d2388c519",
+    "rnaseq/rmd/18_circle.Rmd": "c3f3223c5a3338cbc47b484fb0d8c647caba997f8f9fc21193d3e0d9a244364f",
+    "rnaseq/rmd/generate_result_report.R": "b31728cd44b4928e7d3750033f67ee6b99801b5764dc204fee917bde62717617",
+    "rnaseq/rmd/import_counts.R": "e7a8f809b52c4f471f32c73b23b5651f96eb277d6c118590387f15f04c25cd8d",
+    "rnaseq/rmd/rmats_direction.R": "419c8551ab9f2390ac4368cf9c6f4bd1ebbbd1f43724fe151f2118843c9bf463",
+    "rnaseq/rmd/run_module.R": "639b33ffee4e4db4e38f04044516107b1d50279524d9c1dabeef98115009471b",
+    "rnaseq/scripts/run_full_cohort_de.R": "e89a58986537810cdf5a4574d53ba4f7068a95bdb5c4be9c818c201b03fa6151",
+    "rnaseq/validation/direction_checks.R": "6740422afec3df52b9c31bb5117f3e9822ac476acab60196c5b831b5e0f5e390",
+    "rnaseq/validation/generate_counts_fixture.R": "b9d0f17cb075fd433fdf20a76fa478335344f612a2ac724ef69da9f73daeef8a",
+    "wgbs/rmd/10_browser.Rmd": "91b9ec00259e4ceb33745896f5b580611559daab3f1bcd65a9e454f4842481d4",
+    "wgbs/rmd/11_sperm.Rmd": "426df19ee79bdc62d23679b860e9a776ca1e41853de202ac904c101eea2e157c",
+    "wgbs/rmd/1_setup.Rmd": "9f7fac5513d2a093e4b8f8df4b53fcbe2b1cd4bee37a3ffb71410a529812468f",
+    "wgbs/rmd/2_qc.Rmd": "e3981e00d2a38b3405a04b505c9d703b08d7b31335508fb88fd2ffd169296657",
+    "wgbs/rmd/3_dmr.Rmd": "99f090a2b3fef36a31660d1316bb7061edae59399586b0c2bc78baf2f2cf6b7f",
+    "wgbs/rmd/4_dmroverview.Rmd": "593c1ba50982d6da0b9f6314e7a493221ddfa09485f5c2a948085c5ac21f8990",
+    "wgbs/rmd/5_enrichment.Rmd": "b1d555f528b228018eb00acd0987e3c4ef3b83e2546da9099aa5c0bb582c4b4d",
+    "wgbs/rmd/6_genomecontext.Rmd": "cb6348c7e8c0cf9d1c117d094c7ed046d46fc1239c1d665e522cf91b5a2e0a82",
+    "wgbs/rmd/7_regulatory.Rmd": "8df66a60810c8f0d176a984e44df5591448836d2170821aa36ac8519e4c2eae1",
+    "wgbs/rmd/8_gene_methylation.Rmd": "52881c4e6332b2ae7620e142c5e86f18cd2c4d7c102728aefa1dd734d407ed41",
+    "wgbs/rmd/figure_contract.R": "77ec12e4226a9766acaacfe1fad44bc3a4650165bc0fd9042fb45d52e85efaf5",
+    "wgbs/rmd/generate_result_report.R": "9ce1732fd3d4d344ed816e53edc2aec1e35a1b5c6a7379a1f75e7eb2a5a88ccf",
+    "wgbs/scripts/run_gene_methylation.R": "3c4bd55c8174855fb8019ef12e9ec20fab2ee36294d431acbc9f303ae40d197b",
+    "atac/rmd/01_main_setup.R": "f7634d7252d4a6c86c0c6d5694c82cb44dce4d30de8dc29ea44f5a14d9300f8b",
+    "atac/rmd/02_project_inventory.Rmd": "f21fa1a34198809f84145e59035cb1cc19f2898a56c4600f7790a56a116a4b2e",
+    "atac/rmd/03_atac_qc.Rmd": "fe66a280b3fa6bc79d93be59bcdc3d87f2d468ff442bffcf8c7a93a69aef9fd4",
+    "atac/rmd/04_peak_catalog_annotation.Rmd": "6f0fb545d56efc2ce14e9d6c328bccbc964ac4d7a4557a748eb0cbc7bf731b29",
+    "atac/rmd/05_differential_accessibility.Rmd": "cf9dc2f6423defa86700ed1bdbbf45c600f317e083227c56be98f9785a4a8e97",
+    "atac/rmd/06_genome_tracks.Rmd": "21c6b96b6e645e50a9b2be8d46720cc241733cf7bcd60032a07bbe5a3e16ba99",
+    "atac/rmd/07_peak_gene_enrichment.Rmd": "4e611ac4943d12bd0c8f8366ca581af3e9f0ba3c2ca1eee0e1261e8597c8a3c5",
+    "atac/rmd/08_motif_activity.Rmd": "36c17f7ea75b3db52534f17e42931e2e5a6c83756dd64053f152c1aa9e2237fe",
+    "atac/rmd/10_footprinting_tf_evidence.Rmd": "ec2892a10f979d19115836deffe685394224ad78c16b4971d07c9a09d1b5587b",
+    "atac/rmd/12_tf_gene_network.Rmd": "174119d3dce38c5324b3839d5c2b6f76982c468ecbcb0a0ec077b506571b5ea1",
+    "atac/rmd/13_conservation_gc.Rmd": "67ff7449bc8506abfda8f30c32ea7d038616415f37bec917ea59da542928f8ac",
+    "atac/rmd/14_machine_learning.Rmd": "931630b81c7fe16b2f9ae2215c3c51a3313074f1fcceb1352643e51046c53b25",
+    "atac/rmd/15_keygenes_locus_reports.Rmd": "7b555fdb4f262591b7dfc054192e6d6ae50dcb807e2720f1444ff96b7c20ae4c",
+    "atac/rmd/16_export_summary_manifest.Rmd": "76a4abf30ff6b156cf21f01dd78f398a47e536fb50fd4604bac8c2d1017e03ca",
+    "atac/rmd/generate_result_report.R": "f1c6472b72ab8de03b655579de3d4ca951bcdf65a908d7f24a604dbfe61710c5",
+    "atac/rmd/significance_helpers.R": "6afcf5a001ac117bad9f9609a7adce981f266595beae5e776bbcc7d38494d3bc",
+    "atac/scripts/run_counts.R": "d590ea71038723fb60f5e6f7bcd209ddb448e8d8fe02cd5d991133850ed51b76",
+    "atac/scripts/run_gene_candidates.R": "2c1a9fbf888a55280d4b4f7f06865bba42c3dcf2b0eae21b15afa0a6e69a6c7e",
+    "atac/scripts/run_module.R": "ea94f63839fa1219c9a1c5651ff9d32094b0e1286611486f12b7efc47a5e65b3",
+    "smallrnaseq/shared/R/common.R": "aad87183d1eb480f71fe31298ec3ebc6e0ced61bf969328493275bfd3e773c0c",
+    "smallrnaseq/shared/R/endosirna.R": "843ea7cd7c7bb5889ae38826cb2555edb5db1ed4d72eab8e3bcabf2043114638",
+    "smallrnaseq/shared/R/figure_contract.R": "a2278be86d9858913072982e57d1d61eabe9c1d010e42b80baa83dbd002ef9a4",
+    "smallrnaseq/shared/R/report_index.R": "9eee24eb5afe55315ced5e8b7ed4225e971b9d65bb3757449c5354c27e4a7df8",
+    "smallrnaseq/shared/R/run_analysis.R": "d7013e9fb8050059e4a61dd20c04571ec14eccee61c9f5f616cbcf14b133a917",
+    "smallrnaseq/shared/R/runtime.R": "9bb1bb42c546e08fbbf09283b8e4bfc936f860d34b42d98ade005058622d7e3a",
+    "smallrnaseq/shared/R/setup_homo.R": "d085e3ef50fc4d786f609d3693254527492e31ba9308bfd8090d2e57dd5c6855",
+    "smallrnaseq/shared/R/setup_mus.R": "e873b4aa3ee8066cdbd66f205bcc05733727722246f4c2693c7c9df0234e3ed8",
+    "smallrnaseq/shared/rmd/09_endo_compare.Rmd": "aa3abf7af8a7335a9b9aea7e75b0c860125e9b2290015854f0bfdd2997148c69",
+    "smallrnaseq/shared/rmd/homo/02_single_group.Rmd": "bc4c22e7671b07d74185544f647124f686009e6b1f4a371455aa4122796f5604",
+    "smallrnaseq/shared/rmd/homo/03_pca.Rmd": "164ba32e190b1ee1ced69ea700d6ddeb4d9bfb85fca0405c26f9d11471b8c08f",
+    "smallrnaseq/shared/rmd/homo/04_sncRNA_compare.Rmd": "2603f325abee2ddef445f9ff26006e3795110a7cd256c0fefee789cc410eaf91",
+    "smallrnaseq/shared/rmd/homo/05_tsrna_compare.Rmd": "924979a9e45838a19d45da3d4843084cd1eb24526836abe2734ef326ecc18a4e",
+    "smallrnaseq/shared/rmd/homo/06_rsrna_compare.Rmd": "d553b0a90b700229d17a0f3fd3c553c19e5a30ec3caf4e3e01248d0570dffd6a",
+    "smallrnaseq/shared/rmd/homo/07_mirna_compare.Rmd": "bd51b0c8c506877751878c8780dabacfb0555749aee6e0391fc6f718216644c0",
+    "smallrnaseq/shared/rmd/homo/08_pirna_compare.Rmd": "e2dd543b096b22e4da7c1937cc573c83ee0830955f0d72a0cba832be51cba6be",
+    "smallrnaseq/shared/rmd/homo/12_snrna_compare.Rmd": "23c8f4202af74edb8062bad58d4773d6993f2d70f52b52dafec7ce8a21518a78",
+    "smallrnaseq/shared/rmd/mus/02_single_group.Rmd": "45682ba69004de3d64e7451f3744e2b19871672b5cf4f97d1a865c89ab0c3c22",
+    "smallrnaseq/shared/rmd/mus/03_pca.Rmd": "0a1edbdd521b2fa6403b3fbc806660fdad2d7a603c20d4592829ecd060a687ec",
+    "smallrnaseq/shared/rmd/mus/04_sncRNA_compare.Rmd": "868171b5317c417ce2e2551027c55d5b1b7b05d153d5d26f98918c82f788707a",
+    "smallrnaseq/shared/rmd/mus/05_tsrna_compare.Rmd": "3aa8c5e8c21071108de6fd71d0d0e3bc410ddaf6567218d0e765f23b28925784",
+    "smallrnaseq/shared/rmd/mus/06_rsrna_compare.Rmd": "fff744887565cf0001561506198ac749b6372591b8fb66036211d810a1a0a414",
+    "smallrnaseq/shared/rmd/mus/07_mirna_compare.Rmd": "f3d0c1828bacbbd47c48faaafc5745a2513b35ac05a4392ec878ae21038c6038",
+    "smallrnaseq/shared/rmd/mus/08_pirna_compare.Rmd": "34d7a7cd87ecfe2fcd2a89e94dbd5942eb58e5dc787a3085b236e2d2234c8ccb",
+    "smallrnaseq/validation/stage_receipt_guard.R": "65302988c874d901f78d1fd1374d7b7567e9e2096f76489bac35e63879620dc4",
+    "metabolomics/R/metabo_core.R": "545c3a9423db56fc64f6f2eab271b80778a720e65ad628eb52be91b1af403fb6",
+    "metabolomics/R/template_contract.R": "c5ff2514ab90acea1b0551f8afa80672651cdf9fc95d5ab875dbdcdcbe488048",
+    "metabolomics/scripts/pipeline.R": "2d17c0b3e8e1f044476d83c657f8dd69d0cf5f81f1d1c328d6915e2cfeca900f",
+    "spatial_transcriptomics/rmd/01_main_setup.R": "5ac37df408415905bb8a619d9a3b5b5dc9b7bfc38b7127292cbd2aa4ddcc43eb",
+    "spatial_transcriptomics/rmd/02_qc_overview.Rmd": "df0daeda7cba9d0e852af536fafecad4fdeaf484720f4a9b6fab32cf59509835",
+    "spatial_transcriptomics/rmd/03_spatial_domains.Rmd": "f13d1dda885c2eba6711fd4ee5d2fd527943ce94c7cb0f090fa89ec455327254",
+    "spatial_transcriptomics/rmd/04_deconvolution_review.Rmd": "f036c93c3de6b475cd5c5b40f1ef89ae53be24b42a47979eb973ab36ef4cd6e2",
+    "spatial_transcriptomics/rmd/05_neighborhood_communication.Rmd": "6c4179ec9ce17f572b2f4671290bce45028cac0788704fc896ec10eacf0bd03e",
+    "spatial_transcriptomics/rmd/06_segment_programs.Rmd": "7ae2b3b52f5af1c01df5f3e3a43029380859de4d5f4e47a00a0719253974715c",
+    "spatial_transcriptomics/rmd/07_multi_sample_summary.Rmd": "56a67ca97fec0ba3a3291854e3d4cd6479444ff4f77ffb981639cca8280c4470",
+    "integration/method_comparison/shared/R/common.R": "aad87183d1eb480f71fe31298ec3ebc6e0ced61bf969328493275bfd3e773c0c",
+    "integration/method_comparison/shared/R/endosirna.R": "843ea7cd7c7bb5889ae38826cb2555edb5db1ed4d72eab8e3bcabf2043114638",
+    "integration/method_comparison/shared/R/figure_contract.R": "a2278be86d9858913072982e57d1d61eabe9c1d010e42b80baa83dbd002ef9a4",
+    "integration/method_comparison/shared/R/report_index.R": "596e7d556995cc4a68486b43af4d3942862f6f1f0280637e031f2c343930dc68",
+    "integration/method_comparison/shared/R/run_analysis.R": "e3d18e27daa2501afdc1aaa3ed1cc9bb080fb95cc35b8f817e38c43bd81b6f1c",
+    "integration/method_comparison/shared/R/runtime.R": "9bb1bb42c546e08fbbf09283b8e4bfc936f860d34b42d98ade005058622d7e3a",
+    "integration/method_comparison/shared/R/setup_homo.R": "2eb59521b7692640ebe2aaebd757510a391e96072fe1584b9d1f9a9518f43d38",
+    "integration/method_comparison/shared/rmd/homo/04_sncRNA_compare.Rmd": "2603f325abee2ddef445f9ff26006e3795110a7cd256c0fefee789cc410eaf91",
+    "integration/method_comparison/shared/rmd/homo/05_tsrna_compare.Rmd": "924979a9e45838a19d45da3d4843084cd1eb24526836abe2734ef326ecc18a4e",
+    "integration/method_comparison/shared/rmd/homo/06_rsrna_compare.Rmd": "d553b0a90b700229d17a0f3fd3c553c19e5a30ec3caf4e3e01248d0570dffd6a",
+    "integration/method_comparison/shared/rmd/homo/07_mirna_compare.Rmd": "bd51b0c8c506877751878c8780dabacfb0555749aee6e0391fc6f718216644c0",
+    "integration/method_comparison/shared/rmd/homo/08_pirna_compare.Rmd": "e2dd543b096b22e4da7c1937cc573c83ee0830955f0d72a0cba832be51cba6be",
+    "integration/method_comparison/shared/rmd/homo/09_differential_capture.Rmd": "897a20b717576b8db6c12f063250e9231fde16fd1d24de74d4697a1749bb8528",
+    "integration/method_comparison/shared/rmd/homo/10_capture_bias_diagnostics.Rmd": "078956e95cd8294c5e383a88e1a9e8955ed2a33d900e26e138c204619c668d51",
+    "integration/method_comparison/shared/rmd/homo/11_method_similarity.Rmd": "b2912b2ee9e2454ff09754851b540307e7b3d4e06e7a93a786b505923af92abc",
+    "integration/method_comparison/shared/rmd/homo/13_spikein_qc.Rmd": "a1729a6dde171d97bc83221ee31f592f719c6ba7b7691513c28c43f3bc2837a6",
+    "integration/scripts/annotate_programs.R": "95b2d1750b523caf1ca10077721c523224c02d8f710d305befad096876051ecc",
+    "integration/scripts/overlap_regions.R": "a3d0188e6dc01b24ed337d923fcbbe57bb61e9c1b00e561b7e9eb49d1e444dfc"
+  },
+  "git_diff_check": 0,
+  "git_diff_errors": "",
+  "boundary": "当前语法检查；不证明生产数据重跑。旧来源校验见 history/20260929。"
+}

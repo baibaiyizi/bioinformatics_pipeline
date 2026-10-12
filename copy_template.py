@@ -11,18 +11,21 @@ ROOT = Path(__file__).resolve().parent
 
 
 def copy_template(module: str, destination: Path):
-    source = ROOT / module
-    if Path(module).name != module or not (source / "README.md").is_file():
-        raise ValueError("请提供模板库中的单个模块名称")
-    if destination.exists():
+    requested = Path(module)
+    source = (ROOT / requested).resolve()
+    if requested.is_absolute() or ".." in requested.parts or source == ROOT or not source.is_relative_to(ROOT) or not (source / "README.md").is_file():
+        raise ValueError("请提供模板库内的模块或子模块，如 integration/method_comparison")
+    if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"目标已存在，拒绝覆盖: {destination}")
     destination = destination.resolve()
     if destination.is_relative_to(ROOT):
         raise ValueError("项目副本应位于模板库之外")
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain", "--", module], cwd=ROOT))
-    shutil.copytree(source, destination, symlinks=True,
-                    ignore=shutil.ignore_patterns(".git", ".venv*", "__pycache__", ".cache", ".pytest_cache", "result", "runs", "history"))
+    excluded = [".git", ".venv*", "__pycache__", ".cache", ".pytest_cache", ".maintenance", "result", "runs", "history", ".archive", "archive"]
+    if requested == Path("integration"):
+        excluded.append("method_comparison")  # 独立能力按需复制，不给其他课题加入空方法比较模块。
+    shutil.copytree(source, destination, symlinks=True, ignore=shutil.ignore_patterns(*excluded))
     with (destination / "template_snapshot.tsv").open("w") as out:
         writer = csv.writer(out, delimiter="\t", lineterminator="\n")
         writer.writerow(["module", "source_commit", "source_dirty", "relative_path", "sha256"])

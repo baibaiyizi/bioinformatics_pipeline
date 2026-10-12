@@ -4,7 +4,7 @@
 
 ```{r footprint_cache_gate, include=FALSE}
 if(isTRUE(reuse_step_tables) && file.exists(cache_10_footprint_state_path)) {
-  required_footprint_schema_version <- "tobias_sha256_required_v3"
+  required_footprint_schema_version <- "pure_atac_tobias_v4"
   footprint_cached_payload <- load_state("10_footprint_state.rds", env = globalenv(), required = FALSE)
   cache_has_footprint_schema <- !is.null(footprint_cached_payload) &&
     identical(validate_bindetect_provenance()$Status[1], "VERIFIED") && exists("footprint_schema_version") &&
@@ -22,7 +22,7 @@ if(isTRUE(reuse_step_tables) && file.exists(cache_10_footprint_state_path)) {
   }
   report_status("WARN", "Existing footprint cache predates TOBIAS-required evidence rules; recomputing module 11.")
 }
-required_footprint_schema_version <- "tobias_sha256_required_v3"
+required_footprint_schema_version <- "pure_atac_tobias_v4"
 footprint_schema_version <- required_footprint_schema_version
 ```
 
@@ -62,8 +62,7 @@ if(!is.null(bindetect_df) && nrow(bindetect_df) > 0 &&
 } else if(!is.null(bindetect_df) && nrow(bindetect_df) > 0) {
   footprint_regulator_tbl <- build_footprint_regulator_evidence(
     bindetect_df = bindetect_df,
-    motif_df = if(exists("motif_res")) motif_res else NULL,
-    de_gene_df = if(exists("de_genes")) de_genes else NULL
+    motif_df = if(exists("motif_res")) motif_res else NULL
   )
 
   write.csv(footprint_regulator_tbl,
@@ -493,7 +492,6 @@ if(!is.null(bindetect_df) && nrow(bindetect_df) > 0 && nrow(site_summary_df) > 0
   footprint_regulator_tbl <- build_footprint_regulator_evidence(
     bindetect_df = bindetect_df,
     motif_df = if(exists("motif_res")) motif_res else NULL,
-    de_gene_df = if(exists("de_genes")) de_genes else NULL,
     site_summary_df = site_summary_df
   )
   write.csv(footprint_regulator_tbl,
@@ -603,318 +601,23 @@ if(!is.null(footprint_supported) && nrow(footprint_supported$motif_summary) > 0)
 }
 ```
 
-## 12.3 TF-gene concordance summary
+## ATAC 内部 TF 证据与靶位点
 
-把 `motif enrichment`、`motif activity`、`footprint evidence` 与 `target gene / RNA support` 压成一张 TF 摘要表，避免只剩网络图而没有可以直接讲的排序结果。
+差异结合仅使用来源验证通过的 BINDetect。Motif 位点关联支持潜在靶基因，不能据此确认调控关系。
 
-```{r tf_gene_concordance_summary, fig.width=13, fig.height=7}
-tf_target_concordance <- data.frame()
-tf_evidence_matrix <- data.frame()
-
-motif_tbl_step9 <- if(exists("motif_res")) motif_res else read_step_table("Step8", "Motif_Enrichment.csv")
-motif_activity_tbl_step9 <- if(exists("motif_activity_summary")) motif_activity_summary else read_step_table("Step8", "Motif_Activity_Summary.csv")
-bindetect_tbl_step9 <- if(exists("footprint_regulator_tbl")) footprint_regulator_tbl else read_step_table("Step10", "Footprint_Regulator_Evidence.csv")
+```{r atac_tf_target_summary}
 footprint_edges_tbl <- read_step_table("Step10", "Footprint_Supported_Motif_Target_Edges.csv")
-gene_priority_tbl <- if(exists("multiomics_candidates")) multiomics_candidates else read_step_table("Step9", "Multiomics_Gene_Priority_Table.csv")
-gene_priority_tbl <- ensure_columns(gene_priority_tbl, list(
-  geneSymbol = NA_character_,
-  RNA_log2FC = NA_real_,
-  IntegratedPriorityScore = NA_real_
-))
-
-if(nrow(bindetect_tbl_step9) > 0 && identical(bindetect_provenance_status$Status[1], "VERIFIED")) {
-  motif_support_tbl <- if(nrow(motif_tbl_step9) > 0) {
-    motif_tbl_step9 %>%
-      group_by(motif_name) %>%
-      summarise(
-        MotifCount = max(count, na.rm = TRUE),
-        MotifFreq = max(freq, na.rm = TRUE),
-        .groups = "drop"
-      )
-  } else {
-    tibble(
-      motif_name = character(),
-      MotifCount = numeric(),
-      MotifFreq = numeric()
-    )
+if(nrow(footprint_edges_tbl) > 0) {
+  tf_target_concordance <- footprint_edges_tbl %>% group_by(motif_name) %>%
+    summarise(TargetGeneCount = n_distinct(geneSymbol), SupportingPeakCount = sum(SupportingPeakCount), .groups = "drop")
+  if(nrow(footprint_regulator_tbl) > 0) {
+    tf_target_concordance <- left_join(tf_target_concordance, footprint_regulator_tbl, by = "motif_name")
   }
-
-  activity_support_tbl <- if(nrow(motif_activity_tbl_step9) > 0) {
-    motif_activity_tbl_step9 %>%
-      dplyr::select(motif_name, MotifActivityDelta = GroupMeanDifference, MotifActivityMethod = Method) %>%
-      distinct()
-  } else {
-    tibble(
-      motif_name = character(),
-      MotifActivityDelta = numeric(),
-      MotifActivityMethod = character()
-    )
-  }
-
-  target_support_tbl <- if(nrow(footprint_edges_tbl) > 0) {
-    footprint_edges_tbl %>%
-      left_join(
-        gene_priority_tbl %>%
-          dplyr::select(geneSymbol, RNA_log2FC, IntegratedPriorityScore),
-        by = "geneSymbol"
-      ) %>%
-      group_by(motif_name) %>%
-      summarise(
-        TargetGeneCount = n_distinct(geneSymbol),
-        RNA_SupportedTargetCount = sum(!is.na(RNA_log2FC) & abs(RNA_log2FC) > 0.58, na.rm = TRUE),
-        MeanTargetRNAlog2FC = mean(RNA_log2FC, na.rm = TRUE),
-        MeanTargetPriority = mean(IntegratedPriorityScore, na.rm = TRUE),
-        .groups = "drop"
-      )
-  } else {
-    tibble(
-      motif_name = character(),
-      TargetGeneCount = integer(),
-      RNA_SupportedTargetCount = integer(),
-      MeanTargetRNAlog2FC = numeric(),
-      MeanTargetPriority = numeric()
-    )
-  }
-
-  tf_target_concordance <- bindetect_tbl_step9 %>%
-    dplyr::select(
-      motif_name,
-      direction,
-      change_value,
-      pvalue_value,
-      FootprintEvidenceScore = IntegratedEvidenceScore,
-      EvidenceTier,
-      total_tfbs
-    ) %>%
-    filter(!is.na(motif_name), motif_name != "") %>%
-    arrange(
-      desc(FootprintEvidenceScore),
-      pvalue_value,
-      desc(abs(change_value)),
-      desc(total_tfbs),
-      motif_name
-    ) %>%
-    distinct(motif_name, .keep_all = TRUE) %>%
-    full_join(motif_support_tbl, by = "motif_name") %>%
-    full_join(activity_support_tbl, by = "motif_name") %>%
-    full_join(target_support_tbl, by = "motif_name") %>%
-    mutate(
-      direction = case_when(
-        !is.na(direction) ~ direction,
-        !is.na(MotifActivityDelta) & MotifActivityDelta > 0 ~ "Comparison_gain",
-        !is.na(MotifActivityDelta) & MotifActivityDelta < 0 ~ "Reference_gain",
-        TRUE ~ "NS"
-      ),
-      MotifFreq = replace_na(MotifFreq, 0),
-      MotifCount = replace_na(MotifCount, 0),
-      MotifActivityDelta = replace_na(MotifActivityDelta, 0),
-      TargetGeneCount = replace_na(TargetGeneCount, 0),
-      RNA_SupportedTargetCount = replace_na(RNA_SupportedTargetCount, 0),
-      MeanTargetPriority = replace_na(MeanTargetPriority, 0),
-      FootprintEvidenceScore = replace_na(FootprintEvidenceScore, 0),
-      MotifEvidenceScore = pmin(2.5, MotifFreq * 3 + log10(MotifCount + 1)),
-      ActivityEvidenceScore = pmin(2.5, abs(MotifActivityDelta) * 2),
-      TargetEvidenceScore = pmin(2.5, log10(TargetGeneCount + 1) + RNA_SupportedTargetCount / 5),
-      RNAEvidenceScore = pmin(2, MeanTargetPriority / 4),
-      TFGeneConcordanceScore = round(
-        FootprintEvidenceScore + MotifEvidenceScore + ActivityEvidenceScore + TargetEvidenceScore + RNAEvidenceScore,
-        2
-      )
-    ) %>%
-    arrange(desc(TFGeneConcordanceScore), desc(TargetGeneCount), pvalue_value)
-
   save_step_table(tf_target_concordance, "Step10", "TF_Gene_Concordance_Summary.csv")
-  tf_evidence_matrix <- tf_target_concordance %>%
-    transmute(
-      motif_name,
-      direction,
-      DifferentialBindingScore = replace_na(change_value, 0),
-      FootprintStrength = replace_na(FootprintEvidenceScore, 0),
-      MotifEnrichment = replace_na(MotifEvidenceScore, 0),
-      MotifActivity = replace_na(ActivityEvidenceScore, 0),
-      TargetSupport = replace_na(TargetEvidenceScore, 0),
-      RNASupport = replace_na(RNAEvidenceScore, 0),
-      TotalEvidence = replace_na(TFGeneConcordanceScore, 0),
-      TargetGeneCount = replace_na(TargetGeneCount, 0),
-      RNA_SupportedTargetCount = replace_na(RNA_SupportedTargetCount, 0)
-    ) %>%
-    arrange(desc(TotalEvidence), desc(TargetGeneCount), desc(FootprintStrength))
-  save_step_table(tf_evidence_matrix, "Step10", "TF_Evidence_Matrix.csv")
-
-  if(nrow(tf_target_concordance) > 0 && should_render_plots()) {
-    top_tf_target <- tf_target_concordance %>%
-      filter(direction != "NS" | TFGeneConcordanceScore > 0) %>%
-      slice_head(n = 20)
-
-    p_tf_rank <- ggplot(
-      top_tf_target,
-      aes(x = reorder(motif_name, TFGeneConcordanceScore), y = TFGeneConcordanceScore, fill = direction)
-    ) +
-      geom_col(width = 0.72) +
-      coord_flip() +
-      scale_fill_manual(values = pal_named(
-        Comparison_gain = viz_pal$group[comparison_group],
-        Reference_gain = viz_pal$group[reference_group],
-        NS = viz_pal$neutral_mid
-      )) +
-      theme_atac_classic(base_size = 12) +
-      labs(title = "Top TF-gene concordance summary", x = NULL, y = "Integrated TF-gene evidence", fill = "Direction")
-
-    p_tf_bubble <- ggplot(
-      top_tf_target,
-      aes(x = TargetGeneCount, y = TFGeneConcordanceScore, size = RNA_SupportedTargetCount, color = direction)
-    ) +
-      geom_point(alpha = 0.82) +
-      geom_text_repel(aes(label = motif_name), size = 3, max.overlaps = 30) +
-      scale_color_manual(values = pal_named(
-        Comparison_gain = viz_pal$group[comparison_group],
-        Reference_gain = viz_pal$group[reference_group],
-        NS = viz_pal$neutral_mid
-      )) +
-      theme_atac_classic(base_size = 12) +
-      labs(title = "TF evidence vs supported target genes", x = "Supported target gene count", y = "Integrated TF-gene evidence", size = "RNA-supported targets", color = "Direction")
-
-    save_plot_pdf(p_tf_rank + p_tf_bubble, step_plot_file("Step10", "Top_TF_Target_Concordance.pdf"), width = 13, height = 7)
-  }
+  save_step_table(footprint_edges_tbl, "Step10", "TF_Target_Module_Edges.csv")
 } else {
-  write_skipped_state("Step10", "TF_Gene_Concordance", "No provenance-verified BINDetect binding evidence; motif enrichment alone is not differential TF binding.")
+  write_skipped_state("Step10", "TF_Gene_Concordance", "No provenance-verified binding/motif-site target input; no inferred pseudo-target network.")
 }
-```
-
-## 12.4 TF evidence matrix and confidence maps
-
-把 `motif enrichment`、`motif activity`、`footprint`、`target support`、`RNA support` 收成机制层的统一矩阵和摘要图。
-
-```{r tf_evidence_matrix_plots, fig.width=13, fig.height=8}
-tf_evidence_matrix <- if(exists("tf_evidence_matrix")) tf_evidence_matrix else read_step_table("Step10", "TF_Evidence_Matrix.csv")
-tf_target_concordance <- if(exists("tf_target_concordance")) tf_target_concordance else read_step_table("Step10", "TF_Gene_Concordance_Summary.csv")
-footprint_edges_tbl <- if(exists("footprint_edges_tbl")) footprint_edges_tbl else read_step_table("Step10", "Footprint_Supported_Motif_Target_Edges.csv")
-gene_priority_tbl_step9 <- if(exists("gene_priority_tbl")) gene_priority_tbl else read_step_table("Step9", "Multiomics_Gene_Priority_Table.csv")
-gene_priority_tbl_step9 <- ensure_columns(gene_priority_tbl_step9, list(
-  geneSymbol = NA_character_,
-  IntegratedPriorityScore = NA_real_
-))
-
-if(nrow(tf_evidence_matrix) > 0 && should_render_plots()) {
-  top_tf_matrix <- tf_evidence_matrix %>%
-    filter(!is.na(motif_name), motif_name != "") %>%
-    slice_head(n = 25)
-
-  tf_matrix_long <- top_tf_matrix %>%
-    dplyr::select(motif_name, FootprintStrength, MotifEnrichment, MotifActivity, TargetSupport, RNASupport) %>%
-    pivot_longer(cols = -motif_name, names_to = "EvidenceType", values_to = "EvidenceValue") %>%
-    group_by(EvidenceType) %>%
-    mutate(
-      ScaledEvidence = ifelse(max(abs(EvidenceValue), na.rm = TRUE) > 0, EvidenceValue / max(abs(EvidenceValue), na.rm = TRUE), 0)
-    ) %>%
-    ungroup() %>%
-    mutate(
-      motif_name = factor(motif_name, levels = rev(top_tf_matrix$motif_name)),
-      EvidenceType = factor(EvidenceType, levels = c("MotifEnrichment", "MotifActivity", "FootprintStrength", "TargetSupport", "RNASupport"))
-    )
-
-  p_tf_matrix <- ggplot(tf_matrix_long, aes(x = EvidenceType, y = motif_name, fill = ScaledEvidence)) +
-    geom_tile(color = viz_pal$neutral["light"], linewidth = 0.25) +
-    scale_fill_heatmap_diverging(midpoint = 0) +
-    theme_atac_classic(base_size = 12) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-    labs(
-      title = "TF evidence matrix",
-      subtitle = "Mechanism-layer evidence integrated across motif, activity, footprint and targets",
-      x = NULL,
-      y = NULL,
-      fill = "Scaled evidence"
-    )
-  save_plot_pdf(p_tf_matrix, step_plot_file("Step10", "TF_Evidence_Matrix.pdf"), width = 10, height = 9)
-
-  p_tf_quadrant <- ggplot(
-    top_tf_matrix,
-    aes(x = MotifActivity, y = FootprintStrength, size = TargetGeneCount, color = direction)
-  ) +
-    geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
-    geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral_dark) +
-    geom_point(alpha = 0.84) +
-    geom_text_repel(aes(label = motif_name), size = 3, max.overlaps = 35) +
-    scale_color_manual(values = pal_named(
-      Comparison_gain = viz_pal$group[comparison_group],
-      Reference_gain = viz_pal$group[reference_group],
-      NS = viz_pal$neutral_mid
-    )) +
-    theme_atac_classic(base_size = 12) +
-    labs(
-      title = "TF confidence quadrant",
-      x = "Motif activity evidence",
-      y = "Footprint evidence",
-      size = "Target gene count",
-      color = "Direction"
-    )
-  save_plot_pdf(p_tf_quadrant, step_plot_file("Step10", "TF_Confidence_Quadrant.pdf"), width = 9, height = 7)
-
-  if(nrow(footprint_edges_tbl) > 0 && nrow(gene_priority_tbl_step9) > 0) {
-    top_tf_names <- top_tf_matrix %>% slice_head(n = 8) %>% pull(motif_name)
-    top_gene_names <- gene_priority_tbl_step9 %>%
-      filter(!is.na(geneSymbol), geneSymbol != "") %>%
-      arrange(desc(IntegratedPriorityScore), RNA_pvalue) %>%
-      slice_head(n = 20) %>%
-      pull(geneSymbol)
-
-    module_edges <- footprint_edges_tbl %>%
-      filter(motif_name %in% top_tf_names, geneSymbol %in% top_gene_names) %>%
-      distinct(motif_name, geneSymbol)
-
-    if(nrow(module_edges) > 0) {
-      save_step_table(module_edges, "Step10", "TF_Target_Module_Edges.csv")
-      tf_nodes <- data.frame(name = unique(module_edges$motif_name), type = "TF", stringsAsFactors = FALSE)
-      gene_nodes <- data.frame(name = unique(module_edges$geneSymbol), type = "Gene", stringsAsFactors = FALSE)
-      graph_nodes <- bind_rows(tf_nodes, gene_nodes) %>% distinct(name, .keep_all = TRUE)
-      graph_edges <- module_edges %>% rename(from = motif_name, to = geneSymbol)
-      g_tf_module <- igraph::graph_from_data_frame(graph_edges, directed = FALSE, vertices = graph_nodes)
-
-      set.seed(1)
-      p_tf_module <- ggraph::ggraph(g_tf_module, layout = "fr") +
-        ggraph::geom_edge_link(alpha = 0.18, color = viz_pal$neutral_dark) +
-        ggraph::geom_node_point(aes(color = type, size = type)) +
-        ggraph::geom_node_text(aes(label = name), repel = TRUE, size = 3) +
-        scale_color_manual(values = c(TF = pal_pick(viz_pal$group[comparison_group]), Gene = pal_pick(viz_pal$group[reference_group]))) +
-        scale_size_manual(values = c(TF = 5.5, Gene = 3.2)) +
-        theme_void() +
-        labs(title = "TF-target module summary", color = "Node type", size = "Node type")
-      save_plot_pdf(
-        p_tf_module,
-        step_plot_file("Step10", "TF_Target_Module_Summary.pdf"),
-        width = 11,
-        height = 8,
-        coordinate_system = "none"
-      )
-    }
-  }
-} else {
-  write_skipped_state(
-    "Step10",
-    "TF_Evidence_Matrix",
-    "Missing TF concordance inputs for matrix/quadrant/module plots.",
-    clear_plot_files = c(
-      "TF_Evidence_Matrix.pdf",
-      "TF_Confidence_Quadrant.pdf",
-      "TF_Target_Module_Summary.pdf"
-    )
-  )
-}
-```
-
-```{r footprint_module_status_plot, include=FALSE}
-write_module_status_plot("Step10", "Module 10 footprinting and TF evidence status")
-```
-
-```{r save_footprint_state, include=FALSE}
-save_state(
-  "10_footprint_state.rds",
-  c(
-    "bindetect_df", "footprint_regulator_tbl", "motifs_to_prioritize",
-    "footprint_schema_version",
-    "footprint_profile_summary", "motif_sites", "footprint_supported",
-    "tf_target_concordance", "tf_evidence_matrix",
-    "footprint_edges_tbl", "module_edges"
-  )
-)
+write_module_status_plot("Step10", "Module 10 footprinting and ATAC TF evidence status")
+save_state("10_footprint_state.rds", c("bindetect_df", "footprint_regulator_tbl", "motifs_to_prioritize", "footprint_schema_version", "footprint_profile_summary", "motif_sites", "footprint_supported", "footprint_edges_tbl"))
 ```

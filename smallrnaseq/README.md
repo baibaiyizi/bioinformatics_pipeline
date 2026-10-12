@@ -26,7 +26,7 @@ bash run.sh --project MII --stage differential --modules mirna
 
 `PROJECT_SPECIES` 必须显式为 `Mus musculus` 或 `Homo sapiens`，`RUN_ENDOSIRNA` 必须显式为 `0` 或 `1`；模式只由该字段确定。鼠使用 `SPORTS_LAYOUT=nested`，人使用 `flat`。参考映射格式为 `ENDOSIRNA_REFS='标签=相对FASTA前缀;标签2=相对前缀2'`，前缀不含 `.fa/.fasta`。
 
-阶段为 `upstream、describe、differential、enrichment`。默认仅 describe；差异与富集需要明确选择且满足真实设计。语义模块为 `qc、pca、sncrna、tsrna、rsrna、mirna、pirna`；启用 endo 增加 `endo`；人类增加 `snrna`，method_capture 设计增加 `similarity、spikein、capture、capture_bias`。少于 3 个库不调度 PCA；人类目前没有 enrichment 阶段。
+阶段为 `upstream、describe、differential、enrichment`。默认仅 describe；差异与富集需要明确选择且满足真实设计。语义模块为 `qc、pca、sncrna、tsrna、rsrna、mirna、pirna`；启用 endo 增加 `endo`；人类增加 `snrna`；人类方法比较从 `templates/integration/method_comparison` 复制到项目物种目录的联合分析中维护。单组学入口不再执行 `similarity、spikein、capture、capture_bias`。少于 3 个库不调度 PCA；人类目前没有 enrichment 阶段。
 
 共同分类与原分析算法保持不变。endo 候选必须为 21–24 nt、宿主基因组匹配、参考全长零错配双向匹配，且原注释允许转类；显式 sncRNA 冲突保留原分类。候选资格不证明 Dicer/AGO2 依赖或功能。PN5 不默认剔除优势 18 nt 序列。SPORTS 分数分配和 reads 守恒继续审计；母类与子集不可重复累加。
 
@@ -41,4 +41,4 @@ python3 scripts/make_fixture.py --output '/tmp/my smallrna fixture' --species Ho
 bash '/tmp/my smallrna fixture/run.sh' --project . --stage describe --modules sncrna,endo
 ```
 
-合成生成器自建 SPORTS/参考/endo 表，不读取真实项目。它用于验证路径、互斥分类和冲突边界，不能证明原始 FASTQ 上游已经复现。执行结果与未跑边界见 [VALIDATION.md](VALIDATION.md)。
+合成生成器自建 SPORTS/参考/endo 表，不读取真实项目。它用于验证路径、互斥分类和冲突边界，不能证明原始 FASTQ 上游已经复现。执行结果与未跑边界见 [VALIDATION.md](docs/VALIDATION.md)。

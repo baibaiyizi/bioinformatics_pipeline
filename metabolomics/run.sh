@@ -22,7 +22,7 @@ shift || true
 
 case "${MODE}" in
   all)
-    "${RSCRIPT_BIN:-Rscript}" "${ROOT_DIR}/pipeline.R" --config "${CONFIG_FILE}" --module all "$@"
+    "${RSCRIPT_BIN:-Rscript}" "${ROOT_DIR}/scripts/pipeline.R" --config "${CONFIG_FILE}" --module all "$@"
     ;;
   first)
     METABO_CONFIG_FILE="${CONFIG_FILE}" bash "${ROOT_DIR}/metabo_first.sh" "$@"
@@ -31,7 +31,7 @@ case "${MODE}" in
     METABO_CONFIG_FILE="${CONFIG_FILE}" bash "${ROOT_DIR}/metabo_second.sh" "$@"
     ;;
   check)
-    "${RSCRIPT_BIN:-Rscript}" "${ROOT_DIR}/pipeline.R" --config "${CONFIG_FILE}" --check "$@"
+    "${RSCRIPT_BIN:-Rscript}" "${ROOT_DIR}/scripts/pipeline.R" --config "${CONFIG_FILE}" --check "$@"
     ;;
   -h|--help) usage ;;
   *) echo "Unknown mode: ${MODE}" >&2; usage >&2; exit 1 ;;

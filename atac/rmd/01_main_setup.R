@@ -237,8 +237,6 @@ rename <- dplyr::rename
 
 # --- 路径配置 ---
 work_dir <- resolve_dir(params$work_dir, getwd())
-rna_seq_dir <- if(nzchar(Sys.getenv("ATAC_RNA_DE_FILE"))) dirname(Sys.getenv("ATAC_RNA_DE_FILE")) else ""
-wgbs_dir <- if(nzchar(Sys.getenv("ATAC_WGBS_DMR_FILE"))) dirname(Sys.getenv("ATAC_WGBS_DMR_FILE")) else ""
 grcm39_reference_dir <- Sys.getenv("REF_DIR")
 if(!nzchar(grcm39_reference_dir)) stop("请通过 run_rmd.sh 加载 config/project.env")
 reference_dir <- dirname(grcm39_reference_dir)
@@ -354,8 +352,6 @@ report_status(
     if(atac_primary_require_fc) paste0("enabled at |log2FC| >= ", round(atac_diff_log2fc_cutoff, 3)) else "disabled"
   )
 )
-report_status("INFO", paste("RNA-seq dir:", rna_seq_dir))
-report_status("INFO", paste("WGBS dir:", wgbs_dir))
 
 # 样本信息
 resolve_atac_path <- function(path_value, root_dir = work_dir) {
@@ -524,6 +520,7 @@ analysis_signature_inputs <- file_freshness_record(c(
   list.files(rmd_dir, pattern = "\\.(R|Rmd)$", full.names = TRUE)
 ))
 analysis_signature_config <- c(
+  assay_scope_version = "pure_atac_v1",
   significance_mode = atac_significance_mode,
   significance_column = atac_significance_column,
   primary_p_cutoff = format(atac_primary_p_cutoff, digits = 16),
@@ -564,7 +561,7 @@ if(file.exists(blacklist_file)) {
   report_status("WARN", "Blacklist 文件未找到；不能声称已完成 blacklist 过滤。")
 }
 
-step_dirs <- paste0("Step", 2:16)
+step_dirs <- paste0("Step", c(2:8, 10, 12:16))
 step_output_dirs <- stats::setNames(
   c(
     "02_project_inventory",
@@ -574,9 +571,7 @@ step_output_dirs <- stats::setNames(
     "06_genome_tracks",
     "07_peak_gene_enrichment",
     "08_motif_activity",
-    "09_rna_multiomics",
     "10_footprinting_tf_evidence",
-    "11_wgbs_integration",
     "12_tf_gene_network",
     "13_sequence_conservation_gc",
     "14_machine_learning",
@@ -1167,8 +1162,8 @@ read_consensus_count_library_size <- function() {
 
 build_stepwise_result_view <- function(result_dir = result_dir) {
   step_info <- data.frame(
-    Module = sprintf("Module%02d", 2:16),
-    Directory = unname(step_output_dirs[paste0("Step", 2:16)]),
+    Module = sprintf("Module%02d", c(2:8, 10, 12:16)),
+    Directory = unname(step_output_dirs[paste0("Step", c(2:8, 10, 12:16))]),
     Title = c(
       "Project inventory and run context",
       "ATAC sample QC and integrated grading",
@@ -1177,9 +1172,7 @@ build_stepwise_result_view <- function(result_dir = result_dir) {
       "Genome tracks",
       "Peak-associated gene enrichment",
       "Motif enrichment and activity",
-      "RNA multi-omics integration",
       "Footprinting and TF evidence",
-      "WGBS integration",
       "TF-gene network evidence",
       "Sequence conservation and GC context",
       "Machine-learning feature ranking",
@@ -1194,9 +1187,7 @@ build_stepwise_result_view <- function(result_dir = result_dir) {
       "Representative genome-browser style tracks for top differential accessibility loci.",
       "Gene annotation and GO/KEGG enrichment for differential peak-associated genes.",
       "Motif enrichment, motif activity, and direction-aware TF motif evidence.",
-      "ATAC-RNA overlap, distal peak-gene links, WGCNA/splicing support, and evidence-weighted candidate scores.",
       "TOBIAS/internal footprint profiles, motif binding-site summaries, and regulator evidence.",
-      "ATAC-WGBS overlap, gene-centric methylation support, Ensembl-first joins, and WGBS evidence scores.",
       "TF-target network outputs and footprint-supported regulator/gene summaries.",
       "Conservation, GC-bias, and high-GC peak context for differential regions.",
       "Supervised modelling eligibility and NO-GO status; no model fitted under the current sample design.",
@@ -1481,77 +1472,11 @@ first_existing_file <- function(candidates) {
   existing[1]
 }
 
-get_rna_input_specs <- function(...) {
-  list(
-    RNA_DE_Annotated = list(paths = Sys.getenv("ATAC_RNA_DE_FILE"), required = c("gene_id", "ensembl_id", "log2FoldChange", "pvalue", "padj", "ENTREZID", "sampleA", "sampleB")),
-    RNA_Expression_Matrix = list(paths = Sys.getenv("ATAC_RNA_EXPRESSION_FILE"), required = c()),
-    RNA_WGCNA_Module = list(paths = Sys.getenv("ATAC_RNA_WGCNA_MODULE_FILE"), required = c("ENTREZID", "module_label")),
-    RNA_WGCNA_Trait = list(paths = Sys.getenv("ATAC_RNA_WGCNA_TRAIT_FILE"), required = c("Module", "correlation", "pvalue", "module_size")),
-    RNA_Splicing_Candidates = list(paths = Sys.getenv("ATAC_RNA_SPLICING_FILE"), required = c("candidate_priority", "candidate_status")),
-    RNA_GSEA_KEGG = list(paths = Sys.getenv("ATAC_RNA_GSEA_FILE"), required = c("Description", "NES", "pvalue", "core_enrichment"))
-  )
-}
-get_wgbs_input_specs <- function(...) {
-  list(
-    WGBS_DMR_Annotated = list(paths = Sys.getenv("ATAC_WGBS_DMR_FILE"), required = c("seqnames", "start", "end", "diffMethy", "group1_label", "group2_label")),
-    WGBS_Gene_Centric_Wide = list(paths = Sys.getenv("ATAC_WGBS_GENE_FILE"), required = c("gene_id_clean", "SYMBOL", "diffMethy_Promoter")),
-    WGBS_RNA_KEGG_Comparison = list(paths = Sys.getenv("ATAC_WGBS_KEGG_FILE"), required = c("Description", "NES", "p.adjust", "core_enrichment")),
-    WGBS_Representative_Loci = list(paths = Sys.getenv("ATAC_WGBS_LOCI_FILE"), required = c("SYMBOL"))
-  )
-}
 
-external_input_path <- function(specs, input_name) {
-  if(is.null(specs[[input_name]])) return(NA_character_)
-  first_existing_file(specs[[input_name]]$paths)
-}
 
-get_rna_input_path <- function(input_name) {
-  external_input_path(get_rna_input_specs(), input_name)
-}
 
-get_wgbs_input_path <- function(input_name) {
-  external_input_path(get_wgbs_input_specs(), input_name)
-}
 
-read_rna_expression_matrix <- function(path) {
-  if(is.na(path) || !file.exists(path) || dir.exists(path)) return(NULL)
-  expr_mat <- read.delim(path, row.names = 1, check.names = FALSE, stringsAsFactors = FALSE)
-  expr_mat <- as.matrix(expr_mat)
-  storage.mode(expr_mat) <- "numeric"
-  rownames(expr_mat) <- sub("\\..*$", "", rownames(expr_mat))
-  expr_mat
-}
 
-summarise_rna_expression_by_group <- function(expr_mat, baseline = baseline_group, treatment = treatment_group) {
-  if(is.null(expr_mat) || nrow(expr_mat) == 0 || ncol(expr_mat) == 0) {
-    return(data.frame(
-      ensembl_id = character(),
-      RNA_MeanExpr_Reference = numeric(),
-      RNA_MeanExpr_Comparison = numeric(),
-      RNA_Expr_Delta = numeric(),
-      stringsAsFactors = FALSE
-    ))
-  }
-  expr_groups <- sample_group(colnames(expr_mat))
-  baseline_cols <- colnames(expr_mat)[expr_groups == baseline]
-  treatment_cols <- colnames(expr_mat)[expr_groups == treatment]
-  if(length(baseline_cols) == 0 || length(treatment_cols) == 0) {
-    return(data.frame(
-      ensembl_id = character(),
-      RNA_MeanExpr_Reference = numeric(),
-      RNA_MeanExpr_Comparison = numeric(),
-      RNA_Expr_Delta = numeric(),
-      stringsAsFactors = FALSE
-    ))
-  }
-  data.frame(
-    ensembl_id = rownames(expr_mat),
-    RNA_MeanExpr_Reference = rowMeans(expr_mat[, baseline_cols, drop = FALSE], na.rm = TRUE),
-    RNA_MeanExpr_Comparison = rowMeans(expr_mat[, treatment_cols, drop = FALSE], na.rm = TRUE),
-    stringsAsFactors = FALSE
-  ) %>%
-    mutate(RNA_Expr_Delta = RNA_MeanExpr_Comparison - RNA_MeanExpr_Reference)
-}
 
 read_table_header <- function(path) {
   if(is.na(path) || !file.exists(path) || dir.exists(path)) return(character())
@@ -1569,35 +1494,7 @@ count_file_rows <- function(path) {
   suppressWarnings(as.integer(strsplit(trimws(out[1]), "\\s+")[[1]][1]))
 }
 
-audit_external_input_specs <- function(source_name, specs) {
-  bind_rows(lapply(names(specs), function(input_name) {
-    spec <- specs[[input_name]]
-    selected <- first_existing_file(spec$paths)
-    if(is.na(selected) && length(spec$paths) > 0) selected <- spec$paths[1]
-    header <- read_table_header(selected)
-    required <- unique(as.character(spec$required %||% character()))
-    missing <- setdiff(required, header)
-    data.frame(
-      Source = source_name,
-      Input = input_name,
-      AnalysisUnit = as.character(spec$analysis_unit %||% "See assay-specific source metadata"),
-      Path = selected,
-      Exists = !is.na(selected) && file.exists(selected) && !dir.exists(selected),
-      RowCount = count_file_rows(selected),
-      RequiredColumns = paste(required, collapse = ";"),
-      MissingColumns = paste(missing, collapse = ";"),
-      KeyColumnsOK = length(missing) == 0,
-      stringsAsFactors = FALSE
-    )
-  }))
-}
 
-build_external_input_inventory <- function() {
-  bind_rows(
-    audit_external_input_specs("RNA", get_rna_input_specs()),
-    audit_external_input_specs("WGBS", get_wgbs_input_specs())
-  )
-}
 
 
 filter_enrich_result <- function(enrich_obj, p_cutoff = 0.05) {
@@ -2433,7 +2330,7 @@ build_footprint_supported_tables <- function() {
   )
   motif_file <- motif_candidates[file.exists(motif_candidates)][1]
   anno_file <- anno_candidates[file.exists(anno_candidates)][1]
-  if(!file.exists(motif_file) || !file.exists(anno_file)) return(NULL)
+  if(is.na(motif_file) || is.na(anno_file) || !file.exists(motif_file) || !file.exists(anno_file)) return(NULL)
 
   motif_sites <- read.csv(motif_file, stringsAsFactors = FALSE)
   peak_gene_raw <- read.csv(anno_file, stringsAsFactors = FALSE)
@@ -2614,7 +2511,7 @@ read_bindetect_results <- function(root_dir = file.path(work_dir, "07footprintin
   bindetect_df
 }
 
-build_footprint_regulator_evidence <- function(bindetect_df, motif_df = NULL, de_gene_df = NULL, site_summary_df = NULL) {
+build_footprint_regulator_evidence <- function(bindetect_df, motif_df = NULL, site_summary_df = NULL) {
   evidence_df <- bindetect_df %>%
     mutate(
       TF_SYMBOL_KEY = normalize_tf_symbol(motif_name)
@@ -2640,16 +2537,6 @@ build_footprint_regulator_evidence <- function(bindetect_df, motif_df = NULL, de
   if(!"freq" %in% colnames(evidence_df)) evidence_df$freq <- NA_real_
   if(!"SupportingSiteCount" %in% colnames(evidence_df)) evidence_df$SupportingSiteCount <- NA_real_
 
-  if(!is.null(de_gene_df) && nrow(de_gene_df) > 0) {
-    tf_rna_df <- de_gene_df %>%
-      mutate(TF_SYMBOL_KEY = toupper(GeneSymbol)) %>%
-      dplyr::select(TF_SYMBOL_KEY, TF_RNA_log2FC = log2FoldChange, TF_RNA_pvalue = pvalue) %>%
-      distinct()
-    evidence_df <- evidence_df %>% left_join(tf_rna_df, by = "TF_SYMBOL_KEY")
-  } else {
-    evidence_df$TF_RNA_log2FC <- NA_real_
-    evidence_df$TF_RNA_pvalue <- NA_real_
-  }
 
   max_freq <- if("freq" %in% colnames(evidence_df) && any(!is.na(evidence_df$freq))) {
     max(evidence_df$freq, na.rm = TRUE)
@@ -2668,10 +2555,7 @@ build_footprint_regulator_evidence <- function(bindetect_df, motif_df = NULL, de
       } else {
         0
       },
-      RNAEvidence = ifelse(is.finite(TF_RNA_pvalue) & TF_RNA_pvalue >= 0 & TF_RNA_pvalue < 0.05,
-                           1 + pmin(2, abs(TF_RNA_log2FC) / 2),
-                           0),
-      IntegratedEvidenceScore = round(BindetectEvidence + MotifEvidence + SiteEvidence + RNAEvidence, 2),
+      IntegratedEvidenceScore = round(BindetectEvidence + MotifEvidence + SiteEvidence, 2),
       EvidenceTier = case_when(
         IntegratedEvidenceScore >= 7 ~ "Tier1",
         IntegratedEvidenceScore >= 4.5 ~ "Tier2",
@@ -2695,9 +2579,7 @@ cache_04_peak_context_path <- atac_state_file("04_peak_context.rds")
 cache_05_differential_accessibility_state_path <- atac_state_file("05_differential_accessibility_state.rds")
 cache_07_peak_gene_enrichment_state_path <- atac_state_file("07_peak_gene_enrichment_state.rds")
 cache_08_motif_state_path <- atac_state_file("08_motif_state.rds")
-cache_09_multiomics_state_path <- atac_state_file("09_multiomics_state.rds")
 cache_10_footprint_state_path <- atac_state_file("10_footprint_state.rds")
-cache_11_wgbs_state_path <- atac_state_file("11_wgbs_state.rds")
 
 save_state <- function(file_name, object_names, env = parent.frame()) {
   object_names <- unique(as.character(object_names))
@@ -2758,26 +2640,20 @@ load_atac_context <- function(module_id, env = parent.frame()) {
     return(invisible(NULL))
   }
 
-  if(module_id %in% c(5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)) {
+  if(module_id %in% c(5, 6, 7, 8, 10, 12, 13, 14, 15, 16)) {
     load_state("04_peak_context.rds", env = env, required = module_id %in% c(5, 6, 7, 8))
   }
-  if(module_id %in% c(6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)) {
+  if(module_id %in% c(6, 7, 8, 10, 12, 13, 14, 15, 16)) {
     load_state("05_differential_accessibility_state.rds", env = env, required = TRUE)
   }
-  if(module_id %in% c(9, 10, 11, 12, 15, 16)) {
-    load_state("07_peak_gene_enrichment_state.rds", env = env, required = module_id %in% c(9, 11, 15))
+  if(module_id %in% c(10, 12, 15, 16)) {
+    load_state("07_peak_gene_enrichment_state.rds", env = env, required = module_id %in% c(15))
   }
   if(module_id %in% c(10, 12, 15, 16)) {
     load_state("08_motif_state.rds", env = env, required = module_id %in% c(10, 12))
   }
-  if(module_id %in% c(10, 11, 12, 15, 16)) {
-    load_state("09_multiomics_state.rds", env = env, required = env_bool("ATAC_ENABLE_MULTIOMICS", FALSE) && module_id %in% c(11, 15))
-  }
-  if(module_id %in% c(11, 12, 15, 16)) {
+  if(module_id %in% c(12, 15, 16)) {
     load_state("10_footprint_state.rds", env = env, required = FALSE)
-  }
-  if(module_id %in% c(15, 16)) {
-    load_state("11_wgbs_state.rds", env = env, required = FALSE)
   }
 
   invisible(NULL)
@@ -3119,4 +2995,14 @@ scale_fill_heatmap_binary <- function(limits = c(0, 1), ...) {
     limits = limits,
     ...
   )
+}
+
+build_atac_gene_candidates <- function(peak_tbl) {
+  if("SYMBOL" %in% names(peak_tbl) && !"geneSymbol" %in% names(peak_tbl)) names(peak_tbl)[names(peak_tbl) == "SYMBOL"] <- "geneSymbol"
+  required <- c("geneSymbol", "Fold", "pvalue", "FDR")
+  if(!all(required %in% names(peak_tbl))) stop("ATAC candidate input missing: ", paste(setdiff(required, names(peak_tbl)), collapse = ","))
+  peak_tbl %>% filter(!is.na(geneSymbol), geneSymbol != "", is.finite(Fold)) %>%
+    group_by(geneSymbol) %>% mutate(PeakCount = n(), DirectionConflict = any(Fold > 0) & any(Fold < 0)) %>%
+    arrange(pvalue, desc(abs(Fold)), .by_group = TRUE) %>% slice_head(n = 1) %>% ungroup() %>%
+    arrange(pvalue, desc(abs(Fold)), geneSymbol)
 }

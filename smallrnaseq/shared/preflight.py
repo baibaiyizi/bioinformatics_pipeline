@@ -69,12 +69,10 @@ def main():
     applicable = common.copy()
     if species == 'Homo':
         applicable.add('snrna')
-        if os.environ['PANDORA_DESIGN'] == 'method_capture':
-            applicable.update({'similarity', 'spikein'})
     if endo:
         applicable.add('endo')
     if args.stage == 'differential':
-        applicable = common - {'qc'} if species == 'Mus' else ({'capture', 'capture_bias'} if os.environ['PANDORA_DESIGN'] == 'method_capture' else set())
+        applicable = common - {'qc'} if species == 'Mus' else set()
         if species == 'Mus' and endo:
             applicable.add('endo')
     elif args.stage == 'enrichment':

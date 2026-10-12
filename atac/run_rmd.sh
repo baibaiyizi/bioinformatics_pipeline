@@ -23,6 +23,7 @@ LOG_DIR="${RESULT_DIR}/logs"
 REPORT_SCRIPT="${RMD_DIR}/generate_result_report.R"
 
 TOTAL_STEPS=16
+ACTIVE_STEPS=(1 2 3 4 5 6 7 8 10 12 13 14 15 16)
 DRY_RUN=false
 RUN_ALL=false
 
@@ -35,9 +36,7 @@ declare -A STEP_FILES=(
   [6]="06_genome_tracks.Rmd"
   [7]="07_peak_gene_enrichment.Rmd"
   [8]="08_motif_activity.Rmd"
-  [9]="09_rna_multiomics.Rmd"
   [10]="10_footprinting_tf_evidence.Rmd"
-  [11]="11_wgbs_integration.Rmd"
   [12]="12_tf_gene_network.Rmd"
   [13]="13_conservation_gc.Rmd"
   [14]="14_machine_learning.Rmd"
@@ -54,9 +53,7 @@ declare -A STEP_TITLES=(
   [6]="genome tracks"
   [7]="peak-associated gene enrichment"
   [8]="motif enrichment and motif activity"
-  [9]="RNA multi-omics integration"
   [10]="footprinting and TF evidence"
-  [11]="WGBS integration"
   [12]="TF-gene network"
   [13]="sequence conservation and GC context"
   [14]="machine-learning feature ranking"
@@ -72,9 +69,7 @@ declare -A STEP_RESULT_DIRS=(
   [6]="06_genome_tracks"
   [7]="07_peak_gene_enrichment"
   [8]="08_motif_activity"
-  [9]="09_rna_multiomics"
   [10]="10_footprinting_tf_evidence"
-  [11]="11_wgbs_integration"
   [12]="12_tf_gene_network"
   [13]="13_sequence_conservation_gc"
   [14]="14_machine_learning"
@@ -94,7 +89,7 @@ step_result_dir_name() {
 
 print_step_table() {
   local i
-  for i in $(seq 1 "${TOTAL_STEPS}"); do
+  for i in "${ACTIVE_STEPS[@]}"; do
     local result_hint
     result_hint="$(step_result_dir_name "${i}")"
     if [[ -n "${result_hint}" ]]; then
@@ -116,7 +111,7 @@ Usage:
   ${SCRIPT_NAME} 5 8
 
 Behavior:
-  1) No arguments or --all runs steps 01-${TOTAL_STEPS}.
+  1) No arguments or --all runs the current ATAC steps (9 and 11 have been removed).
   2) --steps accepts ids, aliases, comma-separated values, and numeric ranges.
   3) Positional step ids/aliases are accepted for quick use.
   4) Requested steps auto-run their required upstream steps in scientific order.
@@ -143,9 +138,7 @@ step_alias_hint() {
     6) echo "tracks" ;;
     7) echo "enrichment" ;;
     8) echo "motif" ;;
-    9) echo "rna" ;;
     10) echo "footprint" ;;
-    11) echo "wgbs" ;;
     12) echo "network" ;;
     13) echo "conservation" ;;
     14) echo "ml" ;;
@@ -220,7 +213,7 @@ validate_public_config() {
     *) echo "[ERROR] ATAC_DIFFBIND_FILTER_FUN must be max or mean; got: ${ATAC_DIFFBIND_FILTER_FUN}" >&2; exit 2 ;;
   esac
 
-  for name in ATAC_PNG_DPI ATAC_PDF_PREVIEW_MAX_PAGES ATAC_FOOTPRINT_MIN_PRIMARY_PEAKS ATAC_WGBS_MIN_COR_N ATAC_DIFFBIND_MIN_OVERLAP; do
+  for name in ATAC_PNG_DPI ATAC_PDF_PREVIEW_MAX_PAGES ATAC_FOOTPRINT_MIN_PRIMARY_PEAKS ATAC_DIFFBIND_MIN_OVERLAP; do
     value="${!name:-}"
     [[ "${value}" =~ ^[0-9]+$ ]] && (( value >= 1 )) || {
       echo "[ERROR] ${name} must be a positive integer; got: ${value}" >&2
@@ -249,7 +242,7 @@ print_user_config_summary() {
 validate_step_id() {
   local step_id="$1"
   [[ "${step_id}" =~ ^[0-9]+$ ]] || return 1
-  (( step_id >= 1 && step_id <= TOTAL_STEPS ))
+  [[ -n "${STEP_FILES[${step_id}]:-}" ]]
 }
 
 step_id_from_token() {
@@ -273,9 +266,7 @@ step_id_from_token() {
     track|tracks|gviz|genome-tracks) echo 6 ;;
     enrichment|peak-gene|geneset|go|kegg) echo 7 ;;
     motif|motifs|chromvar|activity) echo 8 ;;
-    rna|multiomics|multi-omics) echo 9 ;;
     footprint|footprinting|tobias|tf-evidence) echo 10 ;;
-    wgbs|methylation) echo 11 ;;
     network|tf-network|tf-gene) echo 12 ;;
     conservation|gc|sequence) echo 13 ;;
     ml|machine-learning|machine|feature) echo 14 ;;
@@ -306,9 +297,9 @@ parse_step_tokens() {
           exit 1
         }
         if (( start <= end )); then
-          for i in $(seq "${start}" "${end}"); do printf '%s\n' "${i}"; done
+          for i in $(seq "${start}" "${end}"); do validate_step_id "${i}" || { echo "[ERROR] Removed or invalid step: ${i}" >&2; return 1; }; printf '%s\n' "${i}"; done
         else
-          for i in $(seq "${start}" -1 "${end}"); do printf '%s\n' "${i}"; done
+          for i in $(seq "${start}" -1 "${end}"); do validate_step_id "${i}" || { echo "[ERROR] Removed or invalid step: ${i}" >&2; return 1; }; printf '%s\n' "${i}"; done
         fi
       else
         step_id_from_token "${part}" || {
@@ -356,25 +347,11 @@ mark_with_dependencies() {
       mark_with_dependencies 4
       mark_with_dependencies 5
       ;;
-    9)
-      mark_with_dependencies 1
-      mark_with_dependencies 4
-      mark_with_dependencies 5
-      mark_with_dependencies 7
-      ;;
     10)
       mark_with_dependencies 1
       mark_with_dependencies 4
       mark_with_dependencies 5
       mark_with_dependencies 8
-      mark_with_dependencies 9
-      ;;
-    11)
-      mark_with_dependencies 1
-      mark_with_dependencies 4
-      mark_with_dependencies 5
-      mark_with_dependencies 9
-      mark_with_dependencies 10
       ;;
     12)
       mark_with_dependencies 1
@@ -382,7 +359,6 @@ mark_with_dependencies() {
       mark_with_dependencies 5
       mark_with_dependencies 7
       mark_with_dependencies 8
-      mark_with_dependencies 9
       mark_with_dependencies 10
       ;;
     13|14)
@@ -396,16 +372,14 @@ mark_with_dependencies() {
       mark_with_dependencies 5
       mark_with_dependencies 7
       mark_with_dependencies 8
-      mark_with_dependencies 9
       mark_with_dependencies 10
-      mark_with_dependencies 11
       mark_with_dependencies 12
       mark_with_dependencies 13
       mark_with_dependencies 14
       ;;
     16)
       local i
-      for i in $(seq 1 15); do mark_with_dependencies "${i}"; done
+      for i in "${ACTIVE_STEPS[@]}"; do [[ "$i" == 16 ]] || mark_with_dependencies "${i}"; done
       ;;
   esac
 }
@@ -418,7 +392,7 @@ resolve_run_order() {
   for step_id in "${requested[@]}"; do
     mark_with_dependencies "${step_id}"
   done
-  for i in $(seq 1 "${TOTAL_STEPS}"); do
+  for i in "${ACTIVE_STEPS[@]}"; do
     if [[ -n "${RUN_NEEDED[${i}]:-}" ]]; then
       RUN_ORDER+=("${i}")
     fi
@@ -509,19 +483,18 @@ else
 fi
 
 if [[ "${RUN_ALL}" == "true" && ${#STEP_ARGS[@]} -eq 0 ]]; then
-  REQUESTED_STEPS=($(seq 1 "${TOTAL_STEPS}"))
+  REQUESTED_STEPS=("${ACTIVE_STEPS[@]}")
 elif [[ ${#STEP_ARGS[@]} -eq 0 ]]; then
-  REQUESTED_STEPS=($(seq 1 "${TOTAL_STEPS}"))
+  REQUESTED_STEPS=("${ACTIVE_STEPS[@]}")
 else
   REQUESTED_STEPS=($(parse_step_tokens "${STEP_ARGS[@]}"))
   REQUESTED_STEPS=($(dedupe_preserve_order "${REQUESTED_STEPS[@]}"))
 fi
 
-# Optional integrations are excluded unless explicitly enabled. Step 14 remains disabled.
+# 可选足迹和保守性按显式开关执行；ATAC 候选与网络不依赖跨组学开关。
 filtered=()
 for step in "${REQUESTED_STEPS[@]}"; do
   [[ "$step" != 14 ]] || { echo "[SKIPPED] 14 machine_learning 已停用" >&2; continue; }
-  if [[ "$step" == 9 || "$step" == 11 || "$step" == 12 || "$step" == 15 ]]; then [[ "$ATAC_ENABLE_MULTIOMICS" == 1 ]] || { echo "[SKIPPED] multiomics 未启用: $step" >&2; continue; }; fi
   if [[ "$step" == 10 ]]; then [[ "$ATAC_ENABLE_FOOTPRINT" == 1 ]] || { echo "[SKIPPED] footprint 未启用: $step" >&2; continue; }; fi
   if [[ "$step" == 13 ]]; then [[ "$ATAC_ENABLE_CONSERVATION" == 1 ]] || { echo "[SKIPPED] conservation 未启用: $step" >&2; continue; }; fi
   filtered+=("$step")
@@ -531,7 +504,6 @@ resolve_run_order "${REQUESTED_STEPS[@]}"
 filtered=()
 for step in "${RUN_ORDER[@]}"; do
   [[ "$step" != 14 ]] || { echo "[SKIPPED] 14 machine_learning 已停用" >&2; continue; }
-  if [[ "$step" == 9 || "$step" == 11 || "$step" == 12 || "$step" == 15 ]]; then [[ "$ATAC_ENABLE_MULTIOMICS" == 1 ]] || { echo "[SKIPPED] multiomics 未启用: $step" >&2; continue; }; fi
   if [[ "$step" == 10 ]]; then [[ "$ATAC_ENABLE_FOOTPRINT" == 1 ]] || { echo "[SKIPPED] footprint 未启用: $step" >&2; continue; }; fi
   if [[ "$step" == 13 ]]; then [[ "$ATAC_ENABLE_CONSERVATION" == 1 ]] || { echo "[SKIPPED] conservation 未启用: $step" >&2; continue; }; fi
   filtered+=("$step")
@@ -565,14 +537,13 @@ if compgen -G "$ROOT_DIR/02mapping/bam/*.final.bam" >/dev/null; then
   fi
   python3 "$ROOT_DIR/scripts/input_audit.py" --root "$ROOT_DIR" --prefix ATAC --record downstream
 mkdir -p "${LOG_DIR}" "${ROOT_DIR}/.cache/rmd"
-printf 'module\tenabled\n09_11_12_15_multiomics\t%s\n10_footprint\t%s\n13_conservation\t%s\n14_machine_learning\tDISABLED\n' "$ATAC_ENABLE_MULTIOMICS" "$ATAC_ENABLE_FOOTPRINT" "$ATAC_ENABLE_CONSERVATION" > "$RESULT_DIR/optional_module_gates.tsv"
+printf 'module\tenabled\n10_footprint\t%s\n13_conservation\t%s\n14_machine_learning\tDISABLED\n' "$ATAC_ENABLE_FOOTPRINT" "$ATAC_ENABLE_CONSERVATION" > "$RESULT_DIR/optional_module_gates.tsv"
 
 
 [[ -f "$RESULT_DIR/execution.tsv" ]] || printf "time\tmodule\tstatus\n" > "$RESULT_DIR/execution.tsv"
-for step in 9 10 11 12 13 14 15; do
+for step in 10 13 14; do
   disabled=0
   case "$step" in
-    9|11|12|15) [[ "$ATAC_ENABLE_MULTIOMICS" == 1 ]] || disabled=1 ;;
     10) [[ "$ATAC_ENABLE_FOOTPRINT" == 1 ]] || disabled=1 ;;
     13) [[ "$ATAC_ENABLE_CONSERVATION" == 1 ]] || disabled=1 ;;
     14) disabled=1 ;;

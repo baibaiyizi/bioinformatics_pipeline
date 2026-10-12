@@ -17,7 +17,7 @@ bash run.sh check                 # 只读检查，不创建结果
 bash metabo_first.sh --dry-run
 bash run.sh all
 # 单模块；依赖必须已在当前签名下生成
-Rscript pipeline.R --module report
+Rscript scripts/pipeline.R --module report
 ```
 
 `metabo_first.sh` 负责清单与峰矩阵；`metabo_second.sh` 负责预处理、QC、注释、limma、外部通路定量和报告。有效配置、软件版本、输入哈希、模块状态保存在结果中。已有结果必须匹配配置、源码及输入签名；改变输入/参数时使用新的 `result_dir`，不静默复用。各实际模块单独记录执行状态；失败或仍在运行的上游不能提供输入，已有完成下游时重跑上游必须使用新的结果目录。
@@ -32,6 +32,6 @@ pooled QC 身份未确认时，不允许基于 QC 的 RSD 过滤或漂移校正�
 
 ## 验证
 
-本次在含空格的临时目录验证外部峰表到统计、图表和报告；反向比较、缺少填峰前矩阵和无效生物学单位分别检查，见 `VALIDATION.md`。真实 mzML→XCMS 上游为 `not_run`，不能由峰表闭环推断已完成原始数据复现。
+本次在含空格的临时目录验证外部峰表到统计、图表和报告；反向比较、缺少填峰前矩阵和无效生物学单位分别检查，见 [内部验证记录](docs/VALIDATION.md)。真实 mzML→XCMS 上游为 `not_run`，不能由峰表闭环推断已完成原始数据复现。
 
-依赖版本见 `dependencies.tsv`，来源见 `provenance.tsv`。沿用本地 R/Bioconductor 环境，不在运行中自动安装或升级包。
+依赖版本见 [依赖版本](docs/dependencies.tsv)，来源见 `provenance.tsv`。沿用本地 R/Bioconductor 环境，不在运行中自动安装或升级包。

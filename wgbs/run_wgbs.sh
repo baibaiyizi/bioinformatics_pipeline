@@ -26,19 +26,19 @@ READS_INFO="$WGBS_SAMPLES"
 WGBS_CHECK_ONLY=0
 
 
-STEPS=(
-  "1_setup"
-  "2_qc"
-  "3_dmr"
-  "4_dmroverview"
-  "5_enrichment"
-  "6_genomecontext"
-  "7_regulatory"
-  "8_multiomics"
-  "9_degfocused"
-  "10_browser"
-  "11_sperm"
+declare -A STEPS=(
+  [1]="1_setup"
+  [2]="2_qc"
+  [3]="3_dmr"
+  [4]="4_dmroverview"
+  [5]="5_enrichment"
+  [6]="6_genomecontext"
+  [7]="7_regulatory"
+  [8]="8_gene_methylation"
+  [10]="10_browser"
+  [11]="11_sperm"
 )
+ACTIVE_STEPS=(1 2 3 4 5 6 7 8 10 11)
 
 trim_carriage_return() {
   local value="$1"
@@ -193,12 +193,12 @@ usage() {
   bash run_wgbs.sh                 # 运行已启用的下游模块
   bash run_wgbs.sh --list          # 列出模块
   bash run_wgbs.sh --steps 3,5-8   # 只运行指定步骤，默认自动前置 1_setup
-  bash run_wgbs.sh --check --steps 8-11 # 只检查配置、样本表和 Rmd
+  bash run_wgbs.sh --check --steps 8,10 # 只检查配置、样本表和 Rmd
 
 说明:
   run_wgbs.sh 只负责下游 Rmd 调度，不运行 fastp/Bismark/MethylDackel。
   --steps 为选步入口。范围和逗号可以组合，例如 --steps 3,5-8。
-  WGBS_SIGNIFICANCE_MODE=pvalue|padj 控制 RNA/富集筛选口径，默认 pvalue。
+  WGBS_SIGNIFICANCE_MODE=pvalue|padj 控制 富集筛选口径，默认 pvalue。
   WGBS_REFERENCE_GROUP/WGBS_COMPARISON_GROUP 必须显式固定 group2-group1 的方向。
   上游测序处理请运行 run_upstream.sh。
 EOF
@@ -206,8 +206,8 @@ EOF
 
 list_modules() {
   local i
-  for i in "${!STEPS[@]}"; do
-    printf '%2d  %s\n' "$((i + 1))" "${STEPS[$i]}"
+  for i in "${ACTIVE_STEPS[@]}"; do
+    printf '%2d  %s\n' "${i}" "${STEPS[$i]}"
   done
 }
 
@@ -227,17 +227,19 @@ append_module_token() {
   if [[ "${token}" =~ ^([0-9]+)-([0-9]+)$ ]]; then
     local start=$((10#${BASH_REMATCH[1]}))
     local end=$((10#${BASH_REMATCH[2]}))
-    if (( start < 1 || end > ${#STEPS[@]} || start > end )); then
+    if (( start < 1 || end > 11 || start > end )); then
       reads_info_die "无效模块范围: ${token}，有效范围为 1-${#STEPS[@]}"
     fi
     for module in $(seq "${start}" "${end}"); do
+      [[ -n "${STEPS[${module}]:-}" ]] || reads_info_die "模块已移除或不存在: ${module}"
       REQUESTED_MODULES+=("${module}")
     done
   elif [[ "${token}" =~ ^[0-9]+$ ]]; then
     local token_num=$((10#${token}))
-    if (( token_num < 1 || token_num > ${#STEPS[@]} )); then
+    if (( token_num < 1 || token_num > 11 )); then
       reads_info_die "无效模块: ${token}，有效范围为 1-${#STEPS[@]}"
     fi
+    [[ -n "${STEPS[${token_num}]:-}" ]] || reads_info_die "模块已移除或不存在: ${token_num}"
     REQUESTED_MODULES+=("${token_num}")
   else
     reads_info_die "无法识别模块参数: ${token}"
@@ -269,8 +271,7 @@ select_all_modules() {
   local i
 
   REQUESTED_MODULES=()
-  for i in $(seq 1 "${#STEPS[@]}"); do
-    if [[ "$i" == 8 || "$i" == 9 ]]; then [[ "$WGBS_ENABLE_MULTIOMICS" == 1 ]] || continue; fi
+  for i in "${ACTIVE_STEPS[@]}"; do
     if [[ "$i" == 11 ]]; then [[ "$WGBS_ENABLE_SPERM" == 1 ]] || continue; fi
     REQUESTED_MODULES+=("${i}")
   done
@@ -334,7 +335,7 @@ parse_args() {
     seen["${module}"]=1
   done
 
-  for module in $(seq 1 "${#STEPS[@]}"); do
+  for module in "${ACTIVE_STEPS[@]}"; do
     if [[ -n "${seen[${module}]:-}" ]]; then
       sorted+=("${module}")
     fi
@@ -353,7 +354,7 @@ render_modules() {
   local module
 
   for module in "${modules[@]}"; do
-    step_names+=("${STEPS[$((module - 1))]}")
+    step_names+=("${STEPS[${module}]}")
   done
 
   local step_name
@@ -396,7 +397,6 @@ record_status <- function(module, status) {
   row <- data.frame(time = format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"), module = module, status = status)
   write.table(row, status_file, sep = "\t", row.names = FALSE, col.names = !file.exists(status_file), append = file.exists(status_file), quote = FALSE)
 }
-for(module in c("8_multiomics", "9_degfocused")) if(Sys.getenv("WGBS_ENABLE_MULTIOMICS") != "1") record_status(module, "SKIPPED_DISABLED")
 if(Sys.getenv("WGBS_ENABLE_SPERM") != "1") record_status("11_sperm", "SKIPPED_DISABLED")
 for (step_name in steps) {
   rmd_file <- file.path(rmd_dir, paste0(step_name, ".Rmd"))
@@ -493,7 +493,7 @@ check_selection() {
   local module step_name
   local -a step_names=()
   for module in "$@"; do
-    step_name="${STEPS[$((module - 1))]}"
+    step_name="${STEPS[${module}]}"
     [[ -f "${RMD_DIR}/${step_name}.Rmd" ]] || reads_info_die "Rmd 文件不存在: ${RMD_DIR}/${step_name}.Rmd"
     step_names+=("${step_name}")
   done
@@ -514,7 +514,6 @@ main() {
   python3 "$ROOT_DIR/scripts/input_audit.py" --root "$ROOT_DIR" --prefix WGBS
   load_reads_info "${READS_INFO}" "${ROOT_DIR}" 0
   for module in "${REQUESTED_MODULES[@]}"; do
-    if [[ "$module" == 8 || "$module" == 9 ]]; then [[ "$WGBS_ENABLE_MULTIOMICS" == 1 ]] || reads_info_die "multiomics 已禁用；请在 project.env 显式启用并配置输入"; fi
     if [[ "$module" == 11 ]]; then [[ "$WGBS_ENABLE_SPERM" == 1 ]] || reads_info_die "精子专题已禁用"; fi
   done
   if [[ "${WGBS_CHECK_ONLY}" == "1" ]]; then

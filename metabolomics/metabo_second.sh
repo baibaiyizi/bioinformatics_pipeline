@@ -90,7 +90,7 @@ parse_steps() {
 
 run_module() {
   local module="$1"
-  local -a cmd=("${RSCRIPT_BIN}" "${ROOT_DIR}/pipeline.R" --config "${CONFIG_FILE}" --module "${module}")
+  local -a cmd=("${RSCRIPT_BIN}" "${ROOT_DIR}/scripts/pipeline.R" --config "${CONFIG_FILE}" --module "${module}")
   [[ -n "${RESULT_DIR}" ]] && cmd+=(--result-dir "${RESULT_DIR}")
   [[ -n "${THREADS}" ]] && cmd+=(--threads "${THREADS}")
   (( FORCE )) && cmd+=(--force)

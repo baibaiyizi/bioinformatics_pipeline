@@ -1,0 +1,97 @@
+title: 联合分析：填写课题与真实输入
+species: mouse
+genome: GRCm39
+reference: CONTROL
+comparison: TREATMENT
+p_cutoff: 0.05
+fdr_cutoff: 0.05
+lfc_cutoff: 0.58
+orgdb: org.Mm.eg.db
+liver_inputs:
+- rna_liver
+- atac_liver
+- wgbs_liver
+- metabolomics_liver
+metabolic_pathways: INPUT_REQUIRED/metabolic_pathways.csv
+inputs:
+- id: rna_liver
+  kind: rna
+  context: liver
+  path: INPUT_REQUIRED/rna_liver.csv
+  species: mouse
+  genome: GRCm39
+  source_status: USER_REQUIRED
+  biological_unit: unknown
+  pairing: unknown
+  quality: USER_REQUIRED
+  required_columns:
+  - gene_id
+  - ensembl_id
+  - SYMBOL
+  - log2FoldChange
+  - pvalue
+  - padj
+  - sampleA
+  - sampleB
+- id: wgbs_liver
+  kind: wgbs
+  context: liver
+  path: INPUT_REQUIRED/wgbs_liver.csv
+  species: mouse
+  genome: GRCm39
+  source_status: USER_REQUIRED
+  biological_unit: unknown
+  pairing: unknown
+  quality: USER_REQUIRED
+  gene_column: gene_id_clean
+  effect_column: diffMethy
+  region_column: DMR_id
+  required_columns:
+  - gene_id_clean
+  - DMR_id
+  - seqnames
+  - start
+  - end
+  - diffMethy
+  - annotation
+  - group1_label
+  - group2_label
+- id: atac_liver
+  kind: atac
+  context: liver
+  path: INPUT_REQUIRED/atac_liver.csv
+  species: mouse
+  genome: GRCm39
+  source_status: USER_REQUIRED
+  biological_unit: unknown
+  pairing: unknown
+  quality: USER_REQUIRED
+  gene_column: ENSEMBL
+  effect_column: Fold
+  region_column: peak_id
+  required_columns:
+  - ENSEMBL
+  - Fold
+  - FDR
+  - pvalue
+  - peak_id
+  - seqnames
+  - start
+  - end
+  - annotation
+  - Direction
+- id: metabolomics_liver
+  kind: metabolomics
+  context: liver
+  path: INPUT_REQUIRED/metabolomics_liver.csv
+  species: mouse
+  genome: GRCm39
+  source_status: USER_REQUIRED
+  biological_unit: unknown
+  pairing: unknown
+  quality: USER_REQUIRED
+  required_columns:
+  - feature_id
+  - log2FC
+  - limma_p
+  - fdr

@@ -1,0 +1,15 @@
+#!/usr/bin/env Rscript
+# 用本地GO注释建立程序证据表；计数是注释交汇，不是富集检验。
+args <- commandArgs(TRUE)
+if (length(args) != 3L) stop("usage: annotate_programs.R GENES.tsv ORGDB OUTPUT.tsv")
+for (p in c("AnnotationDbi", "GO.db", args[2L])) if (!requireNamespace(p, quietly = TRUE)) stop("缺少本地注释包: ", p)
+genes <- read.delim(args[1L], stringsAsFactors = FALSE)
+db <- get(args[2L], envir = asNamespace(args[2L]))
+keys <- intersect(unique(genes$gene_id), AnnotationDbi::keys(db, keytype = "ENSEMBL"))
+if (!length(keys)) stop("当前Ensembl身份与所选OrgDb没有交集")
+a <- AnnotationDbi::select(db, keys = keys, keytype = "ENSEMBL", columns = c("GO", "ONTOLOGY"))
+a <- unique(a[!is.na(a$GO) & a$ONTOLOGY == "BP", c("ENSEMBL", "GO")])
+t <- AnnotationDbi::select(GO.db::GO.db, keys = unique(a$GO), keytype = "GOID", columns = "TERM")
+a <- merge(a, t, by.x = "GO", by.y = "GOID", all.x = TRUE)
+names(a) <- c("GO", "gene_id", "term")
+write.table(a, args[3L], sep = "\t", quote = FALSE, row.names = FALSE, na = "")

@@ -12,6 +12,7 @@ usage() {
   cat <<'USAGE'
 用法: bash run.sh --project <数据集名|.|绝对数据集路径> [--stage upstream|describe|differential|enrichment] [--modules 名称,...] [--check]
 --list 只列出本地数据集。默认 --project . --stage describe。
+人类方法比较使用物种目录下的 integration/run.sh；本入口只执行单组学。
 --check 只读检查所选阶段的输入，不创建结果或缓存；RUN_ENDOSIRNA 和物种只读取数据集配置。
 USAGE
 }

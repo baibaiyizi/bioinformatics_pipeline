@@ -12,17 +12,6 @@ if(nrow(network_peak_genes) > 0 && "SYMBOL" %in% colnames(network_peak_genes) &&
   colnames(network_peak_genes)[colnames(network_peak_genes) == "SYMBOL"] <- "geneSymbol"
 }
 
-activated_genes_tbl <- if(file.exists(step_table_file("Step9", "Activated_Genes.csv"))) {
-  read.csv(step_table_file("Step9", "Activated_Genes.csv"), stringsAsFactors = FALSE)
-} else {
-  data.frame()
-}
-repressed_genes_tbl <- if(file.exists(step_table_file("Step9", "Repressed_Genes.csv"))) {
-  read.csv(step_table_file("Step9", "Repressed_Genes.csv"), stringsAsFactors = FALSE)
-} else {
-  data.frame()
-}
-
 network_edges <- data.frame()
 network_edge_source <- NA_character_
 
@@ -93,15 +82,6 @@ if(nrow(network_edges) > 0) {
     "No footprint- or motif-site-supported TF-target edge table was available; skipped pseudo TF-target inference.",
     clear_plot_files = "TF_Target_Network.pdf"
   )
-}
-
-# --- 9.2 差异基因列表 (基于ATAC和RNA数据) ---
-if(nrow(activated_genes_tbl) > 0 || nrow(repressed_genes_tbl) > 0) {
-  all_de_genes <- unique(c(activated_genes_tbl$geneSymbol, repressed_genes_tbl$geneSymbol))
-  all_de_genes <- all_de_genes[!is.na(all_de_genes) & all_de_genes != ""]
-  write.csv(data.frame(gene = all_de_genes),
-            step_table_file("Step12", "Differential_Genes_List.csv"),
-            row.names = FALSE)
 }
 
 write_module_status_plot("Step12", "Module 12 TF-gene network status")

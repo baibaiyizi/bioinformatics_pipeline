@@ -50,10 +50,10 @@ tryCatch({
   if(species=="mus")write_mii_setup_expression_matrices()else write_serum_setup_expression_matrices()
   write_common_audit(ctx)
   files <- c(qc="02_single_group.Rmd",pca="03_pca.Rmd",sncrna="04_sncRNA_compare.Rmd",tsrna="05_tsrna_compare.Rmd",rsrna="06_rsrna_compare.Rmd",mirna="07_mirna_compare.Rmd",pirna="08_pirna_compare.Rmd")
-  if(species=="homo")files<-c(files,capture="09_differential_capture.Rmd",capture_bias="10_capture_bias_diagnostics.Rmd",similarity="11_method_similarity.Rmd",snrna="12_snrna_compare.Rmd",spikein="13_spikein_qc.Rmd")
+  if(species=="homo")files<-c(files,snrna="12_snrna_compare.Rmd")
   if(ENDO_ENABLED)files<-c(files,endo="09_endo_compare.Rmd")
   applicable <- if(PANDORA_ANALYSIS_STAGE=="describe")setdiff(names(files),c("capture","capture_bias")) else if(PANDORA_ANALYSIS_STAGE=="differential") {
-    if(species=="mus")c("pca","sncrna","tsrna","rsrna","mirna","pirna",if(ENDO_ENABLED)"endo")else c("capture","capture_bias")
+    if(species=="mus")c("pca","sncrna","tsrna","rsrna","mirna","pirna",if(ENDO_ENABLED)"endo")else character()
   }else if(species=="mus")"mirna"else character()
   if(nrow(ctx$sample_info)<3)applicable<-setdiff(applicable,"pca")
   if(PANDORA_DESIGN!="method_capture")applicable<-setdiff(applicable,c("capture","capture_bias","similarity","spikein"))

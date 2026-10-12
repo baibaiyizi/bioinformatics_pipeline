@@ -1,3 +1,5 @@
+> 下文为职责重构前的历史验证，不能代表当前源码已完成真实数据重算。当前纯汇总已通过源码/内嵌R解析、可搬运小型端到端检查；本轮验收记录位于工作区 maintenance/species_organization/pfos_single_assay。
+
 # ATAC 模板验证记录
 
 日期：2026-09-29。真实 liver 项目只读，未生产重算或升级环境。`provenance.tsv` 记录提取来源与源文件 SHA256；新 counts 模式记录为原区间 DESeq2 的新增实现。`validation/executed_source_sha256.tsv` 冻结最终实际运行的源码、配置与合成输入。

@@ -14,8 +14,6 @@ atac_input_inventory <- data.frame(
 )
 save_step_table(atac_input_inventory, "Step2", "Input_Inventory.csv")
 
-external_inventory <- build_external_input_inventory()
-save_step_table(external_inventory, "Step2", "External_Input_Inventory.csv")
 
 scientific_reference_tbl <- data.frame(
   Topic = c(
@@ -131,8 +129,6 @@ analysis_context_tbl <- data.frame(
   Key = c(
     "report_file",
     "work_dir",
-    "rna_seq_dir",
-    "wgbs_dir",
     "sample_count",
     "group_levels",
     "primary_chromosomes",
@@ -147,8 +143,6 @@ analysis_context_tbl <- data.frame(
   Value = c(
     normalizePath(file.path(work_dir, "run_upstream.sh"), mustWork = FALSE),
     work_dir,
-    rna_seq_dir,
-    wgbs_dir,
     length(samples),
     paste(levels(conditions), collapse = ","),
     paste(primary_chr_ucsc, collapse = ","),
@@ -172,17 +166,15 @@ save_step_table(analysis_context_tbl, "Step2", "Analysis_Context.csv")
 1. `阶段 A / Step2-3`：先确认项目设置、样本质量和 ATAC 数据整体是否可靠。
 2. `阶段 B / Step4-6`：再描述开放图谱、差异 peak 和功能层解释。
 3. `阶段 C / Step8-13`：继续向 motif、footprint、network、保守性和机器学习机制层推进。
-4. `阶段 D / Step9-14`：整合 RNA、WGBS 和候选基因证据。
+4. `阶段 D / Step15`：仅使用 ATAC 本身确定候选和位点。
 5. `阶段 E / Step16`：在文档最后统一刷新交付对象和结果清单。
 
-阅读时如果只想快速把握主结论，建议优先看 `Step5`、`Step7-9`、`Step15`。
+阅读时如果只想快速把握主结论，建议优先看 `Step5`、`Step7-8`、`Step15`。
 
 ```{r run_configuration_summary}
 run_config_tbl <- data.frame(
   Parameter = c(
     "ATAC work_dir",
-    "RNA-seq dir",
-    "WGBS dir",
     "run_profile",
     "reuse_step_tables",
     "strict_mode",
@@ -192,8 +184,6 @@ run_config_tbl <- data.frame(
   ),
   Value = c(
     work_dir,
-    rna_seq_dir,
-    wgbs_dir,
     run_profile,
     reuse_step_tables,
     strict_mode,

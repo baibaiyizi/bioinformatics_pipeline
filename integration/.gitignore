@@ -1,0 +1,14 @@
+*
+!.gitignore
+!*/
+!*.md
+!*.sh
+!*.R
+!*.py
+!*.yml
+!*.yaml
+!*.tsv
+result/
+history/
+__pycache__/
+.pytest_cache/

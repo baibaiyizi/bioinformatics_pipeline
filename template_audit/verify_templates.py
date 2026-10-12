@@ -10,8 +10,8 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-TEMPLATES = ('rnaseq','wgbs','atac','scrnaseq','smallrnaseq','metabolomics','spatial_transcriptomics','singlecell_multiome','spatial_metabolomics')
-EXCLUDED = {'__pycache__','.venv','.cache','.pytest_cache','result','runs','history'}
+TEMPLATES = ('rnaseq','wgbs','atac','scrnaseq','smallrnaseq','metabolomics','spatial_transcriptomics','singlecell_multiome','spatial_metabolomics','integration')
+EXCLUDED = {'__pycache__','.venv','.cache','.pytest_cache','.maintenance','result','runs','history','.archive','archive'}
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)

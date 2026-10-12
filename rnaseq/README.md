@@ -62,8 +62,10 @@ DE 火山图/MA 图：生物学意义为显式两组表达关联；数据分布�
 
 `provenance.tsv` 保存原模板和真实项目来源文件的 SHA256、提取内容。真实项目只读；模板运行不读取任何项目脚本或结果。保留原三段流程结构，提取当前共享方向审计、mouse-native/human-ortholog 来源、固定随机种子、183 mm/Cairo PDF 与 300 dpi PNG 绘图和报告逻辑；没有加入旧入口兼容层或自动迁移。
 
-参考现有服务器 `rnaseq_legacy` 环境规划，使用已有 fastp/HISAT2/samtools/Rsubread/DESeq2 等依赖；运行时缺包明确失败。可选模块的依赖仅在启用相应模块时加载。核心绘图与注释需要 ggplot2、knitr、Cairo、ComplexHeatmap、org.Mm.eg.db 等，报告需要 htmltools/stringr。详细实际验证见 `VALIDATION.md`。
+参考现有服务器 `rnaseq_legacy` 环境规划，使用已有 fastp/HISAT2/samtools/Rsubread/DESeq2 等依赖；运行时缺包明确失败。可选模块的依赖仅在启用相应模块时加载。核心绘图与注释需要 ggplot2、knitr、Cairo、ComplexHeatmap、org.Mm.eg.db 等，报告需要 htmltools/stringr。详细实际验证见 [内部验证记录](docs/VALIDATION.md)。
 
 ## 7. 验证界限
 
 小数据闭环、语法检查、方向与输入失败场景分别记录。FASTQ 全量上游、联网富集、APA/DER、rMATS 生物数据、PPI/WGCNA/免疫等可选模块本轮没有执行；不能将源码迁移或合成数据验证称为真实数据复现。使用者仍需依据建库、组织、参考版本和生物学单位判断适用性。
+
+报告写法见[统一报告规范](../docs/reporting.md)。

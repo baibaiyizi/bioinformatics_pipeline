@@ -6,7 +6,7 @@
 从本模板目录运行，例如：
 
 ```bash
-python3 copy_template.py rnaseq ../projects/new_study/rnaseq
+python3 copy_template.py rnaseq ../projects/new_study/mouse/rnaseq
 ```
 
 脚本拒绝覆盖现有目录，记录当前来源 commit、未提交状态和实际文件 SHA256 到 `template_snapshot.tsv`。复制后独立运行，中心更新不自动修改课题。先填配置和样本表，再执行对应模块的只读预检；占位值不能运行生产分析。
@@ -27,7 +27,11 @@ python3 copy_template.py rnaseq ../projects/new_study/rnaseq
 | scATAC / multiome 最小入口 | [singlecell_multiome](singlecell_multiome/README.md) | `config/example.yml` | `scripts/run_multiome.py` | 已有 RNA/ATAC counts 的两项测试；fragments 上游未实现 |
 | 空间代谢组最小入口 | [spatial_metabolomics](spatial_metabolomics/README.md) | `config/example.yml` | `scripts/run_spatial_metabolomics.py` | 长表两项测试；真实 imzML 未验证 |
 
-依赖版本和详细命令以各目录 README、VALIDATION 和环境记录为准。scRNA 使用 Python 3.13；不要直接把任意 base 环境或根 `.venv` 当作已验证环境。
+依赖版本和详细命令以各目录 README、内部docs/VALIDATION及环境记录为准。scRNA 使用 Python 3.13；不要直接把任意 base 环境或根 `.venv` 当作已验证环境。
+
+## 联合分析
+
+跨组织、跨阶段和跨组学使用 [integration](integration/README.md)；血清方法比较可单独复制 `integration/method_comparison`。项目内先分实际human/mouse，单组学输出供联合流程读取。
 
 ## 开始一个项目
 
@@ -47,6 +51,8 @@ python3 copy_template.py rnaseq ../projects/new_study/rnaseq
 
 ## 来源与验收
 
-每个主要模板附 `provenance.tsv` 与 `VALIDATION.md`。[能力矩阵](analysis_capability_matrix.md)记录当前接口和边界；[本轮交付记录](template_audit/README.md)记录来源基线、检查结果和未执行部分。合成数据测试通过不等于真实数据全流程复现。
+每个主要模板附 `provenance.tsv` 与 `docs/VALIDATION.md`。[能力矩阵](analysis_capability_matrix.md)记录当前接口和边界；[模板验证记录](template_audit/README.md)记录来源基线、检查结果和未执行部分。合成数据测试通过不等于真实数据全流程复现。
 
 `ml`、`network_pharmacology`、`molecular_modeling`、`ai_research_harness` 为既有独立模块，本轮未修改其实现或重新评价其成熟度。
+
+报告格式统一见[RNA/WGBS/ATAC规范](docs/reporting.md)。研究设计写在实际课题README，完整图表保留在各分析模块result。

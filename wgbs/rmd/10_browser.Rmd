@@ -9,7 +9,7 @@ message("⏳ 导出 BigWig 文件用于 IGV 可视化...")
 ensure_obj_cpg_loaded()
 ensure_dmr_outputs_loaded()
 ensure_dmr_cgi_context(required = FALSE, persist = TRUE)
-ensure_gene_centric_loaded(required = FALSE)
+ensure_gene_methylation_loaded()
 
 for(i in seq_along(sample_ids)) {
   sample_obj <- obj.cpg[[i]]
@@ -51,7 +51,7 @@ for(i in seq_along(sample_ids)) {
 ```{r}
 # 1 代表性位点轨道图 (Representative Locus Views)
 # ==============================================================================
-# 这里只挑代表性强、耦合分数高、且落在主染色体上的基因做 locus view，避免轨道图过散。
+# 这里只挑代表性强、绝对甲基化差异大、且落在主染色体上的基因做 locus view，避免轨道图过散。
 message("⏳ 绘制代表性基因位点轨道图...")
 
 quiet_gviz_deprecations <- function(expr) {
@@ -73,7 +73,7 @@ old_ucsc_chromosome_names <- getOption("ucscChromosomeNames")
 options(ucscChromosomeNames = FALSE)
 
 tryCatch({
-if(requireNamespace("Gviz", quietly = TRUE) && exists("gene_centric_long") && nrow(gene_centric_long) > 0) {
+if(requireNamespace("Gviz", quietly = TRUE) && exists("gene_methylation_long") && nrow(gene_methylation_long) > 0) {
   txdb <- load_main_chr_txdb(config$gtf_file)
   
   tryCatch({
@@ -91,16 +91,15 @@ if(requireNamespace("Gviz", quietly = TRUE) && exists("gene_centric_long") && nr
     error = function(e) txdb
   )
   
-  representative_genes <- gene_centric_long %>%
-    filter(!is.na(geneChr), !is.na(geneStart), !is.na(geneEnd), !is.na(CouplingScore)) %>%
+  representative_genes <- gene_methylation_long %>%
+    filter(!is.na(geneChr), !is.na(geneStart), !is.na(geneEnd), !is.na(diffMethy)) %>%
     group_by(gene_id_clean) %>%
     summarise(
       SYMBOL = dplyr::first(SYMBOL[!is.na(SYMBOL) & SYMBOL != ""], default = NA_character_),
       geneChr = as.character(first(geneChr)),
       geneStart = suppressWarnings(min(geneStart, na.rm = TRUE)),
       geneEnd = suppressWarnings(max(geneEnd, na.rm = TRUE)),
-      score = max(abs(CouplingScore), na.rm = TRUE),
-      dominant_quadrant = names(sort(table(Quadrant), decreasing = TRUE))[1],
+      score = max(abs(diffMethy), na.rm = TRUE),
       .groups = "drop"
     ) %>%
     mutate(SYMBOL = ifelse(is.na(SYMBOL) | SYMBOL == "", gene_id_clean, SYMBOL)) %>%
@@ -197,7 +196,7 @@ if(requireNamespace("Gviz", quietly = TRUE) && exists("gene_centric_long") && nr
           chromosome = chr_use,
           start = view_start,
           end = view_end,
-          name = paste0(gene_row$SYMBOL, " | ", gene_row$dominant_quadrant),
+          name = paste0(gene_row$SYMBOL, " | abs(delta)=", signif(gene_row$score, 3)),
           transcriptAnnotation = "transcript",
           collapseTranscripts = "meta"
         )),
