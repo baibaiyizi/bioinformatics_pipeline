@@ -1,0 +1,15 @@
+{
+  "status": "COMPLETED",
+  "kind": "program_nes",
+  "input_sha256": {
+    "source.tsv": "c208c2daea89f5e2ed366e108144371fd872837ecff08be24c086193846b444b"
+  },
+  "rows": 210,
+  "script_sha256": "24f690a2baf280490c22265f02480178a5089f6ec76589beda286da93611f58c",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "statistics_recomputed": false,
+  "outputs": {
+    "pdf": "a1d291fbc05d82b196f37630ef8100394d37ce1f4b61dbf182618c07431dd4a3",
+    "png": "c9560327f19de6c2aa2c6f19f46dd0988c23ccf8040e5f88ddeb85856d6d53f4"
+  }
+}

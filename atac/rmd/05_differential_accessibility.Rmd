@@ -321,6 +321,7 @@ if(length(sample_cols) >= 2 && nrow(counts_norm) > 1) {
     step_plot_file("Step5", "Sample_Correlation_Heatmap.pdf"),
     width = 8,
     height = 8,
+    legend_title = "Pearson r",
     pheatmap(
       sample_cor,
       cluster_rows = FALSE,
@@ -329,6 +330,9 @@ if(length(sample_cols) >= 2 && nrow(counts_norm) > 1) {
       annotation_row = sample_cor_anno,
       annotation_colors = list(Group = viz_pal$group),
       color = viz_pal$heat_meth,
+      breaks = seq(-1, 1, length.out = length(viz_pal$heat_meth) + 1),
+      legend_breaks = c(-1, 0, 1), legend_labels = c("-1", "0", "1"),
+      na_col = unname(pfos_palette("neutral")["missing"]),
       main = paste0("Sample correlation heatmap (", baseline_group, " left, ", treatment_group, " right)")
     )
   )
@@ -533,14 +537,9 @@ if(nrow(all_res_df) > 0) {
       PlotP = SelectedSignificanceValue,
       logP = -log10(pmax(PlotP, 1e-300))
     )
-  diff_class_colors <- pal_named(
-    `Not significant` = viz_pal$neutral_mid
-  )
-  diff_class_colors[primary_diff_class_label()] <- pal_pick(viz_pal$accent["warm"])
-
-  p_volcano <- ggplot(volcano_df, aes(x = Fold, y = logP, color = DiffPeakClass)) +
+  p_volcano <- ggplot(volcano_df, aes(x = Fold, y = logP, color = ifelse(PrimaryDiffPeak & Fold > 0, "up", ifelse(PrimaryDiffPeak & Fold < 0, "down", "ns")))) +
     geom_point(alpha = 0.75, size = 1.8) +
-    scale_color_manual(values = diff_class_colors) +
+    scale_color_manual(values = viz_pal$de[c("down", "up", "ns")], breaks = c("down", "up", "ns"), name = "Selected direction") +
     theme_atac_classic(base_size = 12) +
     labs(title="Volcano Plot of Differential Peaks", 
          subtitle=paste("Primary threshold:", primary_diff_peak_label()),
@@ -652,7 +651,9 @@ if(nrow(all_res_df) > 0) {
         heatmap_mat <- as.matrix(heatmap_df[, sample_cols, drop = FALSE])
         rownames(heatmap_mat) <- heatmap_df$peak_id
         heatmap_mat <- t(scale(t(log2(heatmap_mat + 1))))
-        heatmap_mat[is.na(heatmap_mat)] <- 0
+        cluster_display_mat <- heatmap_mat
+        cluster_display_mat[!is.finite(cluster_display_mat)] <- 0
+        heatmap_row_cluster <- stats::hclust(stats::dist(cluster_display_mat))
 
         sample_anno <- data.frame(
           Group = factor(sample_group(sample_cols), levels = group_levels),
@@ -663,13 +664,17 @@ if(nrow(all_res_df) > 0) {
           step_plot_file("Step5", "Top_DiffPeaks_Heatmap.pdf"),
           width = 8,
           height = 10,
+          legend_title = "Row Z-score",
           pheatmap(
             heatmap_mat,
-            cluster_rows = TRUE,
+            cluster_rows = heatmap_row_cluster,
             cluster_cols = FALSE,
             annotation_col = sample_anno,
             annotation_colors = list(Group = viz_pal$group),
             color = viz_pal$heat_meth,
+            breaks = seq(-2.5, 2.5, length.out = length(viz_pal$heat_meth) + 1),
+            legend_breaks = c(-2.5, 0, 2.5), legend_labels = c("≤-2.5", "0", "≥2.5"),
+            na_col = unname(pfos_palette("neutral")["missing"]),
             show_rownames = FALSE,
             fontsize_col = 10
           )
@@ -715,7 +720,7 @@ if(exists("atac_dba") && !is.null(atac_dba) && !atac_primary_require_fc) {
       step_plot_file("Step5", "DiffPeaks_Venn.pdf"),
       width = 8,
       height = 6,
-      dba.plotVenn(atac_dba, contrast = 1, bDB = TRUE, bGain = TRUE, bLoss = TRUE, bAll = FALSE,
+      atac_plot_direction_venn(atac_dba, contrast = 1, bDB = TRUE, bGain = TRUE, bLoss = TRUE, bAll = FALSE,
                    th = if(atac_significance_mode == "pvalue") atac_primary_p_cutoff else atac_diff_fdr_cutoff,
                    bUsePval = atac_significance_mode == "pvalue", method = DBA_DESEQ2)
     ),

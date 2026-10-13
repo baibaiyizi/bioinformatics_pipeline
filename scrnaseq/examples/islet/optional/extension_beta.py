@@ -27,7 +27,8 @@ from scipy.sparse.csgraph import connected_components
 from scipy.stats import spearmanr
 from sklearn.metrics import adjusted_rand_score
 
-from .plotting import save_figure
+from .plotting import DIVERGING_CMAP, save_figure, category_color
+from .figure_style import PROFILE, COLORS
 from .runtime import atomic_json, atomic_text, atomic_tsv, sha256
 
 
@@ -37,15 +38,9 @@ MAIN_NEIGHBORS = 30
 MAIN_PCS = 40
 LEIDEN_RESOLUTIONS = (0.3, 0.5, 0.8)
 PREFERRED_CLUSTER_KEY = "beta_leiden_0.5"
-CONDITION_COLORS = {"PFOS": "#FF9F9B", "WT": "#A1C9F4"}
-BETA_CLUSTER_COLORS = {
-    "0": "#0072B2",
-    "1": "#E69F00",
-    "2": "#009E73",
-    "3": "#CC79A7",
-    "4": "#D55E00",
-}
-CELL_CYCLE_COLORS = {"G1": "#D4D9DE", "S": "#56B4E9", "G2M": "#D55E00"}
+CONDITION_COLORS = COLORS
+BETA_CLUSTER_COLORS = PROFILE["palettes"]["beta_clusters"]
+CELL_CYCLE_COLORS = PROFILE["palettes"]["cell_cycle"]
 
 # Frozen before looking at condition differences. These programs are scored as
 # continuous covariates with expression-matched control genes. They are not
@@ -832,11 +827,10 @@ def _umap_source(data: ad.AnnData, columns: list[str]) -> pd.DataFrame:
 
 def _draw_umap_categorical(source: pd.DataFrame, column: str, title: str, colors: dict[str, str] | None = None) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(7.2, 6.2))
-    categories = sorted(source[column].astype(str).unique())
-    cmap = plt.get_cmap("tab20")
+    categories = [key for key in (colors or {}).keys() if key in set(source[column].astype(str))] if colors else sorted(source[column].astype(str).unique())
     for index, category in enumerate(categories):
         sub = source[source[column].astype(str).eq(category)]
-        ax.scatter(sub["UMAP1"], sub["UMAP2"], s=3, alpha=0.72, linewidths=0, rasterized=True, label=category, color=(colors or {}).get(category, cmap(index % 20)))
+        ax.scatter(sub["UMAP1"], sub["UMAP2"], s=3, alpha=0.72, linewidths=0, rasterized=True, label=category, color=colors[category] if colors is not None else category_color(category))
     ax.set(title=title, xlabel="UMAP1", ylabel="UMAP2")
     ax.set_xticks([]); ax.set_yticks([])
     ax.legend(frameon=False, bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=7, markerscale=3)
@@ -894,7 +888,7 @@ def _draw_marker_dot(source: pd.DataFrame) -> plt.Figure:
     fig, ax = plt.subplots(figsize=(max(10.0, len(genes) * 0.30), max(4.5, len(clusters) * 0.55)))
     xmap = {gene: index for index, gene in enumerate(genes)}
     ymap = {cluster: index for index, cluster in enumerate(clusters)}
-    points = ax.scatter(source["gene"].map(xmap), source["cluster"].astype(str).map(ymap), s=12 + 150 * source["detection_fraction"], c=source["zscore_cluster_mean"], cmap="coolwarm", vmin=-2, vmax=2, linewidths=0.2, edgecolors="#444444")
+    points = ax.scatter(source["gene"].map(xmap), source["cluster"].astype(str).map(ymap), s=200 * source["detection_fraction"], c=source["zscore_cluster_mean"], cmap=DIVERGING_CMAP, vmin=-2.5, vmax=2.5, linewidths=0.2, edgecolors="#444444")
     ax.set_xticks(range(len(genes)), genes, rotation=90)
     ax.set_yticks(range(len(clusters)), clusters)
     ax.set(xlabel="Gene", ylabel="Beta cluster", title="Beta-cluster marker and program evidence")
@@ -906,7 +900,7 @@ def _draw_marker_dot(source: pd.DataFrame) -> plt.Figure:
 def _draw_marker_heatmap(source: pd.DataFrame) -> plt.Figure:
     pivot = source.pivot(index="gene", columns="cluster", values="zscore_cluster_mean")
     fig, ax = plt.subplots(figsize=(max(6.5, pivot.shape[1] * 0.65), max(8.0, pivot.shape[0] * 0.22)))
-    sns.heatmap(pivot, cmap="coolwarm", center=0, vmin=-2, vmax=2, ax=ax, cbar_kws={"label": "Cluster mean z-score"})
+    sns.heatmap(pivot, cmap=DIVERGING_CMAP, center=0, vmin=-2.5, vmax=2.5, ax=ax, cbar_kws={"label": "Cluster mean z-score"})
     ax.set(title="Beta-cluster marker heatmap", xlabel="Beta cluster", ylabel="Gene")
     fig.tight_layout()
     return fig
@@ -917,7 +911,14 @@ def _draw_target_violin(source: pd.DataFrame) -> plt.Figure:
     fig, axes = plt.subplots(1, 3, figsize=(14.5, 4.5), sharey=False)
     for gene, ax in zip(("Mpc1", "Mpc2", "Atg7"), axes, strict=True):
         subset = melted[melted["gene"].eq(gene)]
-        sns.violinplot(data=subset, x="library_id", y="log1p_expression", hue="library_id", palette={"PFOS_Lib01": CONDITION_COLORS["PFOS"], "WT_Lib01": CONDITION_COLORS["WT"]}, cut=0, inner="quart", legend=False, ax=ax)
+        sns.violinplot(data=subset, x="library_id", y="log1p_expression", hue="library_id", palette={"PFOS_Lib01": CONDITION_COLORS["PFOS"], "WT_Lib01": CONDITION_COLORS["WT"]}, cut=0, inner=None, linewidth=0, alpha=0.30, legend=False, ax=ax)
+        for position, library in enumerate(subset["library_id"].drop_duplicates()):
+            values = subset.loc[subset["library_id"].eq(library), "log1p_expression"].to_numpy()
+            values = values[np.isfinite(values)]
+            if len(values):
+                q1, median, q3 = np.quantile(values, [.25, .5, .75], method="linear")
+                ax.vlines(position, q1, q3, color=PROFILE["palettes"]["neutral"]["dark"], linewidth=.25 * 72 / 25.4, zorder=4)
+                ax.scatter(position, median, s=(1.1 * 72 / 25.4)**2, color=PROFILE["palettes"]["neutral"]["dark"], linewidths=0, zorder=5)
         ax.set(title=gene, xlabel="Library", ylabel="Normalize-total log1p expression")
         ax.tick_params(axis="x", rotation=20)
         _theme(ax)
@@ -960,7 +961,7 @@ def _draw_identity_audit(
     ymap = {cluster: index for index, cluster in enumerate(clusters)}
     points = axes[0, 0].scatter(
         corrected["gene"].map(xmap), corrected["beta_cluster"].astype(str).map(ymap),
-        s=12 + 150 * corrected["detection_fraction"], c=np.log1p(corrected["mean_umi"]),
+        s=200 * corrected["detection_fraction"], c=np.log1p(corrected["mean_umi"]),
         cmap="viridis", linewidths=0.2, edgecolors="#444444",
     )
     axes[0, 0].set_xticks(range(len(genes)), genes, rotation=90)
@@ -972,7 +973,7 @@ def _draw_identity_audit(
         ["beta_cluster", "layer"], observed=True
     )["mean_umi"].sum().rename("mean_summed_noncognate_umi").reset_index()
     hormone_pivot = hormone.pivot(index="beta_cluster", columns="layer", values="mean_summed_noncognate_umi").fillna(0)
-    hormone_pivot.plot.bar(ax=axes[0, 1], color={"counts_raw": "#999999", "counts": "#D55E00"})
+    hormone_pivot.plot.bar(ax=axes[0, 1], color={"counts_raw": PROFILE["palettes"]["neutral"]["mid"], "counts": PROFILE["palettes"]["accent"]["warm"]})
     axes[0, 1].set(title="Raw versus corrected noncognate hormone burden", xlabel="Beta cluster", ylabel="Mean summed UMI")
     axes[0, 1].legend(title="Layer", frameon=False)
 
@@ -985,7 +986,7 @@ def _draw_identity_audit(
     axes[1, 0].scatter(
         np.log1p(cell_audit.loc[review_cluster, "total_counts"]),
         cell_audit.loc[review_cluster, "n_genes_by_counts"], s=3, alpha=0.42,
-        c="#D55E00", rasterized=True, label=f"Cluster {IDENTITY_REVIEW_CLUSTER}",
+        c=BETA_CLUSTER_COLORS[IDENTITY_REVIEW_CLUSTER], rasterized=True, label=f"Cluster {IDENTITY_REVIEW_CLUSTER}",
     )
     axes[1, 0].axvline(np.log1p(thresholds["total_counts_le"]), color="#222222", linestyle="--", linewidth=0.8)
     axes[1, 0].axhline(thresholds["n_genes_by_counts_le"], color="#222222", linestyle="--", linewidth=0.8)
@@ -1006,7 +1007,7 @@ def _draw_identity_audit(
     )
     reverse_names = {value: key for key, value in flag_columns.items()}
     flag_long["flag"] = flag_long["flag"].map(reverse_names)
-    sns.barplot(data=flag_long, x="beta_cluster", y="fraction", hue="flag", ax=axes[1, 1])
+    sns.barplot(data=flag_long, x="beta_cluster", y="fraction", hue="flag", hue_order=list(flag_columns), palette=dict(zip(flag_columns, PROFILE["palettes"]["accent"].values())), ax=axes[1, 1])
     axes[1, 1].set(title="Neutral annotation-review candidate rates", xlabel="Beta cluster", ylabel="Fraction", ylim=(0, 1))
     axes[1, 1].legend(title="Candidate flag", frameon=False, fontsize=7, ncol=2)
     for ax in axes.flat:
@@ -1042,7 +1043,7 @@ def _draw_cluster4_sensitivity(source: pd.DataFrame) -> plt.Figure:
 def _draw_qc_heatmap(source: pd.DataFrame) -> plt.Figure:
     pivot = source.pivot(index=["library_id", "qc_metric"], columns="score", values="spearman_rho")
     fig, ax = plt.subplots(figsize=(10.5, max(4.5, pivot.shape[0] * 0.42)))
-    sns.heatmap(pivot, cmap="coolwarm", center=0, vmin=-1, vmax=1, annot=True, fmt=".2f", ax=ax, cbar_kws={"label": "Spearman rho"})
+    sns.heatmap(pivot, cmap=DIVERGING_CMAP, center=0, vmin=-1, vmax=1, annot=True, fmt=".2f", ax=ax, cbar_kws={"label": "Spearman rho"})
     ax.set(title="Within-library QC associations with beta-state scores", xlabel="Continuous score", ylabel="Library / QC metric")
     fig.tight_layout()
     return fig

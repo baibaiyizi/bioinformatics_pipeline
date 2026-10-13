@@ -33,6 +33,10 @@ python3 copy_template.py rnaseq ../projects/new_study/mouse/rnaseq
 
 跨组织、跨阶段和跨组学使用 [integration](integration/README.md)；血清方法比较可单独复制 `integration/method_comparison`。项目内先分实际human/mouse，单组学输出供联合流程读取。
 
+## 统一绘图
+
+[生信绘图模板](figures/README.md)提供 R/Python 原生绘图接口、真实来源预览和公开论文代码学习卡。按分析问题与输入资格选图，同项目同类图固定一种呈现，并冻结项目配色、尺度和实际源码；复杂图必须保留可追溯的完整背景和证据边界。
+
 ## 开始一个项目
 
 1. 复制需要的模板目录；配置参考文件、工具、输入路径和实验参数。

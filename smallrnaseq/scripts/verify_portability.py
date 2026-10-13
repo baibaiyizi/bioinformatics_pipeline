@@ -47,13 +47,14 @@ def main():
         with (output/f'{species}_{endo}_execution.log').open('w') as log:
             subprocess.run(command,cwd=output,env=env,stdout=log,stderr=subprocess.STDOUT,check=True)
         stage = root/'result/describe'
+        setup = stage / ('01_setup' if species == 'Homo' else '1_setup')
         receipt = rows(stage/'run_status.tsv')[0]
         if receipt['State'] != 'completed' or receipt['Project'] != 'synthetic_fixture':
             raise AssertionError('stage not completed or explicit project identity lost')
         for table in ['composition_integrity_check','length_composition_integrity_check','output_integrity_check']:
-            if any(row['Pass'] != 'TRUE' for row in rows(stage/f'1_setup/{table}.tsv')):
+            if any(row['Pass'] != 'TRUE' for row in rows(setup/f'{table}.tsv')):
                 raise AssertionError(table)
-        counts = rows(stage/'1_setup/1_expression_matrix/class_reads.tsv')
+        counts = rows(setup/'1_expression_matrix/class_reads.tsv')
         by_class = {row['MainCategory']: float(row['synthetic_library_1']) for row in counts}
         if sum(by_class.values()) != 65 or by_class.get('endo-siRNA',0) != (30 if endo == '1' else 0):
             raise AssertionError(f'classification boundary failed: {by_class}')

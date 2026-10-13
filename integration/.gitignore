@@ -4,6 +4,7 @@
 !*.md
 !*.sh
 !*.R
+!*.Rmd
 !*.py
 !*.yml
 !*.yaml

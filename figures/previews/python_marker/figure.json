@@ -1,0 +1,21 @@
+{
+  "status": "COMPLETED",
+  "kind": "marker",
+  "rows": 117,
+  "input_sha256": "70181b6d55d29c40fccc21ac2a4672f8de698cb9024e038d14ca12fd6afb1a1e",
+  "script_sha256": "9ffa46f485a0ad008a1e902ad5a54df7e3b6c9e0057ffe10fa96909d160ff7eb",
+  "profile_id": "bluepink_semantic_v2",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "value_label": "Within-gene cluster z-score; ≤−2.5 / ≥2.5 capped",
+  "statistics_recomputed": false,
+  "outputs": {
+    "pdf": {
+      "path": "figure.pdf",
+      "sha256": "e8507ce52fb62006105e886fca05f6ac92457b0b5df648871847dd5553a36dd4"
+    },
+    "png": {
+      "path": "figure.png",
+      "sha256": "192a07aee4d45f5a62634bbc2dfa42e8c626fe62d32ee8f9eb5d97cfd7c6c5ba"
+    }
+  }
+}

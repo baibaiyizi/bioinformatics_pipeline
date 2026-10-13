@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import scanpy as sc
 
-from .plotting import categorical_embedding
+from .plotting import categorical_embedding, sample_palettes, CLUSTER_COLORS
 from .runtime import RunContext, atomic_tsv
 
 
@@ -59,9 +59,10 @@ def run_atlas(context: RunContext, qc_path: str | None = None) -> str:
         atomic_tsv(marker_output, markers)
         dpi = int(context.config.data["report"]["dpi"])
         if context.config.data["report"].get("figures", True):
-            categorical_embedding(data.obsm["X_umap"], data.obs["library_id"], "Library", context.path("08_figures", "umap_library"), dpi)
-            categorical_embedding(data.obsm["X_umap"], data.obs["condition"], "Condition (descriptive)", context.path("08_figures", "umap_condition"), dpi)
-            categorical_embedding(data.obsm["X_umap"], data.obs[preferred_key], f"Leiden {preferred:g}", context.path("08_figures", "umap_leiden"), dpi)
+            conditions, libraries = sample_palettes(context.config)
+            categorical_embedding(data.obsm["X_umap"], data.obs["library_id"], "Library", context.path("08_figures", "umap_library"), libraries, dpi)
+            categorical_embedding(data.obsm["X_umap"], data.obs["condition"], "Condition (descriptive)", context.path("08_figures", "umap_condition"), conditions, dpi)
+            categorical_embedding(data.obsm["X_umap"], data.obs[preferred_key], f"Leiden {preferred:g}", context.path("08_figures", "umap_leiden"), CLUSTER_COLORS, dpi)
         base_source = pd.DataFrame({"cell_id": data.obs_names.astype(str), "UMAP1": data.obsm["X_umap"][:, 0], "UMAP2": data.obsm["X_umap"][:, 1]})
         for name, values in (("library", data.obs["library_id"]), ("condition", data.obs["condition"]), ("leiden", data.obs[preferred_key])):
             source = base_source.copy()

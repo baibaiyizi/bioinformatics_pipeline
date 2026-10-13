@@ -3,7 +3,7 @@ write_report_index <- function(ctx,statuses) {
     tsrna=TSRNA_COMPARE_DIR,rsrna=RSRNA_COMPARE_DIR,mirna=MIRNA_COMPARE_DIR,
     pirna=PIRNA_COMPARE_DIR,endo=ENDOSIRNA_COMPARE_DIR,
     capture=get0("CAPTURE_DIR"),capture_bias=get0("CAPTURE_BIAS_DIR"),
-    similarity=file.path(RESULT_DIR,"11_method_similarity"),
+    similarity=file.path(RESULT_DIR,"02_method_similarity"),
     snrna=get0("SNRNA_COMPARE_DIR"),spikein=get0("SPIKEIN_DIR"))
   completed_dirs <- unlist(module_dirs[statuses$Module[statuses$Status=="completed"]],use.names=FALSE)
   pdfs <- unique(unlist(lapply(completed_dirs,function(d)

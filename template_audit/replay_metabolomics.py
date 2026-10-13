@@ -14,8 +14,8 @@ for label,detected,reverse in [('missing_prefill',False,False),('with_prefill',T
  (dst/'config/project.yml').write_text(yaml.safe_dump(cfg,sort_keys=False))
  subprocess.run(['bash',str(dst/'run.sh'),'check'],stdout=log,stderr=log,check=True);assert not (dst/'result').exists()
  subprocess.run(['Rscript',str(dst/'scripts/pipeline.R'),'--module','all'],stdout=log,stderr=log,check=True)
- result=pd.read_csv(dst/'result/04_statistics'/f"{cfg['case_group']}_vs_{cfg['control_group']}_differential_features.csv").set_index('feature_id').sort_index()
- assert (dst/'result/report.md').exists();q=pd.read_csv(dst/'result/03_qc/feature_filter_decision.csv')
+ result=pd.read_csv(dst/'result/04_statistics/tables'/f"{cfg['case_group']}_vs_{cfg['control_group']}_differential_features.csv").set_index('feature_id').sort_index()
+ assert (dst/'result/index.html').exists();q=pd.read_csv(dst/'result/03_qc/tables/feature_filter_decision.csv')
  if not detected:assert q.detection_rate.isna().all() and (q.detection_status=='not_available_no_prefill_matrix').all()
  else:assert not bool(q.set_index('feature_id').loc['f10','keep'])
  if label=='missing_prefill':base=result
@@ -31,7 +31,7 @@ failed=root/'failed_producer';shutil.copytree(src,failed);(failed/'inputs').mkdi
 for name in ['filled.csv','features.csv']:
  shutil.copy2(root/'missing_prefill space/inputs'/name,failed/'inputs'/name)
 subprocess.run(['Rscript',str(failed/'scripts/pipeline.R'),'--module','xcms'],stdout=log,stderr=log,check=True)
-state=failed/'result/module_status.tsv';state.write_text(state.read_text()+'xcms\tfailed\tsynthetic_failure\n')
+state=failed/'result/01_audit/tables/module_status.tsv';state.write_text(state.read_text()+'xcms\tfailed\tsynthetic_failure\n')
 blocked=subprocess.run(['Rscript',str(failed/'scripts/pipeline.R'),'--module','preprocess'],capture_output=True,text=True)
 assert blocked.returncode!=0 and '上游失败或未完成' in blocked.stderr
 cases.append('failed_producer_rejected')

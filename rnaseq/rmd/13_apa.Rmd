@@ -158,8 +158,8 @@ if (nrow(apa_all_events) > 0) {
         primary = file.path(step11_dir, "13_9_top_APA_gene_heatmap.pdf"),
         width = 8.5,
         height = 10,
-        expr = ComplexHeatmap::draw(
-          ComplexHeatmap::Heatmap(
+        expr = pfos_draw_heatmap(
+          pfos_heatmap(
             apa_heat_mat,
             name = "z-score",
             col = heatmap_diverging_col_fun(apa_heat_mat),
@@ -187,7 +187,8 @@ if (nrow(apa_all_events) > 0) {
       ggplot(aes(x = log2FoldChange, y = max_abs_delta_PAU, size = significant_apa_event_count, color = direction)) +
       geom_point(alpha = 0.8) +
       scale_color_manual(values = viz_pal$de) +
-      labs(title = "Gene expression change vs APA effect", x = "Gene log2FC", y = "Max |delta PAU|", size = "Sig APA events") +
+      scale_size_area(max_size = 6, name = "Significant APA events") +
+      labs(title = "Gene expression change vs APA effect", x = "Gene log2FC", y = "Max |delta PAU|", size = "Significant APA events") +
       theme_rnaseq_publication()
     save_plot_versions(apa_de_scatter, file.path(step11_dir, "13_11_DE_APA_joint_scatter.pdf"), width = 8.5, height = 6)
   }

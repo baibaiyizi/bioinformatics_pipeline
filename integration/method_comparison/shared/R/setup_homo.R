@@ -119,71 +119,71 @@ spikein_edit1_sequences <- function(target = SPIKEIN_SEQ) {
   unique(c(target, substitutions, deletions, insertions))
 }
 
-SPIKEIN_DIR        <- file.path(RESULT_DIR, "13_spikein_qc")
+SPIKEIN_DIR        <- file.path(RESULT_DIR, "03_spikein_qc")
 
 SPIKEIN_FIG        <- file.path(SPIKEIN_DIR, "plots")
 
 SPIKEIN_TAB        <- file.path(SPIKEIN_DIR, "tables")
 
-SETUP_DIR         <- file.path(RESULT_DIR, "1_setup")
+SETUP_DIR         <- file.path(RESULT_DIR, "01_setup")
 
 EXPRESSION_MATRIX_DIR <- file.path(SETUP_DIR, "1_expression_matrix")
 
-SINGLE_DIR        <- file.path(RESULT_DIR, "2_single")
+SINGLE_DIR        <- file.path(RESULT_DIR, "02_single")
 
 SINGLE_FIG        <- file.path(SINGLE_DIR, "plots")
 
 SINGLE_TAB        <- file.path(SINGLE_DIR, "tables")
 
-PCA_DIR           <- file.path(RESULT_DIR, "3_pca")
+PCA_DIR           <- file.path(RESULT_DIR, "03_pca")
 
 PCA_FIG           <- file.path(PCA_DIR, "plots")
 
 PCA_TAB           <- file.path(PCA_DIR, "tables")
 
-SNC_COMPARE_DIR   <- file.path(RESULT_DIR, "4_sncRNA_compare")
+SNC_COMPARE_DIR   <- file.path(RESULT_DIR, "04_sncRNA_compare")
 
 SNC_COMPARE_FIG   <- file.path(SNC_COMPARE_DIR, "plots")
 
 SNC_COMPARE_TAB   <- file.path(SNC_COMPARE_DIR, "tables")
 
-TSRNA_COMPARE_DIR <- file.path(RESULT_DIR, "5_tsrna_compare")
+TSRNA_COMPARE_DIR <- file.path(RESULT_DIR, "05_tsrna_compare")
 
 TSRNA_COMPARE_FIG <- file.path(TSRNA_COMPARE_DIR, "plots")
 
 TSRNA_COMPARE_TAB <- file.path(TSRNA_COMPARE_DIR, "tables")
 
-RSRNA_COMPARE_DIR <- file.path(RESULT_DIR, "6_rsrna_compare")
+RSRNA_COMPARE_DIR <- file.path(RESULT_DIR, "06_rsrna_compare")
 
 RSRNA_COMPARE_FIG <- file.path(RSRNA_COMPARE_DIR, "plots")
 
 RSRNA_COMPARE_TAB <- file.path(RSRNA_COMPARE_DIR, "tables")
 
-MIRNA_COMPARE_DIR <- file.path(RESULT_DIR, "7_mirna_compare")
+MIRNA_COMPARE_DIR <- file.path(RESULT_DIR, "07_mirna_compare")
 
 MIRNA_COMPARE_FIG <- file.path(MIRNA_COMPARE_DIR, "plots")
 
 MIRNA_COMPARE_TAB <- file.path(MIRNA_COMPARE_DIR, "tables")
 
-PIRNA_COMPARE_DIR <- file.path(RESULT_DIR, "8_pirna_compare")
+PIRNA_COMPARE_DIR <- file.path(RESULT_DIR, "08_pirna_compare")
 
 PIRNA_COMPARE_FIG <- file.path(PIRNA_COMPARE_DIR, "plots")
 
 PIRNA_COMPARE_TAB <- file.path(PIRNA_COMPARE_DIR, "tables")
 
-CAPTURE_DIR        <- file.path(RESULT_DIR, "9_differential_capture")
+CAPTURE_DIR        <- file.path(RESULT_DIR, "04_differential_capture")
 
 CAPTURE_FIG        <- file.path(CAPTURE_DIR, "plots")
 
 CAPTURE_TAB        <- file.path(CAPTURE_DIR, "tables")
 
-CAPTURE_BIAS_DIR   <- file.path(RESULT_DIR, "10_capture_bias_diagnostics")
+CAPTURE_BIAS_DIR   <- file.path(RESULT_DIR, "05_capture_bias_diagnostics")
 
 CAPTURE_BIAS_FIG   <- file.path(CAPTURE_BIAS_DIR, "plots")
 
 CAPTURE_BIAS_TAB   <- file.path(CAPTURE_BIAS_DIR, "tables")
 
-SNRNA_COMPARE_DIR  <- file.path(RESULT_DIR, "12_snRNA_compare")
+SNRNA_COMPARE_DIR  <- file.path(RESULT_DIR, "09_snRNA_compare")
 
 SNRNA_COMPARE_FIG  <- file.path(SNRNA_COMPARE_DIR, "plots")
 
@@ -849,7 +849,7 @@ load_serum_context <- function(report_view = REPORT_VIEW, analysis_scope = "all"
     filter(RPM > 0 | Reads > 0) %>% arrange(Group,desc(RPM),desc(Reads),PrimaryAnnotation) %>%
     group_by(Group) %>% mutate(Rank=row_number()) %>% filter(Rank<=20) %>% ungroup()
 
-  # 每样本 cel-miR-39 外参检出表（模块 13 使用）。
+  # 每样本 cel-miR-39 外参检出表（模块 03 使用）。
   # 基于 SPORTS output 矩阵做精确序列 + 编辑距离 1 的替换/插入/缺失近邻计数。
   # 注意：spike-in 序列无法比对到人源参考，SPORTS 会把它归到 NO_Annotation/other。
   compute_spikein_counts <- function(output_all_df, sample_info_df) {

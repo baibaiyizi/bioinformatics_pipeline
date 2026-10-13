@@ -272,11 +272,11 @@ if (nrow(activity_heatmap_mat) >= 2) {
     primary = file.path(mouse_activity_plot_dir, "17_8_Mouse_native_pathway_activity_heatmap.pdf"),
     width = 9,
     height = 10,
-    expr = ComplexHeatmap::draw(
-      ComplexHeatmap::Heatmap(
+    expr = pfos_draw_heatmap(
+      pfos_heatmap(
         activity_heatmap_scaled,
         name = "z-score",
-        col = heatmap_diverging_col_fun(activity_heatmap_scaled),
+        col = heatmap_diverging_col_fun(activity_heatmap_scaled,breaks=c(-2.5,0,2.5)),
         top_annotation = heatmap_group_annotation(sample_info$group),
         cluster_rows = TRUE,
         cluster_columns = TRUE,
@@ -329,14 +329,17 @@ pathway_score_long <- bind_rows(
 
 if (nrow(pathway_score_long) > 0) {
   pathway_boxplot <- ggplot(pathway_score_long, aes(x = group, y = score, fill = group)) +
-    geom_violin(trim = TRUE, alpha = 0.75) +
-    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = viz_pal$neutral["light"]) +
-    facet_grid(family ~ pathway, scales = "free_y") +
+    geom_violin(trim = TRUE, alpha = 0.30, colour = NA) +
+    stat_summary(fun.data = pfos_violin_summary, geom = "linerange", show.legend = FALSE, linewidth = 0.25, colour = pfos_palette("neutral")[["dark"]]) +
+    stat_summary(fun = function(y) pfos_violin_summary(y)$y, geom = "point", show.legend = FALSE, size = 1.1, colour = pfos_palette("neutral")[["dark"]]) +
+    facet_wrap(vars(family, pathway), scales = "free_y", ncol = 3,
+      labeller = labeller(.default = function(x) stringr::str_wrap(gsub("_", " ", x, fixed = TRUE), width = 28))) +
     scale_fill_manual(values = group_colors) +
     labs(title = "Mouse native: top differential pathway activity scores", x = NULL, y = "Pathway activity score") +
     theme_rnaseq_publication(base_size = viz_style$compact_size) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  save_plot_versions(pathway_boxplot, file.path(mouse_activity_plot_dir, "17_10_Mouse_native_pathway_activity_boxplots.pdf"), width = 13, height = 8.5)
+    theme(strip.text.x = element_text(size = 7), axis.text.x = element_text(angle = 45, hjust = 1))
+  save_plot_versions(pathway_boxplot, file.path(mouse_activity_plot_dir, "17_10_Mouse_native_pathway_activity_boxplots.pdf"), width = 13,
+    height = max(8.5, (20 + 42 * ceiling(nrow(dplyr::distinct(pathway_score_long, family, pathway)) / 3)) * 13 / 183))
 }
 
 human_top_pathway_names <- unique(c(
@@ -355,11 +358,11 @@ if (nrow(human_activity_heatmap_mat) >= 2) {
     primary = file.path(human_activity_plot_dir, "17_8_Human_ortholog_pathway_activity_heatmap.pdf"),
     width = 9,
     height = 10,
-    expr = ComplexHeatmap::draw(
-      ComplexHeatmap::Heatmap(
+    expr = pfos_draw_heatmap(
+      pfos_heatmap(
         human_activity_heatmap_scaled,
         name = "z-score",
-        col = heatmap_diverging_col_fun(human_activity_heatmap_scaled),
+        col = heatmap_diverging_col_fun(human_activity_heatmap_scaled,breaks=c(-2.5,0,2.5)),
         top_annotation = heatmap_group_annotation(sample_info$group),
         cluster_rows = TRUE,
         cluster_columns = TRUE,
@@ -404,14 +407,21 @@ human_pathway_score_long <- bind_rows(
 
 if (nrow(human_pathway_score_long) > 0) {
   human_pathway_boxplot <- ggplot(human_pathway_score_long, aes(x = group, y = score, fill = group)) +
-    geom_violin(trim = TRUE, alpha = 0.75) +
-    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = viz_pal$neutral["light"]) +
-    facet_grid(family ~ pathway, scales = "free_y") +
+    geom_violin(trim = TRUE, alpha = 0.30, colour = NA) +
+    stat_summary(fun.data = pfos_violin_summary, geom = "linerange", show.legend = FALSE, linewidth = 0.25, colour = pfos_palette("neutral")[["dark"]]) +
+    stat_summary(fun = function(y) pfos_violin_summary(y)$y, geom = "point", show.legend = FALSE, size = 1.1, colour = pfos_palette("neutral")[["dark"]]) +
+    facet_wrap(vars(family, pathway), scales = "free_y", ncol = 4,
+      labeller = function(labels) list(paste(
+        gsub("_", " ", labels$family, fixed = TRUE),
+        stringr::str_wrap(gsub("_", " ", sub("^(HALLMARK|KEGG|REACTOME)_", "", labels$pathway), fixed = TRUE), width = 18),
+        sep = "\n"))) +
     scale_fill_manual(values = group_colors) +
+    scale_y_continuous(breaks = function(limits) range(limits), labels = scales::label_number(accuracy = 0.001)) +
     labs(title = "Human MSigDB HS->Mus musculus ortholog: activity scores", x = NULL, y = "Pathway activity score") +
     theme_rnaseq_publication(base_size = viz_style$compact_size) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  save_plot_versions(human_pathway_boxplot, file.path(human_activity_plot_dir, "17_10_Human_ortholog_pathway_activity_boxplots.pdf"), width = 13, height = 8.5)
+    theme(strip.text.x = element_text(size = 7, margin = margin(1, 1, 1, 1)), panel.spacing = grid::unit(1, "mm"), axis.text.x = element_text(angle = 45, hjust = 1))
+  save_plot_versions(human_pathway_boxplot, file.path(human_activity_plot_dir, "17_10_Human_ortholog_pathway_activity_boxplots.pdf"), width = 13,
+    height = max(8.5, (20 + 27.5 * ceiling(nrow(dplyr::distinct(human_pathway_score_long, family, pathway)) / 4)) * 13 / 183))
 }
 
 empty_gsea_activity_tbl <- function() {
@@ -557,7 +567,7 @@ if (nrow(effect_summary_long) > 0) {
   joint_effect_plot <- ggplot(effect_summary_long, aes(x = de_log2FoldChange, y = effect_size, color = method)) +
     geom_point(alpha = 0.75, size = 1.7) +
     facet_wrap(~ method, scales = "free_y") +
-    scale_color_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), effect_summary_long$method)) +
+    scale_color_manual(values = resolve_named_colors(pfos_palette("rna_method"), effect_summary_long$method)) +
     labs(title = "DE log2FC vs RNA processing effect size", x = "Gene log2FC", y = "Effect size") +
     theme_rnaseq_publication()
   save_plot_versions(joint_effect_plot, file.path(mouse_activity_plot_dir, "17_16_joint_effect_scatter.pdf"), width = 11, height = 6)
@@ -615,7 +625,8 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
     pivot_longer(cols = c(de_genes, das_genes, deu_genes, is_genes, apa_genes, der_genes, multi_evidence_genes, high_support_genes), names_to = "evidence_type", values_to = "gene_count")
   module_evidence_bubble_6way <- ggplot(module_evidence_long_6way, aes(x = module_trait_correlation, y = reorder(module_label, module_trait_correlation), size = gene_count, color = evidence_type)) +
     geom_point(alpha = 0.85) +
-    scale_color_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), module_evidence_long_6way$evidence_type)) +
+    scale_color_manual(values = resolve_named_colors(pfos_palette("rna_category"), module_evidence_long_6way$evidence_type)) +
+    scale_size_area(max_size = 6) +
     labs(title = "Module multi-evidence summary (DE/DAS/DEU/IS/APA/DER)", x = "Module-trait correlation", y = NULL, size = "Gene count", color = "Evidence") +
     theme_rnaseq_publication()
   save_plot_versions(module_evidence_bubble_6way, file.path(mouse_activity_plot_dir, "17_22_Module_MultiEvidence_Bubble_6way.pdf"), width = 9.5, height = max(5, 0.8 * nrow(module_evidence_summary_6way)))
@@ -624,18 +635,17 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0) {
     dplyr::select(de_genes, das_genes, deu_genes, is_genes, apa_genes, der_genes, multi_evidence_genes, high_support_genes, module_trait_correlation) %>%
     as.matrix()
   rownames(module_evidence_heatmap_6way) <- module_evidence_summary_6way$module_label
-  module_evidence_heatmap_6way <- scale(module_evidence_heatmap_6way)
-  module_evidence_heatmap_6way[!is.finite(module_evidence_heatmap_6way)] <- 0
+  module_evidence_heatmap_6way <- legacy_evidence_scale(module_evidence_heatmap_6way)
   save_base_pdf_versions(
     primary = file.path(mouse_activity_plot_dir, "17_23_Module_MultiEvidence_Heatmap_6way.pdf"),
     width = 8.5,
     height = max(5, 0.5 * nrow(module_evidence_summary_6way) + 2),
-    expr = ComplexHeatmap::draw(
-      ComplexHeatmap::Heatmap(
+    expr = pfos_draw_heatmap(
+      pfos_heatmap(
         module_evidence_heatmap_6way,
         name = "z-score",
-        col = heatmap_diverging_col_fun(module_evidence_heatmap_6way),
-        cluster_rows = TRUE,
+        col = heatmap_diverging_col_fun(module_evidence_heatmap_6way,breaks=c(-2.5,0,2.5)),
+        cluster_rows = FALSE,
         cluster_columns = FALSE,
         column_names_rot = 45
       )

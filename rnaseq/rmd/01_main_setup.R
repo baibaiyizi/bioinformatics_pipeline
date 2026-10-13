@@ -1459,6 +1459,7 @@ record_plot_status <- function(primary, status = "generated", reason = "", input
     png_path = rel_png,
     status = status,
     reason = reason,
+    scientific_status = figure_scientific_status(primary),
     input_rows = input_rows,
     generated_at = format(Sys.time(), "%Y-%m-%d %H:%M:%S"),
     stringsAsFactors = FALSE
@@ -1479,38 +1480,124 @@ flush_plot_audit <- function(path = file.path(result_root_dir, "00_audit", "tabl
   invisible(audit_tbl)
 }
 
-save_plot_versions <- function(plot, primary, width = 8, height = 6,
-                               coordinate_system = c("axes", "none")) {
-  coordinate_system <- match.arg(coordinate_system)
-  primary <- route_output_path(primary, preferred = "plot")
-  ensure_parent_dir(primary)
-  dims <- rnaseq_figure_dimensions(width, height)
-  plot <- standardize_plot_typography(plot, coordinate_system = coordinate_system)
-  ggsave(
-    primary,
-    plot = plot,
-    width = dims$pdf_width_mm,
-    height = dims$pdf_height_mm,
-    units = "mm",
-    dpi = FIG_PNG_DPI,
-    device = pdf_device_fn(),
-    family = rnaseq_figure_font_family,
-    limitsize = FALSE,
-    bg = "white"
-  )
-  grDevices::png(
-    png_path_from_pdf(primary),
-    width = dims$width_mm,
-    height = dims$height_mm,
-    units = "mm",
-    res = FIG_PNG_DPI,
-    pointsize = rnaseq_figure_base_size,
-    type = "cairo-png",
-    bg = "white"
-  )
-  print(plot)
-  grDevices::dev.off()
-  finalize_rgb_png(png_path_from_pdf(primary))
+prepare_labelled_barplot <- function(plot,primary,width,height) {
+  if(grepl("09_11_|17_9_|7_2_GO_.*barplot|7_4_GO_ALL_combined_barplot",basename(primary))) {
+    plot<-plot+ggplot2::scale_x_discrete(labels=function(x)stringr::str_wrap(gsub("_"," ",x,fixed=TRUE),width=40))+
+      ggplot2::theme(legend.position="bottom",legend.box="vertical")
+    for(aesthetic in c("fill","colour")) {
+      scale<-plot$scales$get_scales(aesthetic)
+      if(!is.null(scale))scale$labels<-function(x)stringr::str_wrap(x,width=18)
+    }
+    plot$labels$title<-stringr::str_wrap(plot$labels$title %||% "",width=75)
+    displayed_labels<-rlang::eval_tidy(plot$mapping$x,plot$data)
+    wrapped<-stringr::str_wrap(gsub("_"," ",as.character(displayed_labels),fixed=TRUE),width=40)
+    lines<-max(stringr::str_count(wrapped,"\n")+1L,na.rm=TRUE)
+    height<-max(height,width*max(180,45+nrow(plot$data)*(2.7*lines+1.5))/183)
+  }
+  if(grepl("Treeplot",basename(primary),ignore.case=TRUE)) {
+    for(layer in plot$layers) {
+      if(inherits(layer$geom,c("GeomText","GeomText2")))layer$mapping$label<-rlang::quo(stringr::str_wrap(.data$label,width=25))
+    }
+    plot<-plot+ggtree::hexpand(ratio=.5)+ggplot2::coord_cartesian(clip="off")+
+      ggplot2::theme(legend.position="bottom",legend.box="vertical")+
+      ggplot2::guides(colour=ggplot2::guide_colourbar(barwidth=grid::unit(45,"mm"),barheight=grid::unit(3,"mm"),title.position="top"))
+    tip_labels<-stringr::str_wrap(plot$data$label[plot$data$isTip & !is.na(plot$data$label)],width=25)
+    lines<-max(stringr::str_count(tip_labels,"\n")+1L)
+    height<-min(width*rnaseq_figure_max_height_mm/183,max(height,width*max(180,45+length(tip_labels)*(2.7*lines+2))/183))
+  }
+  list(plot=plot,height=height)
+}
+
+# 旧多方法 adapter 已确认将未报告写成 FALSE/0；保留历史字节与图类型，排除科学结论。
+frozen_adapter_invalid <- function(path) {
+  grepl("^(15_31_|15_32[b-c]?_|15_36_|15_37_|15_38_|15_39_|15_54_|15_55_|15_56_|17_13_|17_14_|17_21_|17_22_|17_23_)", basename(path))
+}
+
+figure_scientific_status <- function(path) {
+  if (frozen_adapter_invalid(path)) "INVALID_FROZEN_ADAPTER" else "FROZEN_SOURCE_UNCHANGED"
+}
+
+frozen_adapter_display <- function(plot, primary, height_mm) {
+  if (!frozen_adapter_invalid(primary)) return(plot)
+  # grid.grabExpr 保留 UpSet/ComplexHeatmap 的原生矢量对象，也能约束其 grid.newpage。
+  function() {
+    capture_file <- tempfile(fileext = ".pdf")
+    on.exit(unlink(capture_file), add = TRUE)
+    body <- grid::grid.grabExpr({
+      if (is.function(plot)) plot() else if (inherits(plot, c("gtable", "grob"))) grid::grid.draw(plot)
+      else print(pfos_style_plot(plot))
+    }, width = 183 / 25.4, height = (height_mm - 10) / 25.4, wrap = TRUE, wrap.grobs = TRUE,
+      device = function(width, height) grDevices::cairo_pdf(capture_file, width = width, height = height,
+        family = "Liberation Sans", pointsize = 8))
+    grid::grid.newpage()
+    grid::pushViewport(grid::viewport(y = 0, just = c("center", "bottom"),
+      height = grid::unit(1, "npc") - grid::unit(10, "mm")))
+    grid::grid.draw(body)
+    grid::upViewport(0)
+    grid::grid.rect(y = grid::unit(1, "npc") - grid::unit(5, "mm"), height = grid::unit(10, "mm"),
+      gp = grid::gpar(fill = "#F1F3F4", col = NA))
+    grid::grid.text("INVALID_FROZEN_ADAPTER | Historical display only", x = grid::unit(4, "mm"),
+      y = grid::unit(1, "npc") - grid::unit(3, "mm"), just = "left",
+      gp = grid::gpar(fontfamily = "Liberation Sans", fontsize = 8, fontface = "bold", col = "#333333"))
+    grid::grid.text("Excluded from scientific conclusions; rebuilt evidence: ../../integration/README.md", x = grid::unit(4, "mm"),
+      y = grid::unit(1, "npc") - grid::unit(7, "mm"), just = "left",
+      gp = grid::gpar(fontfamily = "Liberation Sans", fontsize = 7, col = "#333333"))
+  }
+}
+
+legacy_evidence_scale <- function(x) {
+  x <- scale(x)
+  x[!is.finite(x)] <- NA_real_
+  x
+}
+
+legacy_evidence_na_legend <- function() {
+  ComplexHeatmap::Legend(title = "Availability", labels = "Unreported / constant",
+    legend_gp = grid::gpar(fill = pfos_palette("neutral")[["missing"]]),
+    title_gp = grid::gpar(fontsize = 8, fontfamily = "Liberation Sans"),
+    labels_gp = grid::gpar(fontsize = 7, fontfamily = "Liberation Sans"))
+}
+
+enrichment_display_signal <- function(object) {
+  # 仅展示副本新增列；不写回冻结 enrichResult/gseaResult 缓存。
+  values <- figure_significance_values(object@result)
+  object@result$pfos_minus_log10_p <- -log10(pmax(values, 1e-300))
+  object
+}
+
+enrichment_signal_scale <- function(aesthetic = c("colour", "fill")) {
+  aesthetic <- match.arg(aesthetic)
+  bounds <- unlist(pfos_profile$scales$ora_minus_log10_p)
+  if (length(bounds) != 2L) stop("缺少 ORA 显著性固定尺度")
+  ggplot2::scale_colour_gradientn(aesthetics = aesthetic, colours = unname(viz_pal$enrich_p),
+    limits = bounds, oob = scales::squish, transform = "identity",
+    breaks = c(0, 2, 5, bounds[2]), labels = c("0", "2", "5", paste0(">=", bounds[2])),
+    name = figure_significance_axis_label())
+}
+
+cnet_foldchange_scale <- function() {
+  # log2FC 的原始数值域自动训练；不是 row-z，不能强制截断至 +/-2.5。
+  ggplot2::scale_colour_gradient2(low = pfos_palette("diverging")[["low"]],
+    mid = pfos_palette("diverging")[["mid"]], high = pfos_palette("diverging")[["high"]],
+    midpoint = 0, na.value = pfos_palette("neutral")[["missing"]],
+    name = paste0("Gene log2FC (", group2_label, " - ", group1_label, ")"))
+}
+
+ridge_display_height <- function(plot, width = 12) {
+  labels <- unique(as.character(plot$data$category))
+  line_count <- stringr::str_count(stringr::str_wrap(labels, width = 40), "\n") + 1L
+  row_mm <- max(4.5, 2.6 * max(line_count))
+  height_mm <- min(240, max(150, 25 + length(labels) * row_mm))
+  width * height_mm / 183
+}
+
+save_plot_versions <- function(plot,primary,width=8,height=6,coordinate_system=c("axes","none")) {
+  coordinate_system<-match.arg(coordinate_system)
+  prepared<-prepare_labelled_barplot(plot,primary,width,height);plot<-prepared$plot;height<-prepared$height
+  primary<-route_output_path(primary,preferred="plot")
+  plot<-standardize_plot_typography(plot,coordinate_system=coordinate_system)
+  height_mm <- max(75,183*height/width)
+  pfos_save(frozen_adapter_display(plot,primary,height_mm),primary,height_mm)
 }
 
 save_placeholder_plot <- function(primary, title = "Plot skipped", reason = "No plottable data", width = 8, height = 6, input_rows = NA_integer_) {
@@ -1531,86 +1618,20 @@ save_placeholder_plot <- function(primary, title = "Plot skipped", reason = "No 
   invisible(NULL)
 }
 
-save_base_pdf_versions <- function(primary, width = 8, height = 6, expr) {
-  expr_sub <- substitute(expr)
-  expr_env <- parent.frame()
-  primary <- route_output_path(primary, preferred = "plot")
-  ensure_parent_dir(primary)
-  dims <- rnaseq_figure_dimensions(width, height)
-  base_pdf_device_fn(primary, width = dims$width_in, height = dims$height_in)
-  eval(expr_sub, envir = expr_env)
-  dev.off()
-  png_primary <- png_path_from_pdf(primary)
-  ensure_parent_dir(png_primary)
-  grDevices::png(
-    png_primary,
-    width = dims$width_mm,
-    height = dims$height_mm,
-    units = "mm",
-    res = FIG_PNG_DPI,
-    pointsize = rnaseq_figure_base_size,
-    type = "cairo-png",
-    bg = "white"
-  )
-  graphics::par(
-    family = rnaseq_figure_font_family,
-    fg = "#333333",
-    col.axis = "#333333",
-    col.lab = "#333333",
-    col.main = "#333333",
-    cex.axis = rnaseq_figure_tick_size / rnaseq_figure_base_size,
-    cex.lab = 1,
-    cex.main = 1,
-    bty = "l"
-  )
-  eval(expr_sub, envir = expr_env)
-  dev.off()
-  finalize_rgb_png(png_primary)
+save_base_pdf_versions <- function(primary,width=8,height=6,expr) {
+  expr_sub<-substitute(expr);expr_env<-parent.frame()
+  primary<-route_output_path(primary,preferred="plot")
+  draw<-function(){if(grepl("upset",basename(primary),ignore.case=TRUE))grid::pushViewport(grid::viewport(width=.9,height=.94));graphics::par(family="Liberation Sans",cex.axis=7/8,cex.lab=1,bty="l");eval(expr_sub,envir=expr_env)}
+  height_mm<-max(75,183*height/width)
+  if(grepl("09_10_|10_8_TF_pathway|17_8_",basename(primary)))height_mm<-max(height_mm,260)
+  pfos_save(frozen_adapter_display(draw,primary,height_mm),primary,height_mm)
 }
 
-save_pheatmap_versions <- function(primary, width = 8, height = 6, expr) {
-  expr_sub <- substitute(expr)
-  expr_env <- parent.frame()
-  primary <- route_output_path(primary, preferred = "plot")
-  ph <- eval(expr_sub, envir = expr_env)
-  ph_gtable <- if (is.list(ph) && !is.null(ph$gtable)) {
-    ph$gtable
-  } else if (inherits(ph, "gtable")) {
-    ph
-  } else {
-    NULL
-  }
-
-  draw_once <- function() {
-    if (!is.null(ph_gtable)) {
-      grid::grid.draw(ph_gtable)
-    } else {
-      print(ph)
-    }
-    invisible(ph)
-  }
-
-  ensure_parent_dir(primary)
-  dims <- rnaseq_figure_dimensions(width, height)
-  base_pdf_device_fn(primary, width = dims$width_in, height = dims$height_in)
-  draw_once()
-  grDevices::dev.off()
-
-  png_primary <- png_path_from_pdf(primary)
-  ensure_parent_dir(png_primary)
-  grDevices::png(
-    png_primary,
-    width = dims$width_mm,
-    height = dims$height_mm,
-    units = "mm",
-    res = FIG_PNG_DPI,
-    pointsize = rnaseq_figure_base_size,
-    type = "cairo-png",
-    bg = "white"
-  )
-  draw_once()
-  grDevices::dev.off()
-  finalize_rgb_png(png_primary)
+save_pheatmap_versions <- function(primary,width=8,height=6,expr) {
+  p<-eval(substitute(expr),envir=parent.frame())
+  grob<-if(is.list(p)&&!is.null(p$gtable))p$gtable else p
+  primary<-route_output_path(primary,preferred="plot")
+  pfos_save(grob,primary,max(100,183*height/width))
 }
 
 write.csv <- function(x, file = "", ...) {
@@ -2259,7 +2280,7 @@ build_membership_upset <- function(tbl, cols, primary, width = 9, height = 6) {
       order.by = "freq",
       sets.bar.color = unname(viz_pal$upset["sets"]),
       main.bar.color = unname(viz_pal$upset["main"]),
-      text.scale = c(1, 0.875, 1, 0.875, 1, 0.875)
+      text.scale = c(8/8.3, 1, 8/8.3, 1, 1, 7/(2.2*ggplot2::.pt))
     ), newpage = FALSE)
   )
 }
@@ -2519,14 +2540,9 @@ resolve_named_colors <- function(base_colors, target_names) {
   if (length(target_names) == 0) {
     return(setNames(character(0), character(0)))
   }
-  palette_pool <- unname(base_colors)
-  if (length(palette_pool) == 0) {
-    return(setNames(rep("#D4D9DE", length(target_names)), target_names))
-  }
-  out <- setNames(rep(palette_pool, length.out = length(target_names)), target_names)
-  known_names <- intersect(names(base_colors), target_names)
-  out[known_names] <- unname(base_colors[known_names])
-  out
+  unknown <- setdiff(target_names, names(base_colors))
+  if(length(unknown)) stop("未注册的分类颜色: ",paste(unknown,collapse=", "))
+  base_colors[target_names]
 }
 
 viz_colors <- function(palette, keys) {
@@ -2535,14 +2551,9 @@ viz_colors <- function(palette, keys) {
   if (length(keys) == 0) {
     return(setNames(character(0), character(0)))
   }
-  palette_values <- unname(palette)
-  if (length(palette_values) == 0) {
-    palette_values <- unname(viz_pal$neutral["mid"])
-  }
-  out <- setNames(rep(palette_values, length.out = length(keys)), keys)
-  known_keys <- intersect(names(palette), keys)
-  out[known_keys] <- unname(palette[known_keys])
-  out
+  unknown <- setdiff(keys,names(palette))
+  if(length(unknown))stop("未注册的语义颜色: ",paste(unknown,collapse=", "))
+  palette[keys]
 }
 
 viz_color <- function(palette, key) {
@@ -2563,28 +2574,19 @@ resolve_enrichment_category_colors <- function(categories, analysis_type = c("GO
     return(setNames(character(0), character(0)))
   }
 
-  # All enrichment-circle category colors follow the GO circle standard.
-  go_circle_standard_colors <- c(
-    BP = group2_color,
-    CC = group1_color,
-    MF = unname(viz_pal$accent["purple"]),
-    Metabolism = unname(viz_pal$accent["warm"]),
-    Signaling = unname(viz_pal$accent["teal"]),
-    Disease = unname(viz_pal$accent["peach"]),
-    Immune = unname(viz_pal$accent["green"]),
-    "Cellular Process" = unname(viz_pal$accent["yellow"]),
-    Transport = unname(viz_pal$neutral["dark"]),
-    Development = unname(viz_pal$accent["yellow"]),
-    Stress = unname(viz_pal$neutral["mid"]),
-    Mixed = unname(viz_pal$neutral["dark"]),
-    GO = group1_color,
-    KEGG = unname(viz_pal$accent["warm"]),
-    Reactome = unname(viz_pal$accent["purple"]),
-    Hallmark = unname(viz_pal$accent["teal"])
-  )
-
-  color_pool <- c(go_circle_standard_colors, viz_pal$accent, viz_pal$group, viz_pal$neutral[c("dark", "mid", "light")])
-  resolve_named_colors(color_pool, categories)
+  # 数据库身份共用项目 databases；ontology/功能分类保留各自命名色。
+  colors <- pfos_palette("enrichment_category")
+  databases <- pfos_palette("databases")
+  colors[names(databases)] <- databases
+  aliases <- c(Mouse_KEGG="KEGG", Human_KEGG_Legacy="KEGG",
+               Mouse_Reactome="Reactome", Human_Reactome="Reactome",
+               Mouse_MH="Hallmark", Human_Hallmark="Hallmark",
+               Mouse_M5="GO", Human_C5="GO")
+  keys <- categories
+  hit <- keys %in% names(aliases)
+  keys[hit] <- unname(aliases[keys[hit]])
+  out <- vapply(keys, function(key) unname(resolve_named_colors(colors, key)), character(1))
+  setNames(unname(out), categories)
 }
 
 save_module_target_enrichment <- function(
@@ -2668,6 +2670,7 @@ save_module_target_enrichment <- function(
   enrich_plot <- ggplot(enrich_plot_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = target_gene_count, color = -log10(.figure_significance__ + 1e-300))) +
     geom_point(alpha = 0.85) +
     scale_color_heatmap_sequential() +
+    scale_size_area(max_size = 6) +
     labs(title = paste0(label_prefix, " module enrichment"), x = "Module-trait correlation", y = NULL, size = "Gene count", color = figure_significance_axis_label()) +
     theme_rnaseq_publication()
   save_plot_versions(enrich_plot, out_pdf, width = 8.5, height = max(4.5, 0.8 * nrow(enrich_tbl)))
@@ -2725,6 +2728,7 @@ save_de_das_gene_scatter <- function(as_gene_priority, primary, width = 8, heigh
   p <- ggplot(plot_df, aes(x = de_log2FoldChange, y = max_abs_delta_psi, size = significant_event_count, color = de_status)) +
     geom_point(alpha = 0.8) +
     scale_color_manual(values = viz_colors(viz_pal$overlap, plot_df$de_status)) +
+    scale_size_area(max_size = 6, name = "Significant AS events") +
     labs(title = "Differential expression versus alternative splicing", x = "Gene log2FC", y = "Max |delta PSI|") +
     theme_rnaseq_publication()
   save_plot_versions(p, primary, width = width, height = height)
@@ -2885,7 +2889,7 @@ save_ora_barplot_df <- function(ora_df, primary, title_prefix, top_n = 15, facet
 
   p <- ggplot(plot_df, aes(x = Description, y = ratio_value, fill = neg_log10_p)) +
     geom_col(width = 0.75, alpha = 0.92) +
-    scale_fill_gradientn(colours = unname(viz_pal$enrich_p))
+    scale_fill_gradientn(colours=unname(viz_pal$enrich_p),limits=c(0,10),oob=scales::squish,breaks=c(0,2,5,10),labels=c("0","2","5",">=10"))
 
   if (!is.null(facet_col) && facet_col %in% colnames(plot_df)) {
     p <- p + facet_grid(stats::as.formula(paste(facet_col, "~ .")), scales = "free_y", space = "free_y")
@@ -2908,7 +2912,8 @@ save_ora_dotplot_df <- function(ora_df, primary, title_prefix, top_n = 15, facet
 
   p <- ggplot(plot_df, aes(x = ratio_value, y = Description, size = size_value, color = neg_log10_p)) +
     geom_point(alpha = 0.88) +
-    scale_color_gradientn(colours = unname(viz_pal$enrich_p)) +
+    scale_color_gradientn(colours=unname(viz_pal$enrich_p),limits=c(0,10),oob=scales::squish,breaks=c(0,2,5,10),labels=c("0","2","5",">=10")) +
+    scale_size_area(max_size=6) +
     scale_y_discrete(labels = function(x) shorten_plot_labels(x, max_chars = 48)) +
     labs(
       title = title_prefix,
@@ -3191,26 +3196,7 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
     return(invisible(NULL))
   }
 
-  resolve_circle_category_colors <- function(categories) {
-    categories <- unique(as.character(categories))
-    categories <- categories[!is.na(categories) & categories != ""]
-    if (length(categories) == 0) {
-      return(setNames(character(0), character(0)))
-    }
-    go_circle_seed <- c(
-      viz_pal$go_category["BP"],
-      viz_pal$go_category["CC"],
-      viz_pal$go_category["MF"],
-      viz_pal$accent["green"],
-      viz_pal$accent["teal"],
-      viz_pal$neutral["dark"],
-      viz_pal$neutral["mid"]
-    )
-    out <- setNames(rep(go_circle_seed, length.out = length(categories)), categories)
-    known_names <- intersect(names(viz_pal$go_category), categories)
-    out[known_names] <- viz_pal$go_category[known_names]
-    out
-  }
+  resolve_circle_category_colors <- function(categories) resolve_enrichment_category_colors(categories,"ORA")
 
   categories <- unique(data$category)
   # GO / KEGG / GSEA all reuse the GO circle category palette.
@@ -3226,8 +3212,8 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
     down = unname(viz_pal$de["down"])
   )
   circle_score_colors <- c(
-    pos = unname(viz_pal$accent["green"]),
-    neg = unname(viz_pal$accent["purple"])
+    pos = unname(viz_pal$de["up"]),
+    neg = unname(viz_pal$de["down"])
   )
 
   save_base_pdf_versions(
@@ -3236,69 +3222,61 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
     height = 25,
     expr = {
       circlize::circos.clear()
-      circlize::circos.par(start.degree = 90, gap.degree = 2, track.margin = c(0.01, 0.01), canvas.xlim = c(-1.8, 1.8), canvas.ylim = c(-1.65, 1.65))
+      graphics::par(mar = c(0, 0, 0, 0), xpd = NA, xaxs = "i", yaxs = "i")
+      circlize::circos.par(start.degree = 90, gap.degree = 2,
+                          track.margin = c(0.001, 0.001),
+                          cell.padding = c(0, 0, 0, 0),
+                          canvas.xlim = c(-1.04, 1.04), canvas.ylim = c(-1.04, 1.04))
       circlize::circos.genomicInitialize(data[, c("id", "gene_num.min", "gene_num.max")], plotType = NULL)
 
-      circlize::circos.track(
-        ylim = c(0, 1),
-        track.height = 0.05,
-        bg.border = NA,
-        bg.col = paste0(row_colors, "40"),
-        panel.fun = function(x, y) {}
+      # Reserve physical space for every complete label, then let circlize
+      # position labels and connectors automatically across sector boundaries.
+      label_text <- if (label_type == "description") as.character(data$Description) else as.character(data$id)
+      missing_label <- is.na(label_text) | !nzchar(label_text)
+      label_text[missing_label] <- as.character(data$id[missing_label])
+      if (label_type == "description") {
+        label_text <- vapply(label_text, function(value) paste(strwrap(value, width = 28), collapse = "\n"), character(1))
+      }
+      label_cex <- rnaseq_figure_tick_size / rnaseq_figure_base_size
+      label_height <- max(graphics::strwidth(label_text, cex = label_cex)) + circlize::mm_h(4.5)
+      circlize::circos.labels(
+        sectors = data$id, x = (data$gene_num.min + data$gene_num.max) / 2,
+        labels = label_text, facing = "clockwise", niceFacing = TRUE,
+        cex = label_cex, padding = 0.45, col = "black",
+        side = "outside", labels_height = label_height,
+        connection_height = circlize::mm_h(4), line_lty = 2,
+        line_lwd = 0.5, line_col = "black", track.margin = c(0.001, 0.001)
       )
 
-      for (si in circlize::get.all.sector.index()) {
-        xlim <- circlize::get.cell.meta.data("xlim", sector.index = si, track.index = 1)
-        ylim <- circlize::get.cell.meta.data("ylim", sector.index = si, track.index = 1)
-        label_text <- if (label_type == "description") data[si, "Description"] else si
-        if (length(label_text) == 0 || is.na(label_text) || !nzchar(as.character(label_text))) {
-          label_text <- si
-        }
-        if (label_type == "description" && nchar(as.character(label_text)) > 25) {
-          label_text <- paste0(substr(as.character(label_text), 1, 22), "...")
-        }
-
-        xcenter <- mean(xlim)
-        y_top <- ylim[2]
-        pos <- circlize::circlize(xcenter, y_top, sector.index = si, track.index = 1)
-        theta_rad <- pos[1, "theta"] * pi / 180
-        rou_start <- pos[1, "rou"] + 0.05
-        rou_end <- rou_start + 0.1
-        x_start <- rou_start * cos(theta_rad)
-        y_start <- rou_start * sin(theta_rad)
-        x_end <- rou_end * cos(theta_rad)
-        y_end <- rou_end * sin(theta_rad)
-        theta_norm <- pos[1, "theta"] %% 360
-        is_right <- (theta_norm <= 90 || theta_norm >= 270)
-        x_text <- if (is_right) x_end + 0.1 else x_end - 0.1
-        y_text <- y_end
-
-        graphics::lines(c(x_start, x_end), c(y_start, y_end), lty = 2, col = "black", lwd = 0.5)
-        graphics::lines(c(x_end, x_text), c(y_end, y_text), lty = 2, col = "black", lwd = 0.5)
-        graphics::text(x_text, y_text, label_text, adj = if (is_right) c(0, 0.5) else c(1, 0.5), cex = 1)
-      }
+      # The two label/connector tracks precede the original category ring.
+      circlize::circos.track(
+        ylim = c(0, 1), track.height = circlize::mm_h(3),
+        bg.border = NA, bg.col = paste0(row_colors, "40"),
+        panel.fun = function(x, y) {}
+      )
+      category_track <- circlize::get.current.track.index()
 
       p_max <- max(data$neg_log10Pvalue, na.rm = TRUE)
-      p_mid <- if (is.finite(p_max) && p_max > 0) p_max / 2 else 0.5
-      p_max_safe <- if (is.finite(p_max) && p_max > 0) p_max else 1
-      col_fun_p <- circlize::colorRamp2(c(0, p_mid, p_max_safe), unname(circle_p_colors))
+      p_mid <- 5
+      p_max_safe <- 10
+      col_fun_p <- circlize::colorRamp2(seq(0,10,length.out=length(viz_pal$enrich_p)),unname(viz_pal$enrich_p))
 
       circlize::circos.track(
         ylim = c(0, 1),
-        track.height = 0.1,
+        track.height = circlize::mm_h(3),
         bg.border = "white",
         panel.fun = function(x, y) {
           sector.index <- circlize::get.cell.meta.data("sector.index")
           val <- data[sector.index, "neg_log10Pvalue"]
           circlize::circos.rect(CELL_META$xlim[1], 0, CELL_META$xlim[2], 1, col = col_fun_p(val), border = NA)
           num <- data[sector.index, "gene_num.max"]
-          circlize::circos.text(CELL_META$xcenter, 0.5, paste0(num), cex = 1, col = "black", facing = "bending.inside")
+          circlize::circos.text(CELL_META$xcenter, 0.5, paste0(num), cex = label_cex, col = "black", facing = "bending.inside")
         }
       )
 
       circlize::circos.track(
         ylim = c(0, 1),
-        track.height = 0.1,
+        track.height = circlize::mm_h(3),
         bg.border = "white",
         panel.fun = function(x, y) {
           sector.index <- circlize::get.cell.meta.data("sector.index")
@@ -3315,10 +3293,10 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
       )
 
       min_score <- min(0, min(data$score, na.rm = TRUE))
-      max_score <- max(data$score, na.rm = TRUE)
+      max_score <- max(0, max(data$score, na.rm = TRUE))
       circlize::circos.track(
         ylim = c(min_score, max_score),
-        track.height = 0.2,
+        track.height = circlize::mm_h(4),
         bg.border = viz_pal$neutral["light"],
         panel.fun = function(x, y) {
           sector.index <- circlize::get.cell.meta.data("sector.index")
@@ -3332,15 +3310,15 @@ draw_enrichment_circle_plot <- function(data, title, filename, analysis_type = c
         for (cat in unique(data$category)) {
           sectors <- data$id[data$category == cat]
           this_col <- cat_colors[cat]
-          circlize::highlight.sector(sectors, track.index = 1, col = paste0(this_col, "20"), text = cat, text.col = this_col, text.vjust = 0, cex = 1, font = 2, lwd = 2, border = this_col)
+          circlize::highlight.sector(sectors, track.index = category_track, col = paste0(this_col, "20"), text = cat, text.col = this_col, text.vjust = 0, cex = label_cex, font = 2, lwd = 2, border = this_col)
         }
       }
 
-      lgd_p <- ComplexHeatmap::Legend(title = "-Log10(P-value)", col_fun = col_fun_p, at = c(0, p_mid, p_max_safe), labels = sprintf("%.1f", c(0, p_mid, p_max_safe)), direction = "horizontal")
-      lgd_reg <- ComplexHeatmap::Legend(title = "Regulation", labels = c("Up", "Down"), legend_gp = grid::gpar(fill = c(circle_reg_colors["up"], circle_reg_colors["down"])), ncol = 2)
-      lgd_score <- ComplexHeatmap::Legend(title = if (analysis_type == "GSEA") "NES" else "Rich Factor", labels = c("Positive", "Negative"), legend_gp = grid::gpar(fill = c(circle_score_colors["pos"], circle_score_colors["neg"])), ncol = 2)
-      lgd_cat <- ComplexHeatmap::Legend(title = "Category", labels = names(cat_colors), legend_gp = grid::gpar(fill = cat_colors), ncol = 1)
-      pd <- ComplexHeatmap::packLegend(lgd_cat, lgd_p, lgd_reg, lgd_score, direction = "vertical", max_height = grid::unit(15, "cm"), column_gap = grid::unit(4, "mm"), row_gap = grid::unit(2, "mm"))
+      lgd_p <- ComplexHeatmap::Legend(grid_height = grid::unit(3, "mm"), grid_width = grid::unit(3, "mm"), row_gap = grid::unit(0.5, "mm"), title_gap = grid::unit(1, "mm"), title_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_base_size, fontface = "bold"), labels_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_tick_size), title = "-Log10(P-value)", col_fun = col_fun_p, at = c(0, p_mid, p_max_safe), labels = c("0","5",">=10"), direction = "horizontal")
+      lgd_reg <- ComplexHeatmap::Legend(grid_height = grid::unit(3, "mm"), grid_width = grid::unit(3, "mm"), row_gap = grid::unit(0.5, "mm"), title_gap = grid::unit(1, "mm"), title_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_base_size, fontface = "bold"), labels_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_tick_size), title = "Regulation", labels = c("Up", "Down"), legend_gp = grid::gpar(fill = c(circle_reg_colors["up"], circle_reg_colors["down"])), ncol = 2)
+      lgd_score <- ComplexHeatmap::Legend(grid_height = grid::unit(3, "mm"), grid_width = grid::unit(3, "mm"), row_gap = grid::unit(0.5, "mm"), title_gap = grid::unit(1, "mm"), title_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_base_size, fontface = "bold"), labels_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_tick_size), title = if (analysis_type == "GSEA") "NES" else "Rich Factor", labels = c("Positive", "Negative"), legend_gp = grid::gpar(fill = c(circle_score_colors["pos"], circle_score_colors["neg"])), ncol = 2)
+      lgd_cat <- ComplexHeatmap::Legend(grid_height = grid::unit(3, "mm"), grid_width = grid::unit(3, "mm"), row_gap = grid::unit(0.5, "mm"), title_gap = grid::unit(1, "mm"), title_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_base_size, fontface = "bold"), labels_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_tick_size), title = "Category", labels = names(cat_colors), legend_gp = grid::gpar(fill = cat_colors), ncol = 1)
+      pd <- ComplexHeatmap::packLegend(lgd_cat, lgd_p, lgd_reg, lgd_score, direction = "vertical", max_height = grid::unit(15, "cm"), column_gap = grid::unit(4, "mm"), row_gap = grid::unit(1, "mm"))
       ComplexHeatmap::draw(pd, x = grid::unit(0.5, "npc"), y = grid::unit(0.5, "npc"), just = "center")
       circlize::circos.clear()
     }
@@ -3444,27 +3422,7 @@ save_chord_plot <- function(input_list, primary, title, width = 14, height = 12,
   }
   chord_lfc_min <- min(chord_logfc, na.rm = TRUE)
   chord_lfc_max <- max(chord_logfc, na.rm = TRUE)
-  chord_ribbon_colors <- if (length(process_cols) > 0) {
-    chord_palette_seed <- unname(c(
-      group1_color,
-      viz_pal$accent["teal"],
-      viz_pal$accent["warm"],
-      viz_pal$accent["purple"],
-      viz_pal$accent["green"],
-      viz_pal$accent["peach"],
-      viz_pal$accent["yellow"],
-      group2_color,
-      viz_pal$neutral["dark"],
-      viz_pal$neutral["mid"]
-    ))
-    if (length(process_cols) <= length(chord_palette_seed)) {
-      chord_palette_seed[seq_len(length(process_cols))]
-    } else {
-      grDevices::colorRampPalette(chord_palette_seed)(length(process_cols))
-    }
-  } else {
-    group2_color
-  }
+  chord_ribbon_colors <- unname(pfos_identity_colors(process_cols))
 
   save_base_pdf_versions(
     primary = primary,
@@ -3511,7 +3469,7 @@ save_upset_plot <- function(enrich_df, primary) {
         order.by = "freq",
         sets.bar.color = viz_pal$upset["sets"],
         main.bar.color = viz_pal$upset["main"],
-        text.scale = c(1, 0.875, 1, 0.875, 1, 0.875)
+        text.scale = c(8/8.3, 1, 8/8.3, 1, 1, 7/(2.2*ggplot2::.pt))
       ),
       newpage = FALSE
     )
@@ -3560,10 +3518,7 @@ save_gocluster_plot <- function(input_list, primary, title, max_genes_to_show = 
     list(chord = chord),
     parent = environment(GOplot::GOCluster)
   )
-  cluster_term_colors <- unname(resolve_named_colors(
-    c(viz_pal$accent, viz_pal$group, viz_pal$neutral["mid"]),
-    terms_to_cluster
-  ))
+  cluster_term_colors <- unname(pfos_identity_colors(terms_to_cluster))
 
   save_base_pdf_versions(
     primary = primary,
@@ -3613,6 +3568,8 @@ save_go_family <- function(go_obj, file_paths, title_prefix, category_label) {
   if (length(geneList_symbol_fc) > 0 && nrow(go_df) >= 5) {
     try({
       cnet_plot <- cnetplot(go_obj_display, foldChange = geneList_symbol_fc, showCategory = 5, node_label = "category") +
+        cnet_foldchange_scale() +
+        scale_size_area(max_size = 6, name = "Gene count") +
         theme_rnaseq_void()
       cnet_plot <- standardize_network_label_sizes(cnet_plot)
       save_plot_versions(
@@ -3629,15 +3586,19 @@ save_go_family <- function(go_obj, file_paths, title_prefix, category_label) {
   if (nrow(make_result_df(go_obj_tree)) > 1) {
     try({
       tree_plot <- enrichplot::treeplot(
-        go_obj_tree,
+        enrichment_display_signal(go_obj_tree),
         showCategory = min(10, nrow(go_df)),
-        color = go_figure_significance_column,
+        color = "pfos_minus_log10_p",
+        group_color = stats::setNames(pfos_palette("clusters")[as.character(seq_len(5L))], paste0("cluster_", seq_len(5L))),
         label_format = 38,
         fontsize_tiplab = rnaseq_figure_tick_text_size,
         fontsize_cladelab = rnaseq_figure_tick_text_size,
         hilight = FALSE,
+        tiplab_offset = .4,
         hexpand = 0.3
       ) +
+        enrichment_signal_scale("colour") +
+        scale_size_area(max_size = 6, name = "Count") +
         labs(title = paste0(title_prefix, " Treeplot")) +
         theme_rnaseq_void()
       save_plot_versions(
@@ -3685,15 +3646,19 @@ save_go_all_family <- function(go_obj, out_dir, title_prefix) {
   if (!is.null(go_all_sim) && nrow(make_result_df(go_all_sim)) > 1) {
     try({
       go_all_tree <- enrichplot::treeplot(
-        go_all_sim,
+        enrichment_display_signal(go_all_sim),
         showCategory = min(10, nrow(go_all_df_local)),
-        color = go_all_figure_significance_column,
+        color = "pfos_minus_log10_p",
+        group_color = stats::setNames(pfos_palette("clusters")[as.character(seq_len(5L))], paste0("cluster_", seq_len(5L))),
         label_format = 38,
         fontsize_tiplab = rnaseq_figure_tick_text_size,
         fontsize_cladelab = rnaseq_figure_tick_text_size,
         hilight = FALSE,
+        tiplab_offset = .4,
         hexpand = 0.3
       ) +
+        enrichment_signal_scale("colour") +
+        scale_size_area(max_size = 6, name = "Count") +
         labs(title = paste(title_prefix, "Treeplot")) +
         theme_rnaseq_void()
       save_plot_versions(
@@ -3739,6 +3704,8 @@ save_kegg_family <- function(kegg_obj, out_dir, prefix = "6_1_KEGG", title_prefi
   if (length(geneList_symbol_fc) > 0 && nrow(kegg_df) >= 5) {
     try({
       cnet_plot <- cnetplot(kegg_obj_display, foldChange = geneList_symbol_fc, showCategory = min(10, nrow(kegg_df)), node_label = "category") +
+        cnet_foldchange_scale() +
+        scale_size_area(max_size = 6, name = "Gene count") +
         theme_rnaseq_void()
       cnet_plot <- standardize_network_label_sizes(cnet_plot)
       save_plot_versions(
@@ -3752,16 +3719,18 @@ save_kegg_family <- function(kegg_obj, out_dir, prefix = "6_1_KEGG", title_prefi
   }
 
   if (nrow(kegg_df) >= 3) {
-    kegg_sim <- tryCatch(pairwise_termsim(kegg_obj_display), error = function(e) NULL)
+    kegg_sim <- tryCatch(pairwise_termsim(enrichment_display_signal(kegg_obj_display)), error = function(e) NULL)
     if (!is.null(kegg_sim)) {
       try({
         emap_plot <- enrichplot::emapplot(
           kegg_sim,
           showCategory = min(10, nrow(kegg_df)),
-          color = kegg_figure_significance_column,
+          color = "pfos_minus_log10_p",
           label_format = 38,
           node_label_size = rnaseq_figure_tick_text_size
         ) +
+          enrichment_signal_scale("colour") +
+          scale_size_area(max_size = 6, name = "Gene count") +
           labs(title = paste0(title_prefix, " Network")) +
           theme_rnaseq_void()
         save_plot_versions(
@@ -3818,7 +3787,8 @@ save_directional_ora_plot <- function(direction_df, primary, title_prefix, facet
   plot_df$neg_log10_p <- -log10(dplyr::coalesce(plot_df$.figure_significance__, 1) + 1e-300)
   p <- ggplot(plot_df, aes(x = direction, y = Description, size = size_value, color = neg_log10_p)) +
     geom_point(alpha = 0.85) +
-    scale_color_gradientn(colours = unname(viz_pal$enrich_p)) +
+    scale_color_gradientn(colours=unname(viz_pal$enrich_p),limits=c(0,10),oob=scales::squish,breaks=c(0,2,5,10),labels=c("0","2","5",">=10")) +
+    scale_size_area(max_size=6) +
     labs(title = title_prefix, x = NULL, y = NULL, size = "Gene count", color = figure_significance_axis_label()) +
     theme_rnaseq_publication(base_size = viz_style$compact_size)
   if (facet_by == "source" && "source" %in% colnames(plot_df)) {
@@ -3839,7 +3809,8 @@ save_gsea_df_dotplot <- function(gsea_df, primary, title_prefix, top_n = 12, fac
   plot_df$neg_log10_p <- -log10(dplyr::coalesce(plot_df$.figure_significance__, 1) + 1e-300)
   p <- ggplot(plot_df, aes(x = NES, y = Description, size = setSize, color = neg_log10_p)) +
     geom_point(alpha = 0.85) +
-    scale_color_gradientn(colours = unname(viz_pal$enrich_p)) +
+    scale_color_gradientn(colours=unname(viz_pal$enrich_p),limits=c(0,10),oob=scales::squish,breaks=c(0,2,5,10),labels=c("0","2","5",">=10")) +
+    scale_size_area(max_size=6) +
     scale_y_discrete(labels = function(x) format_enrichment_plot_labels(x, max_chars = 48)) +
     labs(title = title_prefix, x = "Normalized Enrichment Score", y = NULL, size = "Set size", color = figure_significance_axis_label()) +
     theme_rnaseq_publication(base_size = viz_style$compact_size)
@@ -3886,10 +3857,13 @@ save_leading_edge_heatmap <- function(leading_tbl, de_tbl, primary, id_type = c(
           fontsize = rnaseq_figure_tick_size
         ),
         column_title = column_title,
+        column_title_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_base_size, fontface = "bold"),
         col = heatmap_diverging_col_fun(
           breaks = c(-max_abs_fc, 0, max_abs_fc)
         ),
         heatmap_legend_param = list(
+          title_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_base_size, fontface = "bold"),
+          labels_gp = grid::gpar(fontfamily = rnaseq_figure_font_family, fontsize = rnaseq_figure_tick_size),
           direction = "horizontal",
           title_position = "topcenter",
           legend_width = grid::unit(36, "mm")
@@ -3911,10 +3885,11 @@ save_gsea_family <- function(gsea_obj, file_paths, title_prefix, include_single 
   gsea_figure_significance <- figure_significance_values(gsea_df)
 
   try({
-    ridge_plot <- enrichplot::ridgeplot(gsea_obj_display, label_format = 40, fill = gsea_figure_significance_column) +
+    ridge_plot <- enrichplot::ridgeplot(enrichment_display_signal(gsea_obj_display), label_format = 40, fill = "pfos_minus_log10_p") +
+      enrichment_signal_scale("fill") +
       labs(title = paste0("GSEA: ", title_prefix)) +
       theme_rnaseq_publication()
-    save_plot_versions(ridge_plot, file_paths$ridge, width = 12, height = 8)
+    save_plot_versions(ridge_plot, file_paths$ridge, width = 12, height = ridge_display_height(ridge_plot))
   }, silent = TRUE)
 
   save_gsea_df_dotplot(
@@ -3925,16 +3900,18 @@ save_gsea_family <- function(gsea_obj, file_paths, title_prefix, include_single 
     facet_col = if ("ONTOLOGY" %in% colnames(gsea_df)) "ONTOLOGY" else NULL
   )
 
-  gsea_sim <- tryCatch(pairwise_termsim(gsea_obj_display), error = function(e) NULL)
+  gsea_sim <- tryCatch(pairwise_termsim(enrichment_display_signal(gsea_obj_display)), error = function(e) NULL)
   if (!is.null(gsea_sim) && nrow(make_result_df(gsea_sim)) > 1) {
     try({
       emap_plot <- enrichplot::emapplot(
         gsea_sim,
         showCategory = min(10, nrow(gsea_df)),
-        color = gsea_figure_significance_column,
+        color = "pfos_minus_log10_p",
         label_format = 38,
         node_label_size = rnaseq_figure_tick_text_size
       ) +
+        enrichment_signal_scale("colour") +
+        scale_size_area(max_size = 6, name = "Gene count") +
         labs(title = paste0("GSEA: ", title_prefix, " Network")) +
         theme_rnaseq_void()
       save_plot_versions(
@@ -4060,20 +4037,21 @@ sample_name_info <- list(
   }
 )
 
-rna_group_palette <- stats::setNames(c("#A1C9F4", "#FF9F9B"), c(group1_label, group2_label))
+source(file.path(get0("rmd_dir",ifnotfound=file.path(working_dir,"rmd"),inherits=TRUE),"figure_style.R"))
+rna_group_palette <- stats::setNames(unname(pfos_palette("group")[c("WT", "PFOS")]), c(group1_label, group2_label))
 group1_color <- unname(rna_group_palette[[group1_label]])
 group2_color <- unname(rna_group_palette[[group2_label]])
-rna_de_palette <- c("up" = "#FF9F9B", "down" = "#A1C9F4", "ns" = "#D4D9DE")
-rna_sig_palette <- c("significant" = "#FF9F9B", "ns" = "#D4D9DE")
-rna_neutral_palette <- c("light" = "#FFFDF8", "mid" = "#D4D9DE", "dark" = "#5C6B73")
-rna_accent_palette <- c("warm" = "#FFB482", "green" = "#8DE5A1", "purple" = "#B39FDB", "yellow" = "#FDFFB6", "teal" = "#9ED9CC", "peach" = "#FFD3A8")
-rna_red_yellow_blue_palette <- c("low" = "#A1C9F4", "mid" = "#FDFFB6", "high" = "#FF9F9B")
+rna_de_palette <- pfos_palette("de")
+rna_sig_palette <- c(significant=pfos_palette("de")[["up"]],ns=pfos_palette("de")[["ns"]])
+rna_neutral_palette <- pfos_palette("neutral")
+rna_accent_palette <- pfos_palette("accent")
+rna_red_yellow_blue_palette <- pfos_palette("diverging")
 rna_red_yellow_blue_binary_palette <- c(
   "zero" = unname(rna_red_yellow_blue_palette["low"]),
   "mid" = unname(rna_red_yellow_blue_palette["mid"]),
   "one" = unname(rna_red_yellow_blue_palette["high"])
 )
-rna_blue_red_mid <- "#DCCFE7"
+rna_blue_red_mid <- unname(pfos_palette("diverging")[["mid"]])
 rna_sashimi_color_string <- paste(c(group1_color, group2_color), collapse = ",")
 
 viz_pal <- list(
@@ -4084,31 +4062,31 @@ viz_pal <- list(
   neutral = rna_neutral_palette,
   accent = rna_accent_palette,
   overlap = c(
-    "DAS_only" = "#A1C9F4",
-    "DE_only" = "#FFB482",
-    "DE_and_DAS" = "#FF9F9B",
-    "APA_only" = "#8DE5A1",
-    "APA_and_DE" = "#FF9F9B",
-    "DER_only" = "#B39FDB",
-    "DER_and_DE" = "#FF9F9B"
+    "DAS_only" = pfos_palette("rna_method")[["DAS"]],
+    "DE_only" = pfos_palette("rna_method")[["DE"]],
+    "DE_and_DAS" = group2_color,
+    "APA_only" = pfos_palette("rna_method")[["APA"]],
+    "APA_and_DE" = group2_color,
+    "DER_only" = pfos_palette("rna_method")[["DER"]],
+    "DER_and_DE" = group2_color
   ),
-  method_count = c("1" = "#A1C9F4", "2" = "#8DE5A1", "3" = "#FFB482", "4" = "#FF9F9B"),
+  method_count = c("1" = group1_color, "2" = rna_accent_palette[["green"]], "3" = rna_accent_palette[["warm"]], "4" = group2_color),
   candidate_status = c(
-    "DE_and_DAS_splicing" = "#FF9F9B",
-    "DE_splicing" = "#A1C9F4",
-    "DAS_splicing" = "#8DE5A1",
-    "Background_splicing" = "#D4D9DE"
+    "DE_and_DAS_splicing" = group2_color,
+    "DE_splicing" = group1_color,
+    "DAS_splicing" = rna_accent_palette[["green"]],
+    "Background_splicing" = rna_neutral_palette[["mid"]]
   ),
-  go_category = c("BP" = "#FF9F9B", "CC" = "#A1C9F4", "MF" = "#B39FDB"),
-  enrich_p = rna_red_yellow_blue_palette,  ## #FFE6A7
-  score = c("pos" = "#FF9F9B", "neg" = "#A1C9F4"),
-  upset = c("sets" = "#FF9F9B", "main" = "#A1C9F4"),
+  go_category = pfos_palette("go_category"),
+  enrich_p = stats::setNames(pfos_palette("sequential"),c("low","s2","s3","s4","mid","s6","s7","s8","high")),  ## #FFE6A7
+  score = c("pos" = group2_color, "neg" = group1_color),
+  upset = c("sets" = group2_color, "main" = group1_color),
   diverging = rna_red_yellow_blue_palette,
   heatmap_diverging = rna_red_yellow_blue_palette,
-  heatmap_sequential = rna_red_yellow_blue_palette,
-  heatmap_binary = rna_red_yellow_blue_binary_palette,
-  heat = colorRampPalette(c("#A1C9F4", "#FDFFB6", "#FF9F9B"))(100),
-  transition = colorRampPalette(c("#FFFDF8", "#FDFFB6", "#FFB482", "#FF9F9B"))(100)
+  heatmap_sequential = pfos_palette("sequential"),
+  heatmap_binary = pfos_palette("binary"),
+  heat = colorRampPalette(unname(rna_red_yellow_blue_palette))(100),
+  transition = colorRampPalette(c(rna_neutral_palette[["light"]], rna_neutral_palette[["light"]], rna_accent_palette[["warm"]], group2_color))(100)
 )
 
 group_colors <- viz_pal$group
@@ -4186,11 +4164,14 @@ figure_export_typography_theme <- function(coordinate_system = c("axes", "none")
 
 standardize_plot_typography <- function(plot, coordinate_system = c("axes", "none")) {
   coordinate_system <- match.arg(coordinate_system)
-  typography <- figure_export_typography_theme(coordinate_system = coordinate_system)
-  if (inherits(plot, "patchwork")) {
-    return(plot & typography)
+  plot <- pfos_style_plot(plot)
+  if (coordinate_system == "none") {
+    hidden_axes <- ggplot2::theme(axis.title=ggplot2::element_blank(), axis.text=ggplot2::element_blank(),
+                                axis.ticks=ggplot2::element_blank(), axis.line=ggplot2::element_blank())
+    if (inherits(plot, "patchwork")) return(plot & hidden_axes)
+    plot <- plot + hidden_axes
   }
-  plot + typography
+  plot
 }
 
 theme_rnaseq_publication <- function(base_size = viz_style$base_size, legend = viz_style$legend) {
@@ -4265,7 +4246,7 @@ heatmap_group_annotation <- function(groups, palette = group_colors, annotation_
 
 heatmap_diverging_col_fun <- function(x = NULL, midpoint = 0, breaks = NULL, colors = unname(viz_pal$heatmap_diverging)) {
   if (!is.null(breaks)) {
-    return(circlize::colorRamp2(breaks, colors))
+    return(circlize::colorRamp2(breaks,grDevices::colorRampPalette(colors)(length(breaks))))
   }
 
   values <- as.numeric(x)
@@ -4279,22 +4260,20 @@ heatmap_diverging_col_fun <- function(x = NULL, midpoint = 0, breaks = NULL, col
   if (!is.finite(low_value) || !is.finite(high_value) || low_value == high_value) {
     low_value <- midpoint - 1
     high_value <- midpoint + 1
-  } else if (midpoint <= low_value || midpoint >= high_value) {
-    midpoint <- mean(c(low_value, high_value))
   }
-
-  circlize::colorRamp2(c(low_value, midpoint, high_value), colors)
+  bound <- max(abs(c(low_value,high_value)-midpoint),1e-8)
+  circlize::colorRamp2(c(midpoint-bound,midpoint,midpoint+bound),colors)
 }
 
 heatmap_sequential_col_fun <- function(x = NULL, breaks = NULL, colors = unname(viz_pal$heatmap_sequential)) {
   if (!is.null(breaks)) {
-    return(circlize::colorRamp2(breaks, colors))
+    return(circlize::colorRamp2(breaks,grDevices::colorRampPalette(colors)(length(breaks))))
   }
 
   values <- as.numeric(x)
   values <- values[is.finite(values)]
   if (length(values) == 0) {
-    return(circlize::colorRamp2(c(0, 0.5, 1), colors))
+    return(circlize::colorRamp2(seq(0,1,length.out=length(colors)),colors))
   }
 
   low_value <- min(values, na.rm = TRUE)
@@ -4304,11 +4283,11 @@ heatmap_sequential_col_fun <- function(x = NULL, breaks = NULL, colors = unname(
     high_value <- max(1, high_value)
   }
   mid_value <- mean(c(low_value, high_value))
-  circlize::colorRamp2(c(low_value, mid_value, high_value), colors)
+  circlize::colorRamp2(seq(low_value,high_value,length.out=length(colors)),colors)
 }
 
 heatmap_binary_col_fun <- function() {
-  circlize::colorRamp2(c(0, 0.5, 1), unname(viz_pal$heatmap_binary))
+  circlize::colorRamp2(c(0,1),unname(viz_pal$heatmap_binary))
 }
 
 scale_fill_heatmap_diverging <- function(midpoint = 0, limits = NULL, ...) {
@@ -4318,6 +4297,7 @@ scale_fill_heatmap_diverging <- function(midpoint = 0, limits = NULL, ...) {
     high = unname(viz_pal$heatmap_diverging["high"]),
     midpoint = midpoint,
     limits = limits,
+    na.value=pfos_palette("neutral")[["missing"]],
     ...
   )
 }
@@ -4343,6 +4323,7 @@ scale_color_heatmap_diverging <- function(midpoint = 0, limits = NULL, ...) {
     high = unname(viz_pal$heatmap_diverging["high"]),
     midpoint = midpoint,
     limits = limits,
+    na.value=pfos_palette("neutral")[["missing"]],
     ...
   )
 }
@@ -4350,7 +4331,7 @@ scale_color_heatmap_diverging <- function(midpoint = 0, limits = NULL, ...) {
 scale_fill_heatmap_binary <- function(limits = c(0, 1), ...) {
   ggplot2::scale_fill_gradientn(
     colors = unname(viz_pal$heatmap_binary),
-    values = c(0, 0.5, 1),
+    values = c(0,1),
     limits = limits,
     ...
   )
@@ -4422,3 +4403,7 @@ ensure_module_result_layout("01_setup")
 ensure_dirs(cache_root_dir)
 write.csv(analysis_context, file.path(result_01_dir, "01_analysis_context.csv"), row.names = FALSE)
 writeLines(capture.output(sessionInfo()), route_output_path(file.path(result_01_dir, "01_R_sessionInfo.txt"), preferred = "table"))
+
+# 项目运行本地冻结的共同成图源码。
+source(file.path(get0("rmd_dir",ifnotfound=file.path(working_dir,"rmd"),inherits=TRUE),"figure_style.R"))
+source(file.path(get0("rmd_dir",ifnotfound=file.path(working_dir,"rmd"),inherits=TRUE),"plot_heatmaps.R"))

@@ -21,7 +21,8 @@ import pandas as pd
 import scipy.sparse as sp
 from scipy.spatial.distance import jensenshannon
 
-from .plotting import CELL_TYPE_COLORS, save_figure
+from .plotting import DIVERGING_CMAP, CELL_TYPE_COLORS, save_figure
+from .figure_style import COLORS
 from .runtime import atomic_json, atomic_text, atomic_tsv, sha256
 
 
@@ -98,7 +99,7 @@ def _write_liana_resource_snapshot(path: Path) -> pd.DataFrame:
     return resource
 
 
-def _write_cellchat_pathway_snapshot(path: Path) -> pd.DataFrame:
+def _write_cellchat_pathway_snapshot(path: Path, rscript: Path) -> pd.DataFrame:
     """Export only the mouse CellChat pathway labels; LIANA remains the scoring method."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
@@ -122,7 +123,7 @@ out <- out[order(out$ligand_complex, out$receptor_complex, out$pathway_name), ]
 write.table(out, file=args[[1]], sep="\t", row.names=FALSE, quote=FALSE, na="")
 '''
     try:
-        subprocess.run(["Rscript", "-e", code, str(temporary)], check=True, text=True)
+        subprocess.run([str(rscript), "-e", code, str(temporary)], check=True, text=True)
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -284,7 +285,7 @@ def _plot_communication_bubbles(full: pd.DataFrame, figure_dir: Path, source_dir
         pairs = list(dict.fromkeys(sub["cell_pair"]))
         pathways = list(reversed(list(dict.fromkeys(sub["pathway"]))))
         xmap, ymap = {x: i for i, x in enumerate(pairs)}, {x: i for i, x in enumerate(pathways)}
-        points = ax.scatter(sub["cell_pair"].map(xmap), sub["pathway"].map(ymap), s=30 + 18 * sub["candidate_interactions"], c=sub["best_magnitude_rank"], cmap="magma_r", edgecolor="#333333", linewidth=0.3)
+        points = ax.scatter(sub["cell_pair"].map(xmap), sub["pathway"].map(ymap), s=30 + 18 * sub["candidate_interactions"], c=sub["best_magnitude_rank"], cmap="viridis_r", vmin=0, vmax=0.05, edgecolor="#333333", linewidth=0.3)
         ax.set_xticks(range(len(pairs)), pairs, rotation=55, ha="right", fontsize=7)
         ax.set_yticks(range(len(pathways)), pathways, fontsize=7)
         ax.set_title(library)
@@ -325,7 +326,24 @@ def _plot_communication_network(summary: pd.DataFrame, figure_dir: Path, source_
     return {"title": "各文库通讯候选网络", "png": f"figures/{stem}.png", "pdf": f"figures/{stem}.pdf", "source": f"source_data/{stem}.tsv", "interpretation": "边宽表示 LIANA magnitude rank 前 5% 的候选数量，不代表互作概率或差异信号。"}
 
 
-def run_communication(data: ad.AnnData, output_dir: Path, input_h5ad: Path) -> dict[str, Any]:
+def _draw_communication_sensitivity(sensitivity: pd.DataFrame, target_stem: Path, *, library_conditions: dict[str, str]) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.5))
+    scenarios = list(dict.fromkeys(sensitivity["scenario"].astype(str)))
+    libraries = list(dict.fromkeys(sensitivity["library_id"].astype(str)))
+    x = np.arange(len(scenarios)); width = 0.36
+    for index, library in enumerate(libraries):
+        subset = sensitivity[sensitivity["library_id"].astype(str) == library].set_index("scenario").reindex(scenarios)
+        color = COLORS[library_conditions[library]]
+        axes[0].bar(x + (index - 0.5) * width, subset["priority_candidates"], width, label=library, color=color)
+        axes[1].bar(x + (index - 0.5) * width, subset["priority_overlap_with_primary"], width, label=library, color=color)
+    for ax in axes:
+        ax.set_xticks(x, scenarios, rotation=35, ha="right"); ax.legend(frameon=False, fontsize=8)
+    axes[0].set_ylabel("Priority LR candidates"); axes[1].set_ylabel("Jaccard overlap with primary")
+    axes[1].set_ylim(0, 1); fig.suptitle("Technical sensitivity of communication candidates (descriptive)")
+    save_figure(fig, target_stem, 300)
+
+
+def run_communication(data: ad.AnnData, output_dir: Path, input_h5ad: Path, *, rscript: Path) -> dict[str, Any]:
     import liana as li
 
     reusable = _module_reusable(output_dir, "communication_manifest.json", "communication_execution_inputs.json")
@@ -337,7 +355,7 @@ def run_communication(data: ad.AnnData, output_dir: Path, input_h5ad: Path) -> d
     resource_path = source_dir / "liana_mouseconsensus_resource.tsv"
     pathway_path = source_dir / "cellchatdb_mouse_pathway_annotations.tsv"
     resource = _write_liana_resource_snapshot(resource_path)
-    pathway_db = _write_cellchat_pathway_snapshot(pathway_path)
+    pathway_db = _write_cellchat_pathway_snapshot(pathway_path, rscript)
     module_source = Path(__file__)
     execution_path = output_dir / "communication_execution_inputs.json"
     inputs = _write_execution_inputs(execution_path, [input_h5ad, module_source, resource_path, pathway_path])
@@ -441,19 +459,7 @@ def run_communication(data: ad.AnnData, output_dir: Path, input_h5ad: Path) -> d
     pd.concat(sensitivity_lr, ignore_index=True).to_csv(table_dir / "communication_sensitivity_lr.tsv.gz", sep="\t", index=False, compression="gzip")
     stem = "communication_sensitivity"
     atomic_tsv(source_dir / f"{stem}.tsv", sensitivity)
-    fig, axes = plt.subplots(1, 2, figsize=(11.0, 4.5))
-    scenarios = list(dict.fromkeys(sensitivity["scenario"].astype(str)))
-    libraries = list(dict.fromkeys(sensitivity["library_id"].astype(str)))
-    x = np.arange(len(scenarios)); width = 0.36
-    for index, library in enumerate(libraries):
-        subset = sensitivity[sensitivity["library_id"].astype(str) == library].set_index("scenario").reindex(scenarios)
-        axes[0].bar(x + (index - 0.5) * width, subset["priority_candidates"], width, label=library)
-        axes[1].bar(x + (index - 0.5) * width, subset["priority_overlap_with_primary"], width, label=library)
-    for ax in axes:
-        ax.set_xticks(x, scenarios, rotation=35, ha="right"); ax.legend(frameon=False, fontsize=8)
-    axes[0].set_ylabel("Priority LR candidates"); axes[1].set_ylabel("Jaccard overlap with primary")
-    axes[1].set_ylim(0, 1); fig.suptitle("Technical sensitivity of communication candidates (descriptive)")
-    save_figure(fig, figure_dir / stem, 300)
+    _draw_communication_sensitivity(sensitivity, figure_dir / stem, library_conditions=data.obs[["library_id", "condition"]].drop_duplicates().set_index("library_id")["condition"].astype(str).to_dict())
 
     figures = _plot_communication_bubbles(full, figure_dir, source_dir)
     figures.append(_plot_communication_network(summary, figure_dir, source_dir))
@@ -546,6 +552,18 @@ def _regulon_specificity(auc: pd.DataFrame, metadata: pd.DataFrame) -> pd.DataFr
     return pd.DataFrame(rows)
 
 
+def _draw_regulon_activity(heat: pd.DataFrame) -> plt.Figure:
+    top = heat.groupby("regulon", observed=True)["rss"].max().nlargest(20).index
+    pivot = heat.pivot(index="regulon", columns="stratum", values="auc_zscore").reindex(index=top)
+    fig, ax = plt.subplots(figsize=(max(9.0, 0.55 * pivot.shape[1]), max(6.0, 0.30 * pivot.shape[0])))
+    image = ax.imshow(pivot.to_numpy(), aspect="auto", cmap=DIVERGING_CMAP, vmin=-2.5, vmax=2.5)
+    ax.set_xticks(range(pivot.shape[1]), pivot.columns, rotation=55, ha="right", fontsize=7)
+    ax.set_yticks(range(pivot.shape[0]), pivot.index, fontsize=7)
+    ax.set_title("Pooled-consensus regulon activity")
+    fig.colorbar(image, ax=ax, label="Within-regulon AUC z-score")
+    return fig
+
+
 def _plot_regulons(summary: pd.DataFrame, edges: pd.DataFrame, figure_dir: Path, source_dir: Path) -> list[dict[str, str]]:
     figures: list[dict[str, str]] = []
     top = summary.groupby("regulon", observed=True)["rss"].max().nlargest(20).index
@@ -554,13 +572,7 @@ def _plot_regulons(summary: pd.DataFrame, edges: pd.DataFrame, figure_dir: Path,
     heat["auc_zscore"] = heat.groupby("regulon", observed=True)["auc_mean"].transform(lambda x: (x - x.mean()) / x.std(ddof=0) if x.std(ddof=0) > 0 else 0.0)
     stem = "regulon_activity_heatmap"
     atomic_tsv(source_dir / f"{stem}.tsv", heat)
-    pivot = heat.pivot(index="regulon", columns="stratum", values="auc_zscore").reindex(index=top)
-    fig, ax = plt.subplots(figsize=(max(9.0, 0.55 * pivot.shape[1]), max(6.0, 0.30 * pivot.shape[0])))
-    image = ax.imshow(pivot.to_numpy(), aspect="auto", cmap="RdBu_r", vmin=-2.5, vmax=2.5)
-    ax.set_xticks(range(pivot.shape[1]), pivot.columns, rotation=55, ha="right", fontsize=7)
-    ax.set_yticks(range(pivot.shape[0]), pivot.index, fontsize=7)
-    ax.set_title("Pooled-consensus regulon activity")
-    fig.colorbar(image, ax=ax, label="Within-regulon AUC z-score")
+    fig = _draw_regulon_activity(heat)
     save_figure(fig, figure_dir / stem, 300)
     figures.append({"title": "Pooled consensus regulon 活性热图", "png": f"figures/{stem}.png", "pdf": f"figures/{stem}.pdf", "source": f"source_data/{stem}.tsv", "interpretation": "同一个 pooled consensus 网络投射到全部细胞；各列为文库×细胞类型的描述性汇总。"})
 
@@ -592,7 +604,7 @@ def _plot_regulons(summary: pd.DataFrame, edges: pd.DataFrame, figure_dir: Path,
     for tf, y in y_tf.items():
         ax.scatter(0.2, y, s=260, color="#E69F00", zorder=3); ax.text(0.2, y, tf, ha="center", va="center", fontsize=7)
     for gene, y in y_target.items():
-        ax.scatter(0.8, y, s=170, color="#56B4E9", zorder=3); ax.text(0.8, y, gene, ha="center", va="center", fontsize=6)
+        ax.scatter(0.8, y, s=170, color="#56B4E9", zorder=3); ax.text(0.8, y, gene, ha="center", va="center", fontsize=7)
     ax.text(0.2, 0.985, "Candidate regulator", ha="center", va="top", weight="bold")
     ax.text(0.8, 0.985, "Motif-supported target", ha="center", va="top", weight="bold")
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.axis("off")
@@ -682,14 +694,14 @@ def _validate_figure_contract(output_dir: Path, figures: list[dict[str, str]]) -
             raise RuntimeError("图形 manifest 缺少 title/interpretation")
 
 
-def run_networks(input_h5ad: Path, output_dir: Path, resources_dir: Path) -> dict[str, Any]:
+def run_networks(input_h5ad: Path, output_dir: Path, resources_dir: Path, *, rscript: Path) -> dict[str, Any]:
     input_h5ad, output_dir, resources_dir = Path(input_h5ad), Path(output_dir), Path(resources_dir)
     if not input_h5ad.is_file():
         raise FileNotFoundError(input_h5ad)
     output_dir.mkdir(parents=True, exist_ok=True)
     data = ad.read_h5ad(input_h5ad)
     _validate_adata(data)
-    communication = run_communication(data, output_dir, input_h5ad)
+    communication = run_communication(data, output_dir, input_h5ad, rscript=rscript)
     regulon = run_regulon(data, output_dir, resources_dir, input_h5ad)
     figures = communication["figures"] + regulon["figures"]
     _validate_figure_contract(output_dir, figures)

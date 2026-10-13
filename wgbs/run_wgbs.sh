@@ -9,7 +9,7 @@ set -euo pipefail
 #     运行已启用的下游模块。
 #
 #   bash run_wgbs.sh --steps 3,5-8
-#     只运行指定步骤；默认自动前置 1_setup。
+#     只运行指定步骤；默认自动前置 01_setup。
 #
 #   bash run_wgbs.sh --list
 #     列出所有可运行模块。
@@ -17,6 +17,22 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RMD_DIR="${ROOT_DIR}/rmd"
+
+# 纯绘图必须在 Rmd 调度、依赖补跑及清理之前分支。
+if [[ " ${*} " == *" --plots-only "* ]]; then
+  plot_args=(--root "${ROOT_DIR}" --assay wgbs)
+  while (( $# )); do
+    case "$1" in
+      --plots-only) shift ;;
+      --steps) plot_args+=(--steps "$2"); shift 2 ;;
+      --check) plot_args+=(--check); shift ;;
+      *) echo "[ERROR] --plots-only 不支持参数: $1" >&2; exit 2 ;;
+    esac
+  done
+  source "${ROOT_DIR}/scripts/load_config.sh"
+  exec python3 "${ROOT_DIR}/scripts/replot.py" "${plot_args[@]}"
+fi
+
 READS_INFO="${ROOT_DIR}/01rawdata/reads_info.txt"
 REPORT_SCRIPT="${ROOT_DIR}/rmd/generate_result_report.R"
 
@@ -27,18 +43,18 @@ WGBS_CHECK_ONLY=0
 
 
 declare -A STEPS=(
-  [1]="1_setup"
-  [2]="2_qc"
-  [3]="3_dmr"
-  [4]="4_dmroverview"
-  [5]="5_enrichment"
-  [6]="6_genomecontext"
-  [7]="7_regulatory"
-  [8]="8_gene_methylation"
-  [10]="10_browser"
-  [11]="11_sperm"
+  [1]="01_setup"
+  [2]="02_qc"
+  [3]="03_dmr"
+  [4]="04_dmroverview"
+  [5]="05_enrichment"
+  [6]="06_genomecontext"
+  [7]="07_regulatory"
+  [8]="08_gene_methylation"
+  [9]="09_browser"
+  [10]="10_sperm"
 )
-ACTIVE_STEPS=(1 2 3 4 5 6 7 8 10 11)
+ACTIVE_STEPS=(1 2 3 4 5 6 7 8 9 10)
 
 trim_carriage_return() {
   local value="$1"
@@ -192,7 +208,8 @@ usage() {
 用法:
   bash run_wgbs.sh                 # 运行已启用的下游模块
   bash run_wgbs.sh --list          # 列出模块
-  bash run_wgbs.sh --steps 3,5-8   # 只运行指定步骤，默认自动前置 1_setup
+  bash run_wgbs.sh --plots-only    # 从冻结数值重绘，不补跑统计
+  bash run_wgbs.sh --steps 3,5-8   # 只运行指定步骤，默认自动前置 01_setup
   bash run_wgbs.sh --check --steps 8,10 # 只检查配置、样本表和 Rmd
 
 说明:
@@ -207,7 +224,7 @@ EOF
 list_modules() {
   local i
   for i in "${ACTIVE_STEPS[@]}"; do
-    printf '%2d  %s\n' "${i}" "${STEPS[$i]}"
+    printf '%02d  %s\n' "${i}" "${STEPS[$i]}"
   done
 }
 
@@ -227,7 +244,7 @@ append_module_token() {
   if [[ "${token}" =~ ^([0-9]+)-([0-9]+)$ ]]; then
     local start=$((10#${BASH_REMATCH[1]}))
     local end=$((10#${BASH_REMATCH[2]}))
-    if (( start < 1 || end > 11 || start > end )); then
+    if (( start < 1 || end > 10 || start > end )); then
       reads_info_die "无效模块范围: ${token}，有效范围为 1-${#STEPS[@]}"
     fi
     for module in $(seq "${start}" "${end}"); do
@@ -236,7 +253,7 @@ append_module_token() {
     done
   elif [[ "${token}" =~ ^[0-9]+$ ]]; then
     local token_num=$((10#${token}))
-    if (( token_num < 1 || token_num > 11 )); then
+    if (( token_num < 1 || token_num > 10 )); then
       reads_info_die "无效模块: ${token}，有效范围为 1-${#STEPS[@]}"
     fi
     [[ -n "${STEPS[${token_num}]:-}" ]] || reads_info_die "模块已移除或不存在: ${token_num}"
@@ -397,15 +414,17 @@ record_status <- function(module, status) {
   row <- data.frame(time = format(Sys.time(), "%Y-%m-%dT%H:%M:%S%z"), module = module, status = status)
   write.table(row, status_file, sep = "\t", row.names = FALSE, col.names = !file.exists(status_file), append = file.exists(status_file), quote = FALSE)
 }
-if(Sys.getenv("WGBS_ENABLE_SPERM") != "1") record_status("11_sperm", "SKIPPED_DISABLED")
+if(Sys.getenv("WGBS_ENABLE_SPERM") != "1") record_status("10_sperm", "SKIPPED_DISABLED")
 for (step_name in steps) {
   rmd_file <- file.path(rmd_dir, paste0(step_name, ".Rmd"))
   if (!file.exists(rmd_file)) {
     stop("Rmd 文件不存在: ", rmd_file)
   }
 
-  if (!identical(step_name, "1_setup")) {
-    step_plot_dir <- file.path(root_dir, "result", step_name, "plots")
+  if (!identical(step_name, "01_setup")) {
+    step_plot_dir <- file.path(root_dir, "result", step_name)
+    step_plot_dirs <- list.dirs(step_plot_dir, recursive = TRUE, full.names = TRUE)
+    step_plot_dirs <- step_plot_dirs[basename(step_plot_dirs) == "plots"]
     root_result_dir <- normalizePath(file.path(root_dir, "result"), winslash = "/", mustWork = FALSE)
     plot_dir_norm <- normalizePath(step_plot_dir, winslash = "/", mustWork = FALSE)
     if (!startsWith(plot_dir_norm, paste0(root_result_dir, "/"))) {
@@ -514,7 +533,7 @@ main() {
   python3 "$ROOT_DIR/scripts/input_audit.py" --root "$ROOT_DIR" --prefix WGBS
   load_reads_info "${READS_INFO}" "${ROOT_DIR}" 0
   for module in "${REQUESTED_MODULES[@]}"; do
-    if [[ "$module" == 11 ]]; then [[ "$WGBS_ENABLE_SPERM" == 1 ]] || reads_info_die "精子专题已禁用"; fi
+    if [[ "$module" == 10 ]]; then [[ "$WGBS_ENABLE_SPERM" == 1 ]] || reads_info_die "精子专题已禁用"; fi
   done
   if [[ "${WGBS_CHECK_ONLY}" == "1" ]]; then
     check_selection "${REQUESTED_MODULES[@]}"

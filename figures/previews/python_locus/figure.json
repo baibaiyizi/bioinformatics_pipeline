@@ -1,0 +1,15 @@
+{
+  "status": "COMPLETED",
+  "kind": "locus",
+  "input_sha256": {
+    "source.tsv": "4ebb76dfa2f4a6407628132d0d4ca12bcbb257325b4fbb77c5d148dfc5e9ffa5"
+  },
+  "rows": 17,
+  "script_sha256": "24f690a2baf280490c22265f02480178a5089f6ec76589beda286da93611f58c",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "statistics_recomputed": false,
+  "outputs": {
+    "pdf": "44a986bef4815b9cd5135abb8b5eb4df6c4ddb765662f6d4b8244924cabed4b8",
+    "png": "c6d9ee9c350862009dfcb87f773374116825f5cbc0e16934ca3f868d7b71bbdb"
+  }
+}

@@ -50,8 +50,8 @@ tryCatch({
   if(species=="mus")write_mii_setup_expression_matrices()else write_serum_setup_expression_matrices()
   write_common_audit(ctx)
   files <- c(qc="02_single_group.Rmd",pca="03_pca.Rmd",sncrna="04_sncRNA_compare.Rmd",tsrna="05_tsrna_compare.Rmd",rsrna="06_rsrna_compare.Rmd",mirna="07_mirna_compare.Rmd",pirna="08_pirna_compare.Rmd")
-  if(species=="homo")files<-c(files,snrna="12_snrna_compare.Rmd")
-  if(ENDO_ENABLED)files<-c(files,endo="09_endo_compare.Rmd")
+  if(species=="homo")files<-c(files,snrna="09_snrna_compare.Rmd")
+  if(ENDO_ENABLED)files<-c(files,endo=if(species=="homo")"10_endo_compare.Rmd"else"09_endo_compare.Rmd")
   applicable <- if(PANDORA_ANALYSIS_STAGE=="describe")setdiff(names(files),c("capture","capture_bias")) else if(PANDORA_ANALYSIS_STAGE=="differential") {
     if(species=="mus")c("pca","sncrna","tsrna","rsrna","mirna","pirna",if(ENDO_ENABLED)"endo")else character()
   }else if(species=="mus")"mirna"else character()
@@ -69,7 +69,7 @@ tryCatch({
   statuses <- tibble(Module=names(files),File=unname(files),Status=if_else(names(files)%in%applicable,"pending","not_applicable_or_not_selected"))
   write_tsv_safe(statuses,file.path(RESULT_DIR,"module_status.tsv"))
   for(m in applicable) {
-    module_file<-if(m=="endo")file.path(shared,"rmd",files[[m]])else file.path(SHARED_RMD_DIR,species,files[[m]])
+    module_file<-if(m=="endo" && species=="mus")file.path(shared,"rmd",files[[m]])else file.path(SHARED_RMD_DIR,species,files[[m]])
     run_module(module_file)
     statuses$Status[statuses$Module==m]<-"completed"
     write_tsv_safe(statuses,file.path(RESULT_DIR,"module_status.tsv"))

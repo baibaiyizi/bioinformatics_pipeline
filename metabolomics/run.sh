@@ -21,6 +21,9 @@ MODE="$1"
 shift || true
 
 case "${MODE}" in
+  --plots-only)
+    exec "${PYTHON_BIN:-python3}" "${ROOT_DIR}/scripts/replot.py" --config "${CONFIG_FILE}" "$@"
+    ;;
   all)
     "${RSCRIPT_BIN:-Rscript}" "${ROOT_DIR}/scripts/pipeline.R" --config "${CONFIG_FILE}" --module all "$@"
     ;;

@@ -11,7 +11,7 @@ script_path <- if (length(script_arg) > 0) sub("^--file=", "", script_arg[[1]]) 
 script_path <- gsub("~+~", " ", script_path, fixed=TRUE)
 default_root <- if (nzchar(script_path)) dirname(dirname(normalizePath(script_path, mustWork = FALSE))) else getwd()
 root_dir <- normalizePath(Sys.getenv("RNASEQ_ROOT_DIR", unset = default_root), mustWork = TRUE)
-result_dir <- file.path(root_dir, "result")
+result_dir <- normalizePath(Sys.getenv("RNASEQ_RESULT_DIR", unset=file.path(root_dir, "result")), mustWork=TRUE)
 output_file <- file.path(result_dir, "index.html")
 
 if (!dir.exists(result_dir)) {
@@ -150,6 +150,7 @@ note_rule <- function(id, pattern, method, reading, limitation) {
 }
 
 note_rules <- list(
+  note_rule("historical-selection-diagnostic", "auto_selection_scores", "读取原运行保存的择样评分，不重新优化纳入集。", "仅检查原诊断评分的分布和历史来源。", "该图保留历史诊断身份，不参与当前完整cohort的样本纳入。"),
   note_rule("sample-count", "selected_group_counts", "按最终纳入清单汇总每个分组的样本数。", "比较组间样本数是否平衡，并核对总数是否与样本清单一致。", "样本数平衡不等同于样本质量充分，仍需结合 QC 与样本级图件。"),
   note_rule("library-complexity", "library_size|library_complexity|top100_gene_fraction", "由原始计数计算文库总量、达到 CPM 阈值的基因数或 Top 100 基因占比。", "关注极端低复杂度、高集中度或与同组样本明显偏离的样本。", "这些指标用于技术 QC，不能单独证明或否定组间生物差异。"),
   note_rule("pca-scree", "pca_scree", "对归一化表达矩阵进行主成分分析，并汇总各主成分解释的方差比例。", "前几个主成分解释比例越高，说明主要样本变异可由较少维度概括。", "解释方差不提供组间显著性检验。"),

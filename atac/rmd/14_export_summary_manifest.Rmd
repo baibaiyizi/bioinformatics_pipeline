@@ -1,0 +1,29 @@
+# Module 14：ATAC 交付与当前状态
+
+只导出 ATAC 模块。已有产物的存在不等于本次重算；源表签名及运行记录决定当前资格。
+
+```{r atac_summary_manifest}
+active_names <- unname(step_output_dirs)
+files <- list.files(result_dir, recursive = TRUE, full.names = TRUE)
+files <- files[file.info(files)$isdir %in% FALSE]
+relative_files <- substring(files, nchar(result_dir) + 2L)
+module_names <- vapply(strsplit(relative_files, "/", fixed = TRUE), `[`, character(1), 1L)
+keep <- module_names %in% active_names & !grepl("^14_export_summary_manifest/", relative_files)
+files <- files[keep]; relative_files <- relative_files[keep]; module_names <- module_names[keep]
+manifest <- data.frame(Module = module_names, Path = relative_files, Bytes = file.info(files)$size,
+                       SHA256 = vapply(files, function(p) digest::digest(file = p, algo = "sha256"), character(1)),
+                       Status = "PRESERVED_OUTPUT_UNVERIFIED_CURRENT_SIGNATURE", stringsAsFactors = FALSE)
+save_step_table(manifest, "Step14", "Result_Manifest.csv")
+source_audit <- read_step_table("Step5", "Differential_Peak_Source_Audit.csv")
+same_signature <- nrow(source_audit) > 0 && "AnalysisSignature" %in% names(source_audit) &&
+  identical(as.character(source_audit$AnalysisSignature[1]), current_analysis_signature)
+save_step_table(data.frame(Module = active_names,
+  UpstreamStatus = if(same_signature) "CURRENT_SIGNATURE_VERIFIED" else "UNVERIFIED_CURRENT_SIGNATURE",
+  Note = "仅列出本组学产物；旧产物不因整理目录而成为新结果。"), "Step14", "Current_Result_Status.csv")
+summary_lines <- c("# ATAC 结果入口", "", paste0("比较方向：", contrast_label), "",
+  "- 差异开放：05_differential_accessibility", "- 注释与富集：07_peak_gene_enrichment",
+  "- Motif 与足迹：08_motif_activity、09_footprinting_tf_evidence",
+  "- 候选与位点：13_keygenes_locus_reports", "",
+  "跨组织、跨组学解释由独立联合入口提供。请先检查 Current_Result_Status.csv 的来源状态。")
+writeLines(summary_lines, step_table_file("Step14", "README.md"), useBytes = TRUE)
+```

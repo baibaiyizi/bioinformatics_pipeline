@@ -68,7 +68,7 @@ scientific_reference_tbl <- data.frame(
     "Implemented for most upstream stages; TSS metric is explicitly labelled as a deepTools approximation and should not be treated as ENCODE TSSE without recalculation.",
     "Partially implemented: this project has manifests, MultiQC, module logs, paired PDF/PNG outputs, and final manifests, but remains a local shell/Rmd workflow rather than Nextflow.",
     "Partially implemented by local shell steps; no WDL/Cromwell execution is used here.",
-    "Implemented as upstream step 14: consensus peak BEDs, presence/absence matrix, raw counts, CPM counts, library-size table, and method/status tables.",
+    "Implemented as upstream step 12: consensus peak BEDs, presence/absence matrix, raw counts, CPM counts, library-size table, and method/status tables.",
     "Not run in the current workflow; listed as a recommended optional enhancement.",
     "Package installation was attempted; ataqv command-line tool is still optional and requires a configured supported organism/build.",
     "Implemented as transparent tiered outputs in Module05 and downstream summaries.",
@@ -166,10 +166,10 @@ save_step_table(analysis_context_tbl, "Step2", "Analysis_Context.csv")
 1. `阶段 A / Step2-3`：先确认项目设置、样本质量和 ATAC 数据整体是否可靠。
 2. `阶段 B / Step4-6`：再描述开放图谱、差异 peak 和功能层解释。
 3. `阶段 C / Step8-13`：继续向 motif、footprint、network、保守性和机器学习机制层推进。
-4. `阶段 D / Step15`：仅使用 ATAC 本身确定候选和位点。
-5. `阶段 E / Step16`：在文档最后统一刷新交付对象和结果清单。
+4. `阶段 D / Step13`：仅使用 ATAC 本身确定候选和位点。
+5. `阶段 E / Step14`：在文档最后统一刷新交付对象和结果清单。
 
-阅读时如果只想快速把握主结论，建议优先看 `Step5`、`Step7-8`、`Step15`。
+阅读时如果只想快速把握主结论，建议优先看 `Step5`、`Step7-8`、`Step13`。
 
 ```{r run_configuration_summary}
 run_config_tbl <- data.frame(

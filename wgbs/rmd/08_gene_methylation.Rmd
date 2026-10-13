@@ -1,0 +1,22 @@
+# Step 8：基因甲基化汇总
+
+只汇总本组学 DMR。每个基因、功能层保留绝对甲基化差异最大的区域，同时保留其他区域的数目和方向冲突；这些是描述性汇总，不是基因级独立检验。
+
+```{r gene_methylation_summary}
+ensure_dmr_outputs_loaded()
+ensure_dmr_cgi_context(required = FALSE, persist = TRUE)
+ensure_step_dirs("result/08_gene_methylation/01_group_comparison/tables", "result/08_gene_methylation/01_group_comparison/plots")
+gene_methylation_long <- build_gene_methylation_summary(dmr_anno_df)
+write_csv(gene_methylation_long, "result/08_gene_methylation/01_group_comparison/tables/gene_methylation_long.csv")
+gene_methylation_wide <- gene_methylation_long %>%
+  select(gene_id_clean, SYMBOL, Layer, diffMethy, DMR_id, RegionCount, DirectionConflict) %>%
+  pivot_wider(names_from = Layer, values_from = c(diffMethy, DMR_id, RegionCount, DirectionConflict))
+write_csv(gene_methylation_wide, "result/08_gene_methylation/01_group_comparison/tables/gene_methylation_wide.csv")
+if(nrow(gene_methylation_long) > 0) {
+  p <- ggplot(gene_methylation_long, aes(x = Layer, y = diffMethy)) +
+    geom_boxplot(outlier.shape = NA) + geom_hline(yintercept = 0, linetype = "dashed") +
+    theme_wgbs_classic(base_size = 12) +
+    labs(title = "基因关联 DMR 的甲基化差异", x = "功能层", y = group_diff_axis_label)
+  ggsave("result/08_gene_methylation/01_group_comparison/plots/gene_methylation_layers.pdf", p, width = 8, height = 6, device = cairo_pdf)
+}
+```

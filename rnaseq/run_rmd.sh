@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 纯绘图必须在清理、缓存补跑和setup执行之前分支。
+if [[ "${1:-}" == "--plots-only" ]]; then
+  shift
+  exec python3 "${ROOT_DIR}/rmd/render_plots.py" "$@"
+fi
+
 source "${ROOT_DIR}/scripts/config.sh"
 export RNASEQ_RMD_DIR="${ROOT_DIR}/rmd"
 export RNASEQ_CLEAN_MODULE_RESULT=false RNASEQ_CLEAN_MODULE_CACHE=false
@@ -10,6 +17,7 @@ usage() {
  cat <<'EOF'
 用法：bash run_rmd.sh [--all | --modules 01,02,05] [--clean | --no-clean]
 --all / 无参数：运行 config/project.env 中 RNASEQ_ENABLED_MODULES。
+--plots-only：从原图来源及冻结统计结果重绘；必须作为第一个参数。
 --list：列出模块；--preflight：只读检查输入；--report-only：从现有结果刷新报告。
 默认保留结果与缓存。扩展模块必须显式加入配置；停用模块不会隐式运行。
 差异筛选默认 nominal P，结果仅作探索性筛选；保留 BH/FDR 列。

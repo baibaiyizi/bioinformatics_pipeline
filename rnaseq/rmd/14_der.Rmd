@@ -238,7 +238,7 @@ if (nrow(der_all_regions) > 0) {
   der_class_plot <- ggplot(der_class_tbl, aes(x = reorder(region_class, region_count), y = region_count, fill = region_class)) +
     geom_col(width = 0.75) +
     coord_flip() +
-    scale_fill_manual(values = resolve_named_colors(viz_pal$accent, der_class_tbl$region_class)) +
+    scale_fill_manual(values = resolve_named_colors(pfos_palette("rna_category"), der_class_tbl$region_class)) +
     labs(title = "DER genomic class distribution", x = NULL, y = "Region count") +
     theme_rnaseq_publication() +
     theme(legend.position = "none")
@@ -276,8 +276,8 @@ if (nrow(der_all_regions) > 0) {
         primary = file.path(step13_dir, "14_9_DER_coverage_heatmap.pdf"),
         width = 8.5,
         height = 10,
-        expr = ComplexHeatmap::draw(
-          ComplexHeatmap::Heatmap(
+        expr = pfos_draw_heatmap(
+          pfos_heatmap(
             der_heat_mat,
             name = "z-score",
             col = heatmap_diverging_col_fun(der_heat_mat),

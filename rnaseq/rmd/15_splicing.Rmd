@@ -434,7 +434,7 @@ if (nrow(rmats_combined) > 0) {
     c(JC = unname(viz_pal$accent["teal"]), JCEC = unname(viz_pal$accent["purple"])),
     rmats_combined$count_mode
   )
-  event_type_colors <- resolve_named_colors(viz_pal$accent, rmats_combined$event_type)
+  event_type_colors <- resolve_named_colors(pfos_palette("rna_category"), rmats_combined$event_type)
   splice_direction_colors <- c(
     setNames(group1_color, paste0("higher_in_", group1_label)),
     setNames(group2_color, paste0("higher_in_", group2_label)),
@@ -497,8 +497,9 @@ if (nrow(rmats_combined) > 0) {
   save_plot_versions(delta_scatter, step10_event_plot_path("15_5_rMATS_deltaPSI_scatter.pdf"), width = 11, height = 6)
 
   delta_violin <- ggplot(rmats_sig, aes(x = event_type, y = delta_psi, fill = count_mode)) +
-    geom_violin(trim = TRUE, scale = "width", alpha = 0.7) +
-    geom_boxplot(width = 0.15, outlier.size = 0.3, position = position_dodge(width = 0.9)) +
+    geom_violin(trim = TRUE, scale = "width", alpha = 0.30, colour = NA) +
+    stat_summary(fun.data = pfos_violin_summary, geom = "linerange", show.legend = FALSE, linewidth = 0.25, colour = pfos_palette("neutral")[["dark"]], position = position_dodge(width = 0.9)) +
+    stat_summary(fun = function(y) pfos_violin_summary(y)$y, geom = "point", show.legend = FALSE, size = 1.1, colour = pfos_palette("neutral")[["dark"]], position = position_dodge(width = 0.9)) +
     scale_fill_manual(values = count_mode_colors) +
     labs(title = "Delta PSI distribution of significant AS events", x = "Event type", y = paste0("Delta PSI (", rmats_direction$contrast, ")")) +
     theme_rnaseq_publication()
@@ -574,7 +575,7 @@ if (nrow(rmats_combined) > 0) {
     concordance_plot <- ggplot(concordance_tbl, aes(x = jc_delta_psi, y = jcec_delta_psi, color = event_type)) +
       geom_point(alpha = 0.55, size = 1.2) +
       geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = viz_pal$neutral["dark"]) +
-      scale_color_manual(values = resolve_named_colors(viz_pal$accent, concordance_tbl$event_type)) +
+      scale_color_manual(values = resolve_named_colors(pfos_palette("rna_category"), concordance_tbl$event_type)) +
       labs(title = "Delta PSI concordance between JC and JCEC", x = paste0("JC delta PSI (", rmats_direction$contrast, ")"), y = paste0("JCEC delta PSI (", rmats_direction$contrast, ")")) +
       theme_rnaseq_publication()
     save_plot_versions(concordance_plot, step10_event_plot_path("15_6d_JC_JCEC_deltaPSI_concordance.pdf"), width = 8.5, height = 6)
@@ -738,7 +739,7 @@ if (nrow(rmats_combined) > 0) {
     dsfa_bar_plot <- ggplot(dsfa_type_summary, aes(x = reorder(event_type, event_count), y = event_count, fill = event_type)) +
       geom_col(width = 0.75) +
       coord_flip() +
-      scale_fill_manual(values = resolve_named_colors(viz_pal$accent, dsfa_type_summary$event_type)) +
+      scale_fill_manual(values = resolve_named_colors(pfos_palette("rna_category"), dsfa_type_summary$event_type)) +
       labs(title = "DSFA event-type burden", x = NULL, y = "Significant DSFA events") +
       theme_rnaseq_publication() +
       theme(legend.position = "none")
@@ -774,8 +775,8 @@ if (nrow(rmats_combined) > 0) {
         primary = step10_event_plot_path("15_8j_DSFA_sample_frequency_heatmap.pdf"),
         width = 8.5,
         height = 10,
-        expr = ComplexHeatmap::draw(
-          ComplexHeatmap::Heatmap(
+        expr = pfos_draw_heatmap(
+          pfos_heatmap(
             psi_freq_mat,
             name = "Included",
             col = heatmap_binary_col_fun(),
@@ -1250,7 +1251,7 @@ if (nrow(rmats_combined) > 0) {
     psi_cor_plot <- ggplot(psi_cor_df, aes(sample_x, sample_y, fill = correlation)) +
       geom_tile(color = viz_pal$neutral["light"]) +
       geom_text(aes(label = sprintf("%.2f", correlation)), size = rnaseq_figure_text_size) +
-      scale_fill_heatmap_diverging(midpoint = 0.5, limits = c(-1, 1)) +
+      scale_fill_heatmap_diverging(midpoint=0,limits=c(-1,1)) +
       labs(title = "PSI sample correlation heatmap", x = NULL, y = NULL, fill = "Pearson r") +
       theme_rnaseq_publication() +
       theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -1301,7 +1302,7 @@ if (nrow(rmats_combined) > 0) {
           order.by = "freq",
           sets.bar.color = unname(viz_pal$upset["sets"]),
           main.bar.color = unname(viz_pal$upset["main"]),
-          text.scale = c(1, 0.875, 1, 0.875, 1, 0.875)
+          text.scale = c(8/8.3, 1, 8/8.3, 1, 1, 7/(2.2*ggplot2::.pt))
         ), newpage = FALSE)
       )
     }
@@ -1345,21 +1346,20 @@ if (nrow(rmats_combined) > 0) {
       mutate(across(c(DE, DAS, DEU, IS, APA, DER), ~ as.numeric(.x))) %>%
       as.matrix()
     rownames(evidence_mat) <- evidence_heatmap_tbl$representative_label
-    evidence_mat <- scale(evidence_mat)
-    evidence_mat[!is.finite(evidence_mat)] <- 0
+    evidence_mat <- legacy_evidence_scale(evidence_mat)
     save_base_pdf_versions(
       primary = step10_integr_plot_path("15_37_integrated_as_evidence_heatmap.pdf"),
       width = 9,
       height = 9.5,
-      expr = ComplexHeatmap::draw(
-        ComplexHeatmap::Heatmap(
+      expr = pfos_draw_heatmap(
+        pfos_heatmap(
           evidence_mat,
-          name = "z-score",
-          col = heatmap_diverging_col_fun(evidence_mat),
-          cluster_rows = TRUE,
+          name = "Column Z-score",
+          col = heatmap_diverging_col_fun(breaks = c(-2.5, 0, 2.5)),
+          cluster_rows = FALSE,
           cluster_columns = FALSE,
           column_names_rot = 45
-        )
+        ), heatmap_legend_list = list(legacy_evidence_na_legend())
       )
     )
 
@@ -1382,9 +1382,14 @@ if (nrow(rmats_combined) > 0) {
     )
 
     if (nrow(evidence_scatter_df) > 0) {
+      method_group_colors <- pfos_identity_colors(evidence_scatter_df$method_group)
+      single_methods <- intersect(names(method_group_colors), names(pfos_palette("rna_method")))
+      method_group_colors[single_methods] <- pfos_palette("rna_method")[single_methods]
+      method_group_colors["other"] <- viz_pal$neutral[["mid"]]
       joint_scatter <- ggplot(evidence_scatter_df, aes(x = de_log2FoldChange, y = pmax(max_abs_delta_psi, max_abs_exon_logFC, max_abs_dIF, max_abs_delta_PAU, max_abs_der_effect), color = method_group, size = pmax(method_count, 1))) +
         geom_point(alpha = 0.75) +
-        scale_color_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent, viz_pal$neutral["mid"]), evidence_scatter_df$method_group)) +
+        scale_color_manual(values = resolve_named_colors(method_group_colors, evidence_scatter_df$method_group)) +
+        scale_size_area(max_size = 6) +
         labs(title = "Joint DE-DAS-DEU-IS-APA-DER evidence landscape", x = "Gene log2FC", y = "Max effect size", color = "Evidence class", size = "Method count") +
         theme_rnaseq_publication()
       save_plot_versions(joint_scatter, step10_integr_plot_path("15_38_DE_DAS_DEU_IS_APA_DER_joint_scatter.pdf"), width = 9, height = 6)
@@ -1520,11 +1525,11 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
       primary = step10_gene_plot_path("15_17_top_AS_event_PSI_heatmap.pdf"),
       width = 9,
       height = 11,
-      expr = ComplexHeatmap::draw(
-        ComplexHeatmap::Heatmap(
+      expr = pfos_draw_heatmap(
+        pfos_heatmap(
           psi_mat,
           name = "PSI",
-          col = heatmap_diverging_col_fun(breaks = c(0, 0.5, 1)),
+          col = heatmap_sequential_col_fun(breaks=c(0,0.5,1)),
           top_annotation = psi_ha,
           cluster_rows = TRUE,
           cluster_columns = TRUE,
@@ -1793,8 +1798,8 @@ if (nrow(rmats_combined) > 0 && nrow(as_gene_priority) > 0) {
           primary = step10_gene_plot_path("15_23_top_splicing_regulator_heatmap.pdf"),
           width = 8.5,
           height = 10,
-          expr = ComplexHeatmap::draw(
-            ComplexHeatmap::Heatmap(
+          expr = pfos_draw_heatmap(
+            pfos_heatmap(
               splicing_heatmap_mat,
               name = "z-score",
               col = heatmap_diverging_col_fun(splicing_heatmap_mat),
@@ -1886,8 +1891,8 @@ if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
           primary = step10_isoform_plot_path("15_47_isoform_fraction_heatmap.pdf"),
           width = 9,
           height = 10,
-          expr = ComplexHeatmap::draw(
-            ComplexHeatmap::Heatmap(
+          expr = pfos_draw_heatmap(
+            pfos_heatmap(
               heat_mat,
               name = "z-score",
               col = heatmap_diverging_col_fun(heat_mat),
@@ -1910,7 +1915,7 @@ if (nrow(isoform_switch_genes) > 0 || nrow(isoform_switch_isoforms) > 0) {
 
   isoform_summary_plot <- ggplot(isoform_summary_tbl, aes(x = metric, y = count, fill = metric)) +
     geom_col(width = 0.7) +
-    scale_fill_manual(values = resolve_named_colors(viz_pal$accent, isoform_summary_tbl$metric)) +
+    scale_fill_manual(values = resolve_named_colors(pfos_palette("rna_category"), isoform_summary_tbl$metric)) +
     labs(title = "Isoform switch summary", x = NULL, y = "Count") +
     theme_rnaseq_publication() +
     theme(legend.position = "none")
@@ -2007,6 +2012,7 @@ if (nrow(as_gene_priority) > 0 && nrow(module_df_annotated) > 0) {
     das_module_plot <- ggplot(das_module_plot_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = das_gene_count, color = -log10(figure_significance + 1e-300))) +
       geom_point(alpha = 0.9) +
       scale_color_heatmap_sequential() +
+      scale_size_area(max_size = 6) +
       labs(title = "DAS integration with co-expression modules", x = "Module-trait correlation", y = NULL, size = "DAS genes", color = figure_significance_axis_label()) +
       theme_rnaseq_publication()
     save_plot_versions(
@@ -2049,8 +2055,8 @@ if (nrow(as_gene_priority) > 0 && nrow(module_df_annotated) > 0) {
         primary = step10_integr_plot_path("15_26_DAS_gene_eventtype_heatmap.pdf"),
         width = 7.5,
         height = 9,
-        expr = ComplexHeatmap::draw(
-          ComplexHeatmap::Heatmap(
+        expr = pfos_draw_heatmap(
+          pfos_heatmap(
             as.matrix(event_type_burden_mat),
             name = "Events",
             col = heatmap_sequential_col_fun(breaks = event_burden_breaks),
@@ -2121,6 +2127,7 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0 && nrow(as_gene_
     module_deu_plot <- ggplot(module_deu_plot_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = deu_gene_count, color = -log10(figure_significance + 1e-300))) +
       geom_point(alpha = 0.85) +
       scale_color_heatmap_sequential() +
+      scale_size_area(max_size = 6) +
       labs(title = "Module-trait correlation and DEU enrichment", x = "Module-trait correlation", y = NULL, size = "DEU genes", color = figure_significance_axis_label()) +
       theme_rnaseq_publication()
     save_plot_versions(
@@ -2166,6 +2173,7 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0 && nrow(as_gene_
     module_is_plot <- ggplot(module_is_plot_tbl, aes(x = module_trait_correlation, y = reorder(Module, module_trait_correlation), size = is_gene_count, color = -log10(figure_significance + 1e-300))) +
       geom_point(alpha = 0.85) +
       scale_color_heatmap_sequential() +
+      scale_size_area(max_size = 6) +
       labs(title = "Module-trait correlation and isoform-switch enrichment", x = "Module-trait correlation", y = NULL, size = "IS genes", color = figure_significance_axis_label()) +
       theme_rnaseq_publication()
     save_plot_versions(
@@ -2207,7 +2215,8 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0 && nrow(as_gene_
 
   module_evidence_plot <- ggplot(module_evidence_long, aes(x = module_trait_correlation, y = reorder(module_label, module_trait_correlation), size = gene_count, color = evidence_type)) +
     geom_point(alpha = 0.85) +
-    scale_color_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), module_evidence_long$evidence_type)) +
+    scale_color_manual(values = resolve_named_colors(c(pfos_palette("rna_category"), triple_support_genes = group2_color, four_way_support_genes = viz_pal$neutral[["dark"]]), module_evidence_long$evidence_type)) +
+    scale_size_area(max_size = 6) +
     labs(title = "Module-level DE, DAS, DEU, and isoform-switch evidence", x = "Module-trait correlation", y = NULL, size = "Gene count", color = "Evidence") +
     theme_rnaseq_publication()
   save_plot_versions(
@@ -2221,19 +2230,18 @@ if (nrow(module_df_annotated) > 0 && nrow(module_trait_tbl) > 0 && nrow(as_gene_
     dplyr::select(de_genes, das_genes, deu_genes, is_genes, multi_evidence_genes, triple_support_genes, four_way_support_genes, module_trait_correlation) %>%
     as.matrix()
   rownames(module_evidence_heatmap_mat) <- module_evidence_summary$module_label
-  module_evidence_heatmap_scaled <- scale(module_evidence_heatmap_mat)
-  module_evidence_heatmap_scaled[!is.finite(module_evidence_heatmap_scaled)] <- 0
+  module_evidence_heatmap_scaled <- legacy_evidence_scale(module_evidence_heatmap_mat)
 
   save_base_pdf_versions(
     primary = step10_integr_plot_path("15_56_Module_MultiEvidence_Heatmap.pdf"),
     width = 8,
     height = max(5, 0.5 * nrow(module_evidence_summary) + 2),
-    expr = ComplexHeatmap::draw(
-      ComplexHeatmap::Heatmap(
+    expr = pfos_draw_heatmap(
+      pfos_heatmap(
         module_evidence_heatmap_scaled,
         name = "z-score",
-        col = heatmap_diverging_col_fun(module_evidence_heatmap_scaled),
-        cluster_rows = TRUE,
+        col = heatmap_diverging_col_fun(module_evidence_heatmap_scaled,breaks=c(-2.5,0,2.5)),
+        cluster_rows = FALSE,
         cluster_columns = FALSE,
         column_names_rot = 45
       )

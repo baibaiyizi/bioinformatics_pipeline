@@ -1,0 +1,307 @@
+---
+title: "05 序列捕获偏倚诊断"
+output: pdf_document
+---
+
+```{r init, include=FALSE, pandora_stage="prepare"}
+PANDORA_ANALYSIS_STAGE <- get0("PANDORA_ANALYSIS_STAGE", inherits = TRUE,
+  ifnotfound = Sys.getenv("PANDORA_ANALYSIS_STAGE", unset = "describe"))
+stopifnot(PANDORA_ANALYSIS_STAGE %in% c("describe", "differential", "enrichment"))
+OUTPUT_FIG_DIR <- CAPTURE_BIAS_FIG
+OUTPUT_TAB_DIR <- CAPTURE_BIAS_TAB
+prepare_module_outputs(OUTPUT_FIG_DIR, OUTPUT_TAB_DIR, c("01_pair_shift", "02_pair_consistency", "03_sequence_properties"))
+activate_serum_context(environment(), analysis_scope = "method_comparison")
+if (!pkg_has("edgeR") || !pkg_has("patchwork")) stop("模块 05 需要 edgeR 和 patchwork。")
+library(patchwork)
+PANDORA_CAN_PCA <- nrow(sample_info) >= 3L
+pandora_group_n <- table(as.character(sample_info$Group))
+pandora_paired_rows <- sample_info %>%
+  filter(as.character(Method) %in% c("1", "2"), !is.na(PairID), PairID != "")
+pandora_pair_membership <- table(pandora_paired_rows$PairID, as.character(pandora_paired_rows$Method))
+PANDORA_CAN_COMPARE <- nrow(pandora_paired_rows) == 6L &&
+  identical(dim(pandora_pair_membership), c(3L, 2L)) && all(pandora_pair_membership == 1L)
+write_csv_safe(tibble(
+  AnalysisStage = PANDORA_ANALYSIS_STAGE,
+  AnalysisScope = get0("analysis_scope", inherits = TRUE, ifnotfound = "all"),
+  LibraryN = nrow(sample_info), GroupN = length(pandora_group_n),
+  PCAApplicable = PANDORA_CAN_PCA, GroupComparisonApplicable = PANDORA_CAN_COMPARE
+), "analysis_stage_status.csv")
+
+```
+
+# 分析边界
+
+本模块用序列本身的长度、GC、末端碱基、RNA 类别和丰度描述方法 2 相对方法 1 的捕获偏移，不把序列属性关联解释为分子机制。
+
+```{r prepare-logcpm, include=FALSE, pandora_stage="differential", eval=PANDORA_ANALYSIS_STAGE == "differential" && PANDORA_CAN_COMPARE}
+capture_samples <- sample_info %>%
+  filter(as.character(Method) %in% c("1", "2"), PairID != "") %>%
+  mutate(Sample = as.character(Sample), Method = as.character(Method)) %>%
+  arrange(PairID, Method)
+sample_order <- capture_samples$Sample
+
+sequence_long <- output_all %>%
+  filter(
+    Sample %in% sample_order, !is.na(Sequence), Sequence != "", Reads > 0,
+    !Sequence %in% spikein_edit1_sequences(SPIKEIN_SEQ)
+  ) %>%
+  transmute(
+    Sample = as.character(Sample), Sequence = as.character(Sequence), Reads,
+    FeatureCategory = as.character(FeatureCategory), PrimaryAnnotation = as.character(PrimaryAnnotation)
+  )
+
+sequence_meta <- sequence_long %>%
+  group_by(Sequence) %>%
+  summarise(
+    FeatureCategory = first(FeatureCategory),
+    TopAnnotation = first(PrimaryAnnotation),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Length = nchar(Sequence),
+    GCPercent = 100 * str_count(Sequence, "[GC]") / Length,
+    FivePrimeBase = substr(Sequence, 1, 1),
+    ThreePrimeBase = substr(Sequence, Length, Length)
+  )
+
+matrix_info <- build_feature_count_matrix(
+  sequence_long %>% transmute(Sample, Feature = Sequence, Reads),
+  feature_col = "Feature", sample_order = sample_order, min_total = 5
+)
+sequence_counts <- round(matrix_info$matrix)
+dge <- edgeR::DGEList(counts = sequence_counts)
+dge <- edgeR::calcNormFactors(dge, method = "TMM")
+sequence_cpm <- edgeR::cpm(dge, log = FALSE)
+sequence_logcpm <- edgeR::cpm(dge, log = TRUE, prior.count = 0.5)
+
+mean_logcpm <- rowMeans(sequence_logcpm)
+abundance_breaks <- unique(stats::quantile(mean_logcpm, probs = seq(0, 1, 0.25), na.rm = TRUE))
+abundance_quartile <- if (length(abundance_breaks) >= 3) {
+  cut(mean_logcpm, breaks = abundance_breaks, include.lowest = TRUE, labels = FALSE)
+} else {
+  rep(1L, length(mean_logcpm))
+}
+sequence_meta <- sequence_meta %>%
+  filter(Sequence %in% rownames(sequence_logcpm)) %>%
+  mutate(
+    OverallMeanLogCPM = unname(mean_logcpm[Sequence]),
+    AbundanceQuartile = paste0("Q", unname(abundance_quartile[match(Sequence, rownames(sequence_logcpm))])),
+    GCQuartile = cut(GCPercent, breaks = c(-Inf, 25, 50, 75, Inf), labels = c("0-25%", "25-50%", "50-75%", "75-100%"))
+  )
+
+sequence_capture_path <- file.path(CAPTURE_TAB, "05_sequence", "capture_results_method2_vs_method1.csv")
+if (!file.exists(sequence_capture_path)) {
+  stop("模块 05 需要先完成模块 04：", sequence_capture_path)
+}
+sequence_significance <- readr::read_csv(sequence_capture_path, show_col_types = FALSE) %>%
+  transmute(
+    Sequence = as.character(Feature), OverallPairedLog2FC = logFC, OverallPairedFDR = FDR,
+    OverallPairedSignificant = !is.na(FDR) & FDR < 0.05 & abs(logFC) >= log2(1.5)
+  )
+sequence_meta <- sequence_meta %>% left_join(sequence_significance, by = "Sequence")
+```
+
+```{r paired-shifts, include=FALSE, pandora_stage="differential", eval=PANDORA_ANALYSIS_STAGE == "differential" && PANDORA_CAN_COMPARE}
+pair_specs <- capture_samples %>%
+  select(PairID, Method, Sample) %>%
+  pivot_wider(names_from = Method, values_from = Sample, names_prefix = "Method") %>%
+  arrange(PairID)
+
+paired_capture_logfc <- map_dfr(seq_len(nrow(pair_specs)), function(i) {
+  pair_id <- pair_specs$PairID[[i]]
+  sample1 <- pair_specs$Method1[[i]]
+  sample2 <- pair_specs$Method2[[i]]
+  tibble(
+    Sequence = rownames(sequence_logcpm), PairID = pair_id,
+    Method1Sample = sample1, Method2Sample = sample2,
+    Method1CPM = sequence_cpm[, sample1], Method2CPM = sequence_cpm[, sample2],
+    Method1LogCPM = sequence_logcpm[, sample1], Method2LogCPM = sequence_logcpm[, sample2],
+    MeanLogCPM = 0.5 * (Method1LogCPM + Method2LogCPM),
+    PairLog2FC = Method2LogCPM - Method1LogCPM,
+    DetectedBothCPM1 = Method1CPM >= 1 & Method2CPM >= 1
+  )
+}) %>%
+  left_join(sequence_meta, by = "Sequence")
+write_csv_safe(paired_capture_logfc, "paired_capture_logfc.csv")
+```
+
+```{r consistency, include=FALSE, pandora_stage="differential", eval=PANDORA_ANALYSIS_STAGE == "differential" && PANDORA_CAN_COMPARE}
+pair_logfc_wide <- paired_capture_logfc %>%
+  select(Sequence, PairID, PairLog2FC, DetectedBothCPM1) %>%
+  pivot_wider(names_from = PairID, values_from = c(PairLog2FC, DetectedBothCPM1))
+
+pair_ids <- pair_specs$PairID
+pair_combinations <- combn(pair_ids, 2, simplify = FALSE)
+significance_lookup <- sequence_meta$OverallPairedSignificant[match(pair_logfc_wide$Sequence, sequence_meta$Sequence)]
+significance_lookup[is.na(significance_lookup)] <- FALSE
+capture_pair_consistency <- map_dfr(pair_combinations, function(pair_pair) {
+  p1 <- pair_pair[[1]]
+  p2 <- pair_pair[[2]]
+  x <- pair_logfc_wide[[paste0("PairLog2FC_", p1)]]
+  y <- pair_logfc_wide[[paste0("PairLog2FC_", p2)]]
+  detected <- pair_logfc_wide[[paste0("DetectedBothCPM1_", p1)]] & pair_logfc_wide[[paste0("DetectedBothCPM1_", p2)]]
+  significant_detected <- detected & significance_lookup
+  tibble(
+    PairA = p1, PairB = p2, SharedSequenceN = sum(detected, na.rm = TRUE),
+    LogFCSpearman = safe_cor(x[detected], y[detected]),
+    DirectionConcordancePct = if_else(sum(detected, na.rm = TRUE) > 0, 100 * mean(sign(x[detected]) == sign(y[detected]), na.rm = TRUE), NA_real_),
+    MedianAbsoluteDifference = if_else(sum(detected, na.rm = TRUE) > 0, median(abs(x[detected] - y[detected]), na.rm = TRUE), NA_real_),
+    OverallSignificantSequenceN = sum(significant_detected, na.rm = TRUE),
+    SignificantDirectionConcordancePct = if_else(
+      sum(significant_detected, na.rm = TRUE) > 0,
+      100 * mean(sign(x[significant_detected]) == sign(y[significant_detected]), na.rm = TRUE), NA_real_
+    ),
+    SignificanceDefinition = "paired edgeR FDR<0.05 and |log2FC|>=log2(1.5)"
+  )
+})
+
+all_pair_detected <- Reduce(`&`, lapply(pair_ids, function(id) pair_logfc_wide[[paste0("DetectedBothCPM1_", id)]]))
+all_pair_signs <- sapply(pair_ids, function(id) sign(pair_logfc_wide[[paste0("PairLog2FC_", id)]]))
+all_pair_direction_concordance <- if (sum(all_pair_detected, na.rm = TRUE) > 0) {
+  100 * mean(apply(all_pair_signs[all_pair_detected, , drop = FALSE], 1, function(x) length(unique(x)) == 1))
+} else NA_real_
+all_pair_significant <- all_pair_detected & significance_lookup
+all_pair_significant_concordance <- if (sum(all_pair_significant, na.rm = TRUE) > 0) {
+  100 * mean(apply(all_pair_signs[all_pair_significant, , drop = FALSE], 1, function(x) length(unique(x)) == 1))
+} else NA_real_
+capture_pair_consistency <- bind_rows(
+  capture_pair_consistency,
+  tibble(
+    PairA = "all_three_pairs", PairB = "all_three_pairs",
+    SharedSequenceN = sum(all_pair_detected, na.rm = TRUE), LogFCSpearman = NA_real_,
+    DirectionConcordancePct = all_pair_direction_concordance,
+    MedianAbsoluteDifference = NA_real_,
+    OverallSignificantSequenceN = sum(all_pair_significant, na.rm = TRUE),
+    SignificantDirectionConcordancePct = all_pair_significant_concordance,
+    SignificanceDefinition = "paired edgeR FDR<0.05 and |log2FC|>=log2(1.5)"
+  )
+)
+write_csv_safe(capture_pair_consistency, "capture_pair_consistency.csv")
+```
+
+```{r feature-summary, include=FALSE, pandora_stage="differential", eval=PANDORA_ANALYSIS_STAGE == "differential" && PANDORA_CAN_COMPARE}
+summarise_bias <- function(df, property, property_type) {
+  df %>%
+    filter(!is.na(.data[[property]]), as.character(.data[[property]]) != "") %>%
+    group_by(Value = .data[[property]]) %>%
+    summarise(
+      ObservationN = n(), SequenceN = n_distinct(Sequence),
+      MedianLog2FC = median(PairLog2FC, na.rm = TRUE),
+      MedianAbsLog2FC = median(abs(PairLog2FC), na.rm = TRUE),
+      Method2HigherPct = 100 * mean(PairLog2FC > 0, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(Property = property_type, Value = as.character(Value))
+}
+
+bias_summary_input <- paired_capture_logfc %>%
+  filter(pmax(Method1CPM, Method2CPM) >= 1)
+if (nrow(bias_summary_input) == 0) stop("没有任一方 CPM≥1 的 pair–sequence 观测，无法进行捕获偏倚分层。")
+
+capture_bias_feature_summary <- bind_rows(
+  summarise_bias(bias_summary_input, "Length", "length_nt"),
+  summarise_bias(bias_summary_input, "GCQuartile", "gc_quartile"),
+  summarise_bias(bias_summary_input, "FivePrimeBase", "five_prime_base"),
+  summarise_bias(bias_summary_input, "ThreePrimeBase", "three_prime_base"),
+  summarise_bias(bias_summary_input, "FeatureCategory", "rna_annotation_class"),
+  summarise_bias(bias_summary_input, "AbundanceQuartile", "abundance_quartile")
+) %>%
+  mutate(EligibilityDefinition = "either method CPM>=1 within pair") %>%
+  select(Property, Value, EligibilityDefinition, everything())
+write_csv_safe(capture_bias_feature_summary, "capture_bias_feature_summary.csv")
+```
+
+```{r figures, include=FALSE, pandora_stage="differential", eval=PANDORA_ANALYSIS_STAGE == "differential" && PANDORA_CAN_COMPARE}
+p_ma <- paired_capture_logfc %>%
+  filter(pmax(Method1CPM, Method2CPM) >= 1) %>%
+  ggplot(aes(MeanLogCPM, PairLog2FC)) +
+  geom_hline(yintercept = 0, color = serum_neutral_line) +
+  geom_hline(yintercept = c(-1, 1), linetype = "dotted", color = serum_neutral_line) +
+  geom_point(alpha = 0.18, size = 0.8, color = serum_blue) +
+  facet_wrap(~PairID, nrow = 1) +
+  labs(
+    title = "Sequence capture shifts across three matched aliquot pairs",
+    subtitle = "Sequences with CPM >= 1 in either method; positive values favor method 2",
+    x = "Mean TMM logCPM", y = "Method 2 - method 1 log2FC"
+  ) +
+  serum_theme_bw()
+save_plot_nested(p_ma, "01_pair_shift", "paired_sequence_capture_ma.pdf", width = 12, height = 4.8, view = REPORT_VIEW)
+
+consistency_plot_df <- map_dfr(pair_combinations, function(pair_pair) {
+  p1 <- pair_pair[[1]]; p2 <- pair_pair[[2]]
+  tibble(
+    PairA = p1, PairB = p2,
+    X = pair_logfc_wide[[paste0("PairLog2FC_", p1)]],
+    Y = pair_logfc_wide[[paste0("PairLog2FC_", p2)]],
+    Keep = pair_logfc_wide[[paste0("DetectedBothCPM1_", p1)]] & pair_logfc_wide[[paste0("DetectedBothCPM1_", p2)]]
+  ) %>% filter(Keep)
+})
+p_consistency <- ggplot(consistency_plot_df, aes(X, Y)) +
+  geom_hline(yintercept = 0, color = serum_neutral_line) +
+  geom_vline(xintercept = 0, color = serum_neutral_line) +
+  geom_point(alpha = 0.18, size = 0.8, color = serum_green) +
+  facet_wrap(~paste(PairA, "vs", PairB), scales = "free") +
+  labs(
+    title = "Sequence log2FC agreement between matched pairs",
+    subtitle = "Sequences with CPM >= 1 in both methods of both compared pairs",
+    x = "Pair A log2FC", y = "Pair B log2FC"
+  ) +
+  serum_theme_bw()
+save_plot_nested(p_consistency, "02_pair_consistency", "capture_pair_logfc_consistency.pdf", width = 11, height = 6, view = REPORT_VIEW)
+
+p_length <- capture_bias_feature_summary %>%
+  filter(Property == "length_nt", as.numeric(Value) >= 15, as.numeric(Value) <= 45) %>%
+  mutate(Length = as.numeric(Value)) %>%
+  ggplot(aes(Length, MedianLog2FC)) +
+  geom_hline(yintercept = 0, color = serum_neutral_line) +
+  geom_line(color = serum_blue, linewidth = 0.8) +
+  geom_point(aes(size = SequenceN), color = serum_blue, alpha = 0.8) +
+  scale_size_continuous(range = c(1.5, 5)) +
+  labs(title = "Stratified by length", x = "Sequence length (nt)", y = "Median paired log2FC", size = "Sequences") +
+  serum_theme_bw()
+
+p_ends <- capture_bias_feature_summary %>%
+  filter(Property %in% c("five_prime_base", "three_prime_base")) %>%
+  mutate(Property = recode(Property, five_prime_base = "5-prime base", three_prime_base = "3-prime base")) %>%
+  ggplot(aes(Value, MedianLog2FC, fill = Value)) +
+  geom_hline(yintercept = 0, color = serum_neutral_line) +
+  geom_col(width = 0.7) +
+  facet_wrap(~Property) +
+  scale_fill_manual(values = c(A = "#009E73", C = "#0072B2", G = "#E69F00", T = "#D55E00", N = serum_neutral_line), guide = "none") +
+  labs(title = "Stratified by terminal base", x = NULL, y = "Median paired log2FC") +
+  serum_theme_bw()
+
+p_gc_abundance <- capture_bias_feature_summary %>%
+  filter(Property %in% c("gc_quartile", "abundance_quartile")) %>%
+  mutate(
+    Property = recode(Property, gc_quartile = "GC stratum", abundance_quartile = "Abundance quartile"),
+    Value = factor(Value, levels = c("0-25%", "25-50%", "50-75%", "75-100%", "Q1", "Q2", "Q3", "Q4"))
+  ) %>%
+  ggplot(aes(Value, MedianLog2FC, fill = Property)) +
+  geom_hline(yintercept = 0, color = serum_neutral_line) +
+  geom_col(width = 0.7, show.legend = FALSE) +
+  facet_wrap(~Property, scales = "free_x") +
+  scale_fill_manual(values = c("GC stratum" = serum_green, "Abundance quartile" = serum_orange)) +
+  labs(title = "Stratified by GC and abundance", x = NULL, y = "Median paired log2FC") +
+  serum_theme_bw()
+
+p_class <- capture_bias_feature_summary %>%
+  filter(Property == "rna_annotation_class") %>%
+  slice_max(SequenceN, n = 10, with_ties = FALSE) %>%
+  mutate(Value = reorder(Value, MedianLog2FC)) %>%
+  ggplot(aes(MedianLog2FC, Value, size = SequenceN)) +
+  geom_vline(xintercept = 0, color = serum_neutral_line) +
+  geom_point(color = serum_purple, alpha = 0.85) +
+  scale_size_continuous(range = c(2, 7)) +
+  labs(title = "RNA annotation category", x = "Median paired log2FC", y = NULL, size = "Sequences") +
+  serum_theme_bw()
+
+save_plot_nested(
+  ((p_length | p_ends) / (p_gc_abundance | p_class)) +
+    patchwork::plot_annotation(subtitle = "CPM >= 1 in either method within each pair; positive values favor method 2 capture"),
+  "03_sequence_properties", "capture_bias_sequence_properties.pdf",
+  width = 12, height = 10, view = REPORT_VIEW
+)
+```
+
+这些图只说明捕获偏移是否随可观测序列属性而变化。它们不能区分连接、逆转录、扩增、RNA 修饰或其他具体机制。

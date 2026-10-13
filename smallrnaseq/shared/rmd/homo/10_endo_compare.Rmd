@@ -1,0 +1,63 @@
+---
+title: "endo-siRNA 描述"
+output: html_document
+---
+
+```{r init, include=FALSE}
+if (!ENDO_ENABLED) stop("This module requires with_endo branch.")
+if (Sys.getenv("PANDORA_SPECIES")=="Mus") activate_mii_context(environment()) else activate_serum_context(environment())
+OUTPUT_FIG_DIR <- ENDOSIRNA_COMPARE_FIG
+OUTPUT_TAB_DIR <- ENDOSIRNA_COMPARE_TAB
+prepare_module_outputs(OUTPUT_FIG_DIR,OUTPUT_TAB_DIR,c("01_composition","02_length","03_sequences","04_evidence","05_de"))
+caption <- "Reference-supported candidates; 21-24 nt; genome matched;
+conflicting sncRNA annotations retained."
+endo_seq <- output_all %>% filter(EndoCandidate)
+endo_sample <- endo_seq %>% group_by(Sample,Group) %>% summarise(Reads=sum(Reads),UniqueSequences=n_distinct(Sequence),.groups="drop") %>%
+  right_join(sample_info %>% transmute(Sample=as.character(Sample),Group=as.character(Group)),by=c("Sample","Group")) %>%
+  mutate(Reads=coalesce(Reads,0),UniqueSequences=coalesce(UniqueSequences,0L)) %>% left_join(clean_reads_tbl,by="Sample") %>% mutate(RPM=1e6*Reads/CleanReads,Percent=100*Reads/CleanReads)
+write_csv_safe(endo_sample,"endo_sample_summary.csv")
+write_csv_safe(endo_transfer_audit,"endo_transfer_audit.csv")
+write_csv_safe(endo_reference_audit,"endo_reference_audit.csv")
+```
+
+```{r composition, include=FALSE, eval=PANDORA_ANALYSIS_STAGE=="describe"}
+p <- ggplot(endo_sample,aes(Group,Percent,fill=Group))+geom_col(data=endo_sample %>% group_by(Group) %>% summarise(Percent=mean(Percent),.groups="drop"),width=.65,color="#47596E")+
+  geom_point(aes(shape=Group),size=2,position=position_jitter(width=.06,height=0,seed=1))+scale_fill_manual(values=group_palette)+labs(title=paste(PROJECT_STAGE,"endo-siRNA composition"),y="% of clean reads",caption=caption)+sncrna_theme_minimal()
+q <- ggplot(endo_sample,aes(Group,UniqueSequences,fill=Group))+geom_boxplot(outlier.shape=NA,width=.5)+geom_point(aes(shape=Group),size=2)+scale_fill_manual(values=group_palette)+labs(title="Detected candidate sequences",y="Unique sequences")+sncrna_theme_minimal()
+save_plot_nested(patchwork::wrap_plots(p,q,ncol=2),"01_composition","endo_composition_and_detection.pdf",width=11,height=5,view=REPORT_VIEW)
+endo_len <- endo_seq %>% group_by(Sample,Group,Length) %>% summarise(Reads=sum(Reads),.groups="drop") %>%
+  right_join(tidyr::crossing(sample_info %>% transmute(Sample=as.character(Sample),Group=as.character(Group)),Length=21:24),by=c("Sample","Group","Length")) %>%
+  mutate(Reads=coalesce(Reads,0)) %>% left_join(clean_reads_tbl,by="Sample") %>% mutate(RPM=1e6*Reads/CleanReads)
+write_csv_safe(endo_len,"endo_length_by_sample.csv")
+p<-ggplot(endo_len,aes(Length,RPM,color=Group,shape=Group))+geom_line(aes(group=Sample),alpha=.45,linewidth=.4)+
+  stat_summary(aes(group=Group),fun=mean,geom="line",linewidth=.8)+stat_summary(fun=mean,geom="point",size=2)+scale_color_manual(values=group_palette)+scale_x_continuous(breaks=21:24)+labs(title="endo-siRNA length distribution",y="RPM / clean reads",caption=caption)+sncrna_theme_minimal()
+save_plot_nested(p,"02_length","endo_length.pdf",width=11,height=5,view=REPORT_VIEW)
+if (nrow(endo_seq)>0) {
+  top<-endo_seq %>% group_by(Sequence) %>% summarise(MeanRPM=sum(RPM)/nrow(sample_info),.groups="drop") %>% arrange(desc(MeanRPM),Sequence) %>% slice_head(n=20) %>% pull(Sequence)
+  top_tbl<-endo_seq %>% filter(Sequence%in%top) %>% select(Sample,Group,Sequence,RPM,Reads,OriginalAnnotation,EndoReferences)
+  write_csv_safe(top_tbl,"endo_top20_sequence_values.csv")
+  mat<-top_tbl %>% select(Sequence,Sample,RPM) %>% pivot_wider(names_from=Sample,values_from=RPM,values_fill=0)
+  missing_samples<-setdiff(as.character(sample_info$Sample),names(mat));for(s in missing_samples)mat[[s]]<-0
+  mm<-as.matrix(mat[,as.character(sample_info$Sample)]);rownames(mm)<-mat$Sequence
+  save_pheatmap_file(log2(mm+1),filename=file.path(OUTPUT_FIG_DIR,REPORT_VIEW,"03_sequences","endo_top20_heatmap.pdf"),width=11,height=8,cluster_rows=nrow(mm)>1,cluster_cols=ncol(mm)>1,color=colorRampPalette(sncrna_heatmap_gradient)(100),main="endo-siRNA: shared top 20; log2(RPM + 1)",border_color=NA)
+  nucleotides<-purrr::map_dfr(seq_len(nrow(endo_seq)),function(i){z<-strsplit(endo_seq$Sequence[[i]],"",fixed=TRUE)[[1]];tibble(Sample=endo_seq$Sample[[i]],Group=endo_seq$Group[[i]],Position=seq_along(z),Base=z,Reads=endo_seq$Reads[[i]])}) %>%
+    group_by(Sample,Group,Position,Base) %>% summarise(Reads=sum(Reads),.groups="drop") %>%
+    group_by(Sample,Group,Position) %>% complete(Base=c("A","C","G","T"),fill=list(Reads=0)) %>% mutate(Percent=100*Reads/sum(Reads)) %>% ungroup() %>%
+    group_by(Group,Position,Base) %>% summarise(Percent=mean(Percent),CoveredSamples=n_distinct(Sample),.groups="drop")
+  write_csv_safe(nucleotides,"endo_base_profile.csv")
+  p<-ggplot(nucleotides,aes(Position,Percent,fill=Base))+geom_col()+facet_wrap(~Group,ncol=1)+scale_fill_manual(values=c(A="#8ECFC9",C="#FFBE7A",G="#FF9F9B",T="#A1C9F4"))+labs(title="endo-siRNA nucleotide composition",y="% of reads at position")+sncrna_theme_minimal()
+  save_plot_nested(p,"03_sequences","endo_base_profile.pdf",width=11,height=6,view=REPORT_VIEW)
+} else save_plot_nested(plot_note("endo-siRNA", "No candidates passed the prespecified rules."),"03_sequences","endo_empty.pdf",view=REPORT_VIEW)
+ev<-endo_evidence %>% group_by(Sample,Group,EvidenceStatus) %>% summarise(Reads=sum(Reads),.groups="drop") %>% left_join(clean_reads_tbl,by="Sample") %>% mutate(RPM=1e6*Reads/CleanReads)
+write_csv_safe(ev,"reference_overlap_evidence_status.csv")
+p<-ggplot(ev,aes(Sample,RPM,fill=EvidenceStatus))+geom_col(color="#47596E",linewidth=.2)+scale_fill_manual(values=c(reference_supported_candidate="#C7B9D9",outside_length_window="#FDCDAC",not_genome_matched="#8ECFC9",conflicting_or_unknown_annotation="#FF9F9B"))+labs(title="Reference overlap audit",caption="Overlap is evidence only; original class retained unless all rules pass.",y="RPM / clean reads")+sncrna_theme_minimal()+theme(axis.text.x=element_text(angle=40,hjust=1))
+save_plot_nested(p,"04_evidence","endo_reference_evidence.pdf",width=11,height=5,view=REPORT_VIEW)
+```
+
+```{r differential, include=FALSE, eval=PANDORA_ANALYSIS_STAGE=="differential"}
+if (Sys.getenv("PANDORA_SPECIES")=="Mus" && length(group_levels)==2 && all(table(sample_info$Group)>=2)) {
+  contrast_specs <- resolve_mii_contrast_specs()
+  input<-endo_seq %>% transmute(Sample,Group,Feature=Sequence,Reads)
+  if(nrow(input)>0)run_layer_de("endo_sequence","endo-siRNA sequence",input)
+} else write_csv_safe(tibble(State="not_applicable",Reason="Requires independent biological replication in two groups"),"endo_de_status.csv")
+```

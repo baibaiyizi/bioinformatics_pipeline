@@ -1,0 +1,507 @@
+---
+title: "01 sncRNA Compare - Radar, Alluvial, Bar and Length"
+output: pdf_document
+---
+
+```{r init, include=FALSE, pandora_stage="prepare"}
+PANDORA_ANALYSIS_STAGE <- get0("PANDORA_ANALYSIS_STAGE", inherits = TRUE,
+  ifnotfound = Sys.getenv("PANDORA_ANALYSIS_STAGE", unset = "describe"))
+stopifnot(PANDORA_ANALYSIS_STAGE %in% c("describe", "differential", "enrichment"))
+initialize_profile_comparison_module(
+  environment(),
+  SNC_COMPARE_FIG,
+  SNC_COMPARE_TAB,
+  "01_sncRNA_compare",
+  c(
+    "01_sector_radar",
+    "02_length_distribution",
+    "03_bar_sncRNA",
+    "04_alluvial_sncRNA",
+    "05_mapping_statistics",
+    "06_sequence_type",
+    "07_company_landscape",
+    "02_sector_radar",
+    "03_length_distribution",
+    "04_trend"
+  )
+)
+PANDORA_CAN_PCA <- nrow(sample_info) >= 3L
+pandora_group_n <- table(as.character(sample_info$Group))
+PANDORA_CAN_COMPARE <- length(pandora_group_n) >= 2L && all(pandora_group_n >= 2L)
+write_csv_safe(tibble(
+  AnalysisStage = PANDORA_ANALYSIS_STAGE,
+  AnalysisScope = get0("analysis_scope", inherits = TRUE, ifnotfound = "all"),
+  LibraryN = nrow(sample_info), GroupN = length(pandora_group_n),
+  PCAApplicable = PANDORA_CAN_PCA, GroupComparisonApplicable = PANDORA_CAN_COMPARE
+), "analysis_stage_status.csv")
+
+```
+
+```{r build-sncrna-trend-data, include=FALSE, pandora_stage="prepare", eval=TRUE}
+trend_all_sample_df <- summary_top %>%
+  mutate(TrendCategory = length_category_from_class(Class)) %>%
+  filter(!is.na(TrendCategory)) %>%
+  group_by(Sample, Group, TrendCategory) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+trend_all_df <- trend_all_sample_df %>%
+  summarise_group_mean_percent("TrendCategory")
+
+trend_major_categories <- c("rsRNA", "tsRNA", "piRNA", "miRNA", if (ENDO_ENABLED) "endo-siRNA")
+trend_extra_categories <- trend_all_df %>%
+  filter(!TrendCategory %in% trend_major_categories) %>%
+  group_by(TrendCategory) %>%
+  summarise(TotalPercent = sum(Percent, na.rm = TRUE), .groups = "drop") %>%
+  filter(TotalPercent > 0) %>%
+  arrange(desc(TotalPercent)) %>%
+  pull(TrendCategory)
+
+trend_category_levels <- c(trend_major_categories, trend_extra_categories)
+trend_all_df <- trend_all_df %>%
+  mutate(TrendCategory = factor(TrendCategory, levels = trend_category_levels))
+
+trend_major_sample_df <- summary_top %>%
+  filter(as.character(MainCategory) %in% trend_major_categories) %>%
+  transmute(Sample, Group, TrendCategory = as.character(MainCategory), Reads) %>%
+  group_by(Sample, Group, TrendCategory) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Sample, Group) %>%
+  mutate(Percent = group_percent(Reads)) %>%
+  ungroup()
+
+trend_major_df <- trend_major_sample_df %>%
+  summarise_group_mean_percent("TrendCategory") %>%
+  mutate(TrendCategory = factor(TrendCategory, levels = trend_major_categories))
+
+group_snc_total_tbl <- summary_top %>%
+  group_by(Group) %>%
+  summarise(TotalSncReads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+sample_snc_total_tbl <- sample_comp_view %>%
+  group_by(Sample, Group) %>%
+  summarise(TotalSncReads = sum(Reads, na.rm = TRUE), .groups = "drop")
+
+sample_comp_total_snc <- sample_comp_view %>%
+  left_join(sample_snc_total_tbl, by = c("Sample", "Group")) %>%
+  mutate(PercentTotalSnc = if_else(TotalSncReads > 0, 100 * Reads / TotalSncReads, 0))
+
+group_comp_total_snc <- sample_comp_total_snc %>%
+  summarise_group_mean_percent("MainCategory", percent_col = "PercentTotalSnc") %>%
+  rename(PercentTotalSnc = Percent)
+```
+
+```{r sncrna-mapping-statistics, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+sample_mapping_components <- sample_comp_view %>%
+  mutate(MainCategory = as.character(MainCategory)) %>%
+  group_by(Sample, Group) %>%
+  summarise(
+    AnnotatedSncReads = sum(Reads[!MainCategory %in% c("unanno_MG", "unanno_UMG", "other")], na.rm = TRUE),
+    UnannotatedGenomeMatchReads = sum(Reads[MainCategory == "unanno_MG"], na.rm = TRUE),
+    UnannotatedGenomeUnmatchReads = sum(Reads[MainCategory == "unanno_UMG"], na.rm = TRUE),
+    OtherReads = sum(Reads[MainCategory == "other"], na.rm = TRUE),
+    .groups = "drop"
+  )
+
+sample_mapping_statistics <- sample_qc_table %>%
+  transmute(
+    Sample = as.character(Sample),
+    Group = as.character(Group),
+    CleanReads,
+    MatchGenome,
+    UnmatchGenome = pmax(CleanReads - MatchGenome, 0),
+    GenomeRate
+  ) %>%
+  left_join(sample_mapping_components, by = c("Sample", "Group")) %>%
+  mutate(
+    across(c(AnnotatedSncReads, UnannotatedGenomeMatchReads, UnannotatedGenomeUnmatchReads, OtherReads), ~replace_na(.x, 0)),
+    AnnotatedSncPercent = if_else(CleanReads > 0, 100 * AnnotatedSncReads / CleanReads, 0),
+    UnannotatedGenomeMatchPercent = if_else(CleanReads > 0, 100 * UnannotatedGenomeMatchReads / CleanReads, 0),
+    UnannotatedGenomeUnmatchPercent = if_else(CleanReads > 0, 100 * UnannotatedGenomeUnmatchReads / CleanReads, 0),
+    OtherPercent = if_else(CleanReads > 0, 100 * OtherReads / CleanReads, 0),
+    UnmatchGenomePercent = if_else(CleanReads > 0, 100 * UnmatchGenome / CleanReads, 0)
+  )
+
+mapping_stack_df <- sample_mapping_statistics %>%
+  select(Sample, Group, AnnotatedSncPercent, UnannotatedGenomeMatchPercent, UnannotatedGenomeUnmatchPercent, OtherPercent) %>%
+  pivot_longer(
+    cols = ends_with("Percent"),
+    names_to = "MappingType",
+    values_to = "Percent"
+  ) %>%
+  mutate(
+    MappingType = recode(
+      MappingType,
+      AnnotatedSncPercent = "annotated_sncRNA",
+      UnannotatedGenomeMatchPercent = "unannotated_match_genome",
+      UnannotatedGenomeUnmatchPercent = "unannotated_unmatch_genome",
+      OtherPercent = "other"
+    ),
+    MappingType = factor(MappingType, levels = c("annotated_sncRNA", "unannotated_match_genome", "unannotated_unmatch_genome", "other")),
+    Sample = factor(Sample, levels = as.character(sample_info$Sample)),
+    Group = factor(Group, levels = group_levels)
+  )
+
+mapping_palette <- c(
+  annotated_sncRNA = serum_blue,
+  unannotated_match_genome = serum_green,
+  unannotated_unmatch_genome = serum_orange,
+  other = serum_neutral_line
+)
+
+mapping_stack_plot <- ggplot(mapping_stack_df, aes(x = Sample, y = Percent, fill = MappingType)) +
+  geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+  scale_fill_manual(values = mapping_palette, drop = FALSE) +
+  labs(
+    x = NULL,
+    y = "Percent of clean reads",
+    title = "Reads mapping and annotation statistics",
+    fill = "Type"
+  ) +
+  serum_theme_bw() +
+  theme(axis.text.x = element_text(angle = 35, hjust = 1), legend.position = "top")
+
+save_plot_nested(
+  mapping_stack_plot,
+  "05_mapping_statistics",
+  "reads_mapping_statistics.pdf",
+  width = 10,
+  height = 5.8,
+  view = REPORT_VIEW
+)
+```
+
+```{r sncrna-sequence-type, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+sequence_type_sample <- output_all %>%
+  filter(!is.na(Sequence), Sequence != "") %>%
+  mutate(SequenceType = factor(as.character(FeatureCategory), levels = category_levels)) %>%
+  group_by(Sample, Group, SequenceType) %>%
+  summarise(
+    SequenceCount = n_distinct(Sequence),
+    Reads = sum(Reads, na.rm = TRUE),
+    RPM = sum(RPM, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  group_by(Sample, Group) %>%
+  mutate(SequencePercent = group_percent(SequenceCount), ReadPercent = group_percent(Reads)) %>%
+  ungroup()
+
+sequence_type_read_percent <- sequence_type_sample %>%
+  summarise_group_mean_percent("SequenceType", percent_col = "ReadPercent") %>%
+  select(Group, SequenceType, ReadPercent = Percent)
+
+sequence_type_unique_percent <- sequence_type_sample %>%
+  summarise_group_mean_percent("SequenceType", percent_col = "SequencePercent", reads_col = "SequenceCount") %>%
+  select(Group, SequenceType, SequencePercent = Percent)
+
+sequence_type_group <- sequence_type_sample %>%
+  summarise_group_mean_rpm("SequenceType") %>%
+  left_join(
+    sequence_type_sample %>%
+      mutate(Group = as.character(Group)) %>%
+      group_by(Group, SequenceType) %>%
+      summarise(SequenceCount = sum(SequenceCount, na.rm = TRUE), .groups = "drop"),
+    by = c("Group", "SequenceType")
+  ) %>%
+  left_join(sequence_type_read_percent, by = c("Group", "SequenceType")) %>%
+  left_join(sequence_type_unique_percent, by = c("Group", "SequenceType")) %>%
+  mutate(across(c(SequenceCount, ReadPercent, SequencePercent), ~replace_na(.x, 0))) %>%
+  mutate(Group = factor(as.character(Group), levels = group_levels))
+
+sequence_type_levels <- sequence_type_group %>%
+  filter(SequenceCount > 0) %>%
+  arrange(match(as.character(SequenceType), category_levels)) %>%
+  pull(SequenceType) %>%
+  as.character() %>%
+  unique()
+
+if (length(sequence_type_levels) > 0) {
+  sequence_count_plot <- ggplot(sequence_type_group %>% filter(SequenceType %in% sequence_type_levels), aes(x = Group, y = SequencePercent, fill = SequenceType)) +
+    geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+    scale_fill_manual(values = category_palette, drop = FALSE) +
+    labs(
+      x = "Group",
+      y = "Percent of unique sequences",
+      title = "sncRNA sequence type composition",
+      fill = "Sequence type"
+    ) +
+    serum_theme_bw() +
+    theme(legend.position = "top")
+
+  read_count_plot <- ggplot(sequence_type_group %>% filter(SequenceType %in% sequence_type_levels), aes(x = Group, y = ReadPercent, fill = SequenceType)) +
+    geom_col(width = 0.72, color = "white", linewidth = 0.15) +
+    scale_fill_manual(values = category_palette, drop = FALSE) +
+    labs(
+      x = "Group",
+      y = "Percent of reads",
+      title = "Read-weighted sncRNA sequence type composition",
+      fill = "Sequence type"
+    ) +
+    serum_theme_bw() +
+    theme(legend.position = "top")
+
+  save_plot_nested(
+    sequence_count_plot,
+    "06_sequence_type",
+    "sncRNA_sequence_type_unique_sequence_percent.pdf",
+    width = 9,
+    height = 5.8,
+    view = REPORT_VIEW
+  )
+
+  save_plot_nested(
+    read_count_plot,
+    "06_sequence_type",
+    "sncRNA_sequence_type_read_percent.pdf",
+    width = 9,
+    height = 5.8,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r company-landscape-supplement, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+company_sample_order <- as.character(sample_info$Sample)
+
+ensure_company_sample_columns <- function(df, leading_cols, sample_order = company_sample_order) {
+  for (sample_name in sample_order) {
+    if (!sample_name %in% names(df)) df[[sample_name]] <- 0
+  }
+  df %>% select(all_of(leading_cols), all_of(sample_order))
+}
+
+company_length_distribution_reads_wide <- length_detail_view %>%
+  mutate(Class = as.character(MainCategory), Sample = as.character(Sample)) %>%
+  group_by(Class, Length, Sample) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = Reads, values_fill = 0) %>%
+  ensure_company_sample_columns(c("Class", "Length")) %>%
+  arrange(Class, Length)
+
+company_length_distribution_rpm_wide <- length_detail_view %>%
+  mutate(Class = as.character(MainCategory), Sample = as.character(Sample)) %>%
+  group_by(Class, Length, Sample) %>%
+  summarise(RPM = sum(RPM, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = RPM, values_fill = 0) %>%
+  ensure_company_sample_columns(c("Class", "Length")) %>%
+  arrange(Class, Length)
+
+company_sequence_type_reads_wide <- sequence_type_sample %>%
+  mutate(SequenceType = as.character(SequenceType), Sample = as.character(Sample)) %>%
+  group_by(SequenceType, Sample) %>%
+  summarise(Reads = sum(Reads, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = Reads, values_fill = 0) %>%
+  ensure_company_sample_columns("SequenceType") %>%
+  arrange(SequenceType)
+
+company_sequence_type_unique_wide <- sequence_type_sample %>%
+  mutate(SequenceType = as.character(SequenceType), Sample = as.character(Sample)) %>%
+  group_by(SequenceType, Sample) %>%
+  summarise(SequenceCount = sum(SequenceCount, na.rm = TRUE), .groups = "drop") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = SequenceCount, values_fill = 0) %>%
+  ensure_company_sample_columns("SequenceType") %>%
+  arrange(SequenceType)
+
+company_reads_mapping_statistics_wide <- sample_mapping_statistics %>%
+  mutate(Sample = as.character(Sample)) %>%
+  select(
+    Sample,
+    CleanReads,
+    MatchGenome,
+    UnmatchGenome,
+    AnnotatedSncReads,
+    UnannotatedGenomeMatchReads,
+    UnannotatedGenomeUnmatchReads,
+    OtherReads
+  ) %>%
+  pivot_longer(-Sample, names_to = "type", values_to = "Reads") %>%
+  tidyr::pivot_wider(names_from = Sample, values_from = Reads, values_fill = 0) %>%
+  ensure_company_sample_columns("type") %>%
+  arrange(type)
+
+company_length_plot_df <- group_length_view %>%
+  mutate(MainCategory = factor(as.character(MainCategory), levels = category_levels), Group = factor(as.character(Group), levels = group_levels)) %>%
+  filter(RPM > 0, !is.na(MainCategory))
+
+company_length_all_plot <- if (nrow(company_length_plot_df) == 0) {
+  plot_note("sncRNA length distribution", "No length distribution data available.")
+} else {
+  ggplot(company_length_plot_df, aes(x = Length, y = RPM, color = Group, group = Group)) +
+    geom_line(linewidth = 0.75, alpha = 0.95) +
+    geom_point(size = 0.85) +
+    facet_wrap(~MainCategory, scales = "free_y", ncol = 4) +
+    scale_color_manual(values = group_palette, drop = FALSE) +
+    sncrna_length_axis() +
+    labs(x = "Length (nt)", y = "RPM", title = "sncRNA length distribution across all categories") +
+    serum_theme_bw() +
+    theme(
+      legend.position = "top",
+      legend.title = element_blank(),
+      strip.background = element_rect(fill = "white", color = serum_neutral_line),
+      panel.grid.minor = element_blank()
+    )
+}
+
+save_plot_nested(
+  company_length_all_plot,
+  "02_length_distribution",
+  "sncRNA_length_distribution_all_categories.pdf",
+  width = 12,
+  height = 9,
+  view = REPORT_VIEW
+)
+```
+
+```{r sncrna-sector-radar-compare, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+compare_pie_df <- compute_pie_tables(summary_top) %>%
+  summarise_group_mean_percent("PieCategory")
+
+radar_max <- max(c(30, if (nrow(compare_pie_df) == 0) 0 else max(compare_pie_df$Percent, na.rm = TRUE)), na.rm = TRUE)
+radar_max <- max(ceiling(radar_max / 5) * 5, 30)
+radar_breaks <- unique(round(seq(0, radar_max, length.out = 5), 2))
+
+for (group_name in group_levels) {
+  group_df <- compare_pie_df %>% filter(Group == group_name)
+  if (nrow(group_df) == 0) next
+  group_plot <- plot_sector_radar_core(
+    plot_df = build_sector_radar_df(group_df %>% mutate(Sample = paste0("Group_", group_name)), radar_max = radar_max),
+    title_text = paste0("sncRNA Proportion of Group ", group_name, view_title_suffix(REPORT_VIEW)),
+    radar_max = radar_max,
+    radar_breaks = radar_breaks
+  )
+  save_plot_nested(
+    group_plot,
+    "01_sector_radar",
+    paste0("group_", safe_dir_name(group_name), ".pdf"),
+    width = 8,
+    height = 8,
+    view = REPORT_VIEW
+  )
+}
+
+shared_radar <- plot_group_sector_radar(
+  prepare_group_sector_radar(
+    compare_pie_df,
+    radar_max = radar_max,
+    sector_levels = radar_levels,
+    sector_labels = radar_labels,
+    bottom_anchor_category = "rsRNA",
+    sector_palette = radar_sector_palette,
+    value_digits = 1,
+    min_value_label = 0.1
+  ),
+  title_text = paste0("sncRNA Proportion Across Groups", view_title_suffix(REPORT_VIEW)),
+  radar_max = radar_max,
+  radar_breaks = radar_breaks,
+  sector_palette = radar_sector_palette,
+  value_radius = 0.90,
+  value_size = 1.55
+)
+save_plot_nested(shared_radar, "01_sector_radar", "group_compare.pdf", width = 9, height = 8.5, view = REPORT_VIEW)
+```
+
+```{r sncrna-bar-and-alluvial, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+compare_trend_overview_plots <- list(
+  all_percent_alluvial = build_trend_alluvial_plot(trend_all_df, trend_category_levels, "Percent", "Alluvial plot of all classified RNA proportions across groups", "Proportion within classified RNA (%)", group_levels),
+  major_percent_alluvial = build_trend_alluvial_plot(trend_major_df, trend_major_categories, "Percent", "Alluvial plot of major sncRNA proportions across groups", "Proportion within major sncRNA (%)", group_levels)
+)
+
+save_plot_nested(compare_trend_overview_plots$all_percent_alluvial, "04_alluvial_sncRNA", "all_classified_rna_percent.pdf", width = 11, height = 6.5, view = REPORT_VIEW)
+save_plot_nested(compare_trend_overview_plots$major_percent_alluvial, "04_alluvial_sncRNA", "major_sncRNA_percent.pdf", width = 10, height = 5.8, view = REPORT_VIEW)
+
+for (category_name in intersect(c("miRNA", "piRNA", "tsRNA", "rsRNA", "ysRNA", if (ENDO_ENABLED) "endo-siRNA"), category_levels)) {
+  category_data <- sample_comp_total_snc %>% filter(as.character(MainCategory) == category_name)
+  if (nrow(category_data) == 0) next
+
+  percent_bar <- build_two_group_summary_bar(
+    category_data,
+    "PercentTotalSnc",
+    paste0(category_name, " abundance across groups"),
+    "Mean percent of total sncRNA per sample",
+    group_levels,
+    fill_palette = group_palette,
+    sample_info = sample_info,
+    label_digits = 1
+  )
+
+  reads_bar <- build_two_group_summary_bar(
+    category_data,
+    "Reads",
+    paste0(category_name, " reads across groups"),
+    "Mean reads per sample",
+    group_levels,
+    fill_palette = group_palette,
+    sample_info = sample_info,
+    comma_labels = TRUE,
+    label_digits = 0
+  )
+
+  save_plot_nested(percent_bar, "03_bar_sncRNA", paste0(safe_dir_name(category_name), "_percent_bar.pdf"), width = 7, height = 5, view = REPORT_VIEW)
+  save_plot_nested(reads_bar, "03_bar_sncRNA", paste0(safe_dir_name(category_name), "_reads_bar.pdf"), width = 7, height = 5, view = REPORT_VIEW)
+}
+```
+
+```{r sncrna-length-compare, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+for (category_name in length_focus_categories) {
+  merged_df <- group_length_view %>%
+    filter(as.character(MainCategory) == category_name, RPM > 0) %>%
+    mutate(Group = factor(as.character(Group), levels = group_levels))
+
+  line_plot <- if (nrow(merged_df) == 0) {
+    plot_note(category_name, "No length distribution data available.")
+  } else {
+    ggplot(merged_df, aes(x = Length, y = RPM, color = Group, group = Group)) +
+      geom_line(linewidth = 0.9, alpha = 0.95) +
+      geom_point(size = 0.85) +
+      scale_color_manual(values = group_palette, drop = FALSE) +
+      sncrna_length_axis() +
+      labs(x = "Length (nt)", y = "RPM", title = NULL) +
+      serum_theme_bw() +
+      theme(legend.position = "top", legend.title = element_blank(), panel.grid.minor = element_blank())
+  }
+
+  bar_plot <- if (nrow(merged_df) == 0) {
+    plot_note(category_name, "No length bar-comparison data available.")
+  } else {
+    ggplot(merged_df, aes(x = factor(Length), y = RPM, fill = Group)) +
+      geom_col(position = position_dodge(width = 0.74), width = 0.68) +
+      scale_fill_manual(values = group_palette, drop = FALSE) +
+      labs(x = "Length (nt)", y = "RPM", title = NULL) +
+      serum_theme_bw() +
+      theme(legend.position = "none", legend.title = element_blank(), panel.grid.minor = element_blank())
+  }
+
+  combined_plot <- build_plot_collage(
+    list(line_plot, bar_plot),
+    title_text = paste(category_name, "length comparison across groups"),
+    cols = 1
+  )
+  save_plot_nested(
+    combined_plot,
+    "02_length_distribution",
+    paste0("length_compare_", safe_dir_name(category_name), ".pdf"),
+    width = 9,
+    height = 10,
+    view = REPORT_VIEW
+  )
+}
+```
+
+```{r save-csv, include=FALSE, pandora_stage="describe", eval=PANDORA_ANALYSIS_STAGE == "describe"}
+write_csv_safe(group_qc_table, "compare_group_qc_table.csv")
+write_csv_safe(group_comp_view, "compare_group_composition.csv")
+write_csv_safe(group_comp_direction_view, "compare_group_composition_by_direction.csv")
+write_csv_safe(trend_all_df, "compare_group_all_classified_rna_percentages.csv")
+write_csv_safe(trend_major_df, "compare_group_major_sncRNA_percentages.csv")
+write_csv_safe(group_length_view, "compare_group_length_distribution.csv")
+write_csv_safe(sample_mapping_statistics, "compare_sample_mapping_statistics.csv")
+write_csv_safe(sequence_type_sample, "compare_sample_sequence_type.csv")
+write_csv_safe(sequence_type_group, "compare_group_sequence_type.csv")
+write_csv_safe(company_length_distribution_reads_wide, "company_length_distribution_reads_wide.csv")
+write_csv_safe(company_length_distribution_rpm_wide, "company_length_distribution_rpm_wide.csv")
+write_csv_safe(company_sequence_type_reads_wide, "company_sequence_type_reads_wide.csv")
+write_csv_safe(company_sequence_type_unique_wide, "company_sequence_type_unique_wide.csv")
+write_csv_safe(company_reads_mapping_statistics_wide, "company_reads_mapping_statistics_wide.csv")
+```

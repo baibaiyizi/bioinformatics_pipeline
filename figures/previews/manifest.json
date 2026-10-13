@@ -1,0 +1,410 @@
+{
+  "status": "COMPLETED",
+  "figure_pairs": 12,
+  "figures": [
+    {
+      "recipe": "r_violin",
+      "title": "无轮廓小提琴：中位数与四分位摘要",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_source",
+      "png": "r_violin/figure.png",
+      "pdf": "r_violin/figure.pdf",
+      "png_sha256": "1efe4ce5545c0f11896a74a35390d39f8104c746814ff39b12f143904a4efb46",
+      "pdf_sha256": "ebac7da692286bb3ebba2d2ee25fa5b6d748e7ee69d686df9df3d25407aaaaf2",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          1621
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 182.73888888888888,
+      "pdf_fonts": [
+        {
+          "name": "OZNWEQ+LiberationSans",
+          "type": "TrueType",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 68
+    },
+    {
+      "recipe": "python_volcano",
+      "title": "代谢特征效应与统计分布",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_source",
+      "png": "python_volcano/figure.png",
+      "pdf": "python_volcano/figure.pdf",
+      "png_sha256": "372def4e88f9065d9a12f13ba70cd14d5c0354629812c3b3f1d2998c02b5fa98",
+      "pdf_sha256": "999d45d5bda47a63ef7a869699b8d75286c06b1cead5c435c179eb4d221540f4",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          1653
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 183.00000559488933,
+      "pdf_fonts": [
+        {
+          "name": "BGZIHO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 161
+    },
+    {
+      "recipe": "python_ora",
+      "title": "Marker ORA：Python原生",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_source",
+      "png": "python_ora/figure.png",
+      "pdf": "python_ora/figure.pdf",
+      "png_sha256": "ac4e4427409ddea0736fb0ec191fd156c4178db2a09042ad5d1639da63d1c71e",
+      "pdf_sha256": "69fc61a72bd7891d1dbfc375d3a3593bbaa02839440893726dbebde5b02273eb",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          2244
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 183.00000559488933,
+      "pdf_fonts": [
+        {
+          "name": "BGZIHO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 1040
+    },
+    {
+      "recipe": "r_ora",
+      "title": "Marker ORA：R原生",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_source",
+      "png": "r_ora/figure.png",
+      "pdf": "r_ora/figure.pdf",
+      "png_sha256": "31086d3f1f6b7ddb788ed8633432f6a24fec69f1d948dcc05436c1d3d5b39aa0",
+      "pdf_sha256": "3f40986337d073c0d9c0a9ab622c0dbad9861692297678f29111def066dee775",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          2125
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 182.73888888888888,
+      "pdf_fonts": [
+        {
+          "name": "LUVBCT+LiberationSans",
+          "type": "TrueType",
+          "embedded": true
+        },
+        {
+          "name": "FNIIWN+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 984
+    },
+    {
+      "recipe": "python_marker",
+      "title": "Marker表达：Python原生",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_source",
+      "png": "python_marker/figure.png",
+      "pdf": "python_marker/figure.pdf",
+      "png_sha256": "192a07aee4d45f5a62634bbc2dfa42e8c626fe62d32ee8f9eb5d97cfd7c6c5ba",
+      "pdf_sha256": "e8507ce52fb62006105e886fca05f6ac92457b0b5df648871847dd5553a36dd4",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          1889
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 183.00000559488933,
+      "pdf_fonts": [
+        {
+          "name": "BGZIHO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 204
+    },
+    {
+      "recipe": "r_marker",
+      "title": "Marker表达：R原生",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_source",
+      "png": "r_marker/figure.png",
+      "pdf": "r_marker/figure.pdf",
+      "png_sha256": "2cffeaeed980152e2259beefce0bb303e88eee03876daf4c5d6b3464cf160c13",
+      "pdf_sha256": "57b1d3c29da6cc6d995501dd5783332bf4db6e26a41ba4cc32210ab3ebe8ed9c",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          1771
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 182.73888888888888,
+      "pdf_fonts": [
+        {
+          "name": "SCVMUP+LiberationSans",
+          "type": "TrueType",
+          "embedded": true
+        },
+        {
+          "name": "NEMAQO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 163
+    },
+    {
+      "recipe": "python_program_matrix",
+      "title": "程序×文库×细胞类型矩阵",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_source",
+      "png": "python_program_matrix/figure.png",
+      "pdf": "python_program_matrix/figure.pdf",
+      "png_sha256": "47c84f53df37075c8d35fab85cf0686e8c6bd23fcf4ed913a6bbe17b5fd1334c",
+      "pdf_sha256": "c4feb2c69d05d30cd1a2c5e30c1e560e37411b313876537d298db0567062eb7c",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          2066
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 183.00000559488933,
+      "pdf_fonts": [
+        {
+          "name": "BGZIHO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 565
+    },
+    {
+      "recipe": "r_program_matrix",
+      "title": "ComplexHeatmap多层证据矩阵",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_source",
+      "png": "r_program_matrix/figure.png",
+      "pdf": "r_program_matrix/figure.pdf",
+      "png_sha256": "a9a75b904d33e23a74476b21e6d78fd064ba9190aaac12f0713b160eb4462d9a",
+      "pdf_sha256": "a90bfa0311013f1fc5c054e2557baf1310e99749db8022ae1db1a75082bb783f",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          2244
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 182.73888888888888,
+      "pdf_fonts": [
+        {
+          "name": "YMYHDB+LiberationSans",
+          "type": "TrueType",
+          "embedded": true
+        },
+        {
+          "name": "LSASTO+LiberationSans-Bold",
+          "type": "TrueType",
+          "embedded": true
+        },
+        {
+          "name": "NEMAQO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 661
+    },
+    {
+      "recipe": "python_composition",
+      "title": "捕获细胞组成",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_source",
+      "png": "python_composition/figure.png",
+      "pdf": "python_composition/figure.pdf",
+      "png_sha256": "2ce8b0e55507f603a7ae1e5581ef109304d1d058ccf30b214cec7025145b9281",
+      "pdf_sha256": "ffe5d27ef1e9fca624bf84e705ae84c9237ea868d02824fb0aed57a98bb1141a",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          1653
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 183.00000559488933,
+      "pdf_fonts": [
+        {
+          "name": "BGZIHO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 146
+    },
+    {
+      "recipe": "python_program_nes",
+      "title": "跨背景排序程序矩阵",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_dry_run_source",
+      "png": "python_program_nes/figure.png",
+      "pdf": "python_program_nes/figure.pdf",
+      "png_sha256": "c9560327f19de6c2aa2c6f19f46dd0988c23ccf8040e5f88ddeb85856d6d53f4",
+      "pdf_sha256": "a1d291fbc05d82b196f37630ef8100394d37ce1f4b61dbf182618c07431dd4a3",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          3720
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 183.00000559488933,
+      "pdf_fonts": [
+        {
+          "name": "BGZIHO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 1301
+    },
+    {
+      "recipe": "python_calibration",
+      "title": "完整测试背景的分层置换校准",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_dry_run_source",
+      "png": "python_calibration/figure.png",
+      "pdf": "python_calibration/figure.pdf",
+      "png_sha256": "019018bd5db7fcf8544e619fa52605ccedc2b74b7af314919635d17d7999ccbf",
+      "pdf_sha256": "fa762535d2a0daddbc77ca3a4799039d5dd427e9ec24935465cc5bdd0745b0e5",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          2244
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 183.00000559488933,
+      "pdf_fonts": [
+        {
+          "name": "BGZIHO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 521
+    },
+    {
+      "recipe": "python_locus",
+      "title": "候选位点共享坐标多轨",
+      "validation_state": "example_executed",
+      "data_kind": "real_PFOS_frozen_dry_run_source",
+      "png": "python_locus/figure.png",
+      "pdf": "python_locus/figure.pdf",
+      "png_sha256": "c6d9ee9c350862009dfcb87f773374116825f5cbc0e16934ca3f868d7b71bbdb",
+      "pdf_sha256": "44a986bef4815b9cd5135abb8b5eb4df6c4ddb765662f6d4b8244924cabed4b8",
+      "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+      "statistics_recomputed": false,
+      "media": {
+        "mode": "RGB",
+        "size": [
+          2161,
+          2657
+        ],
+        "dpi": [
+          299.9994,
+          299.9994
+        ]
+      },
+      "pdf_width_mm": 183.00000559488933,
+      "pdf_fonts": [
+        {
+          "name": "BGZIHO+LiberationSans",
+          "type": "Type0",
+          "embedded": true
+        }
+      ],
+      "pdf_text_characters": 908
+    }
+  ]
+}

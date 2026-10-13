@@ -12,6 +12,8 @@ bash run.sh --stage report
 
 入口与资源定位不依赖启动目录；代码、缓存和结果均在项目本地。先核验单组学完成状态及当前输入/源码签名，再重建序列特征，并逐值核对标准 RNA 类别计数。方法 2−方法 1，配对模型为 ~PairID + Method。
 
+步骤按 `01_setup、02_method_similarity、03_spikein_qc、04_differential_capture、05_capture_bias_diagnostics` 排序；外参类别图使用本地 `spikein_profiles/01–05` 源码，结果写入 `03_spikein_qc/profiles/01–05`，不在运行时复制单组学源码。
+
 结果保存在 result/describe 和 result/differential；report 更新本模块 README，并在 result/synthesis 保存完整 HTML 和报告凭据，直接链接正式图表，不复制精选图或关键表。报告本身不参与科学拟合签名。
 
 深度检出沿用 Poisson 期望模型，仅在实际观察深度以内计算；越界保持 not_run。该曲线不是精确无放回抽样。供体 3 序列层 200 次无放回稀释独立用于外参 QC，注释层分数计数不取整稀释。

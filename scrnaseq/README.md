@@ -2,6 +2,8 @@
 
 复制本目录后，配置 `config/project.yml` 与 `config/samples.tsv` 即可从原始文库矩阵或 FASTQ 开始。核心支持 Cell Ranger → QC → Scanpy PCA/UMAP/Leiden → 可配置 marker 注释 → 文库描述 → 可选样本级 pseudobulk/PyDESeq2 → 中文 HTML 报告与执行审计。默认不校正批次、不挑选能分开条件的样本、不启用条件推断。
 
+绘图使用本地 `src/scrna_template/figure_style.json` 冻结配置，通用入口见[生信绘图库](../figures/README.md)。对照/处理名称从现有statistics.control/case绑定蓝/粉，文库色从样本表condition绑定，不依赖文库名。cell type和cluster按profile固定名称；新类别须显式登记，不能按出现顺序重配。PFOS专题可选源码在 `examples/islet/optional/`，其真实107图验证不能冒充通用模板全流程复现。
+
 ## 环境和入口
 
 核心 Python 要求 `>=3.13,<3.14`，依赖权威为 `pyproject.toml`；`requirements-validated.txt` 记录本次环境的精确版本。可在自己的环境中安装 `pip install -e '.[replicated,test]'`，仅描述时省略 replicated。服务器原环境未升级或安装软件。
@@ -13,6 +15,8 @@
 ./run_scrna.sh --config config/project.yml validate
 ./run_scrna.sh --config config/project.yml validate --full-input-audit
 ./run_scrna.sh --config config/project.yml run --run-id analysis_001
+./run_scrna.sh --config config/project.yml plots --source-run runs/analysis_001 --check
+./run_scrna.sh --config config/project.yml plots --source-run runs/analysis_001
 ```
 
 配置路径相对于显式 `--config` 调用路径解析；`project.root: ..` 相对于 YAML 所在目录解析，其余数据、参考和结果路径相对于 project.root。帮助/步骤列表不读取配置；validate 为只读，不创建结果。每次分析必须使用新 run-id，已存在目录会拒绝，避免把旧文件当成当前输出。
@@ -41,6 +45,10 @@ QC 根据事前配置的 UMI、检测基因数、线粒体比例过滤。Scruble
 `statistics.inference_enabled: true` 才运行 PyDESeq2。默认 `P < 0.05` 且 `|log2FC| >= 0.58` 为探索性筛选，完整表同时保留 pvalue/padj 和 raw-P/BH 两个标志；NA 不改为 0。cluster marker P 值仅作注释证据，不能解释为条件差异。组成输出为捕获组成描述，不进行总体比例推断。
 
 主要输出：`00_audit` 保存输入哈希、资格、阶段状态、运行结果和输出哈希；`05_descriptive` 保存文库组成、样本级整数聚合和描述 CPM 比值；`06_optional/inference_status.tsv` 分开记录 eligibility 与 execution（disabled/skipped_ineligible/completed/failed）；实际完成才存在 DE 表。某细胞类型推断失败会保留失败状态，生成可查看的报告，并使整个命令非零退出。`09_reports/scrna_report_zh.html` 支持有图、仅表、跳过模块与失败记录。
+
+纯绘图入口从原运行 `output_sha256.tsv` 核验每张图的数值源，并要求 producer 为 PASS；只支持通用核心真实声明的 UMAP 与捕获组成图，遇到专题扩展图型直接拒绝。它不重跑统计，也不写入原 `runs/`。发布的 `result/` 按 `00_audit`、`01_qc`、`02_atlas`、`03_annotation`、`04_descriptive` 分层，每层分别保存 `plots/`、`tables/`，总入口为 `result/index.html`。未产生的阶段不建空图表。
+
+核心绘图复用本地 `figure_style.py`：183 mm、Liberation Sans、8/7 pt、300 dpi RGB 白底 PNG 与嵌入字体 PDF。WT/PFOS 有明确语义配色，其余配置组沿用类别色；细胞类型配色由实际项目设置。专题示例的扩展纯绘图源码仍是参考档案，不能据此声称通用核心支持全部专题模块。
 
 ## 合成验证
 

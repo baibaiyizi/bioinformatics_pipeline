@@ -12,7 +12,6 @@ liver_inputs:
 - atac_liver
 - wgbs_liver
 - metabolomics_liver
-metabolic_pathways: INPUT_REQUIRED/metabolic_pathways.csv
 inputs:
 - id: rna_liver
   kind: rna
@@ -33,6 +32,8 @@ inputs:
   - padj
   - sampleA
   - sampleB
+  expression: INPUT_REQUIRED/rna_liver_normalized_expression.tsv
+  samples: INPUT_REQUIRED/rna_liver_samples.tsv
 - id: wgbs_liver
   kind: wgbs
   context: liver
@@ -56,6 +57,16 @@ inputs:
   - annotation
   - group1_label
   - group2_label
+  - meanMethy_group1
+  - meanMethy_group2
+  cpg_rdata: INPUT_REQUIRED/wgbs_liver_CpG.RData
+  samples: INPUT_REQUIRED/wgbs_liver_reads_info.txt
+  sample_methylation: INPUT_REQUIRED/wgbs_liver_dmr_region_sample_support.csv
+  tracks:
+    CONTROL:
+    - INPUT_REQUIRED/wgbs_liver_CONTROL_methylation.bw
+    TREATMENT:
+    - INPUT_REQUIRED/wgbs_liver_TREATMENT_methylation.bw
 - id: atac_liver
   kind: atac
   context: liver
@@ -80,6 +91,8 @@ inputs:
   - end
   - annotation
   - Direction
+  all_sites: INPUT_REQUIRED/Differential_Peaks_AllSites.csv
+  universe: INPUT_REQUIRED/Background_Peak_Associated_Genes.csv
 - id: metabolomics_liver
   kind: metabolomics
   context: liver
@@ -95,3 +108,75 @@ inputs:
   - log2FC
   - limma_p
   - fdr
+  - classification
+  - direction
+  - confidence_level
+  - annotation_match_type
+  - annotation_ambiguous
+- id: islet_celltypes
+  kind: celltypes
+  context: islet
+  path: INPUT_REQUIRED/islet_celltypes.tsv
+  species: mouse
+  genome: GRCm39
+  source_status: USER_REQUIRED
+  biological_unit: unknown
+  pairing: unknown
+  quality: USER_REQUIRED
+  required_columns:
+  - library_id
+  - condition
+  - cell_type
+  - gene
+  - count
+  - cells
+- id: metabolic_pathway_effects
+  kind: metabolic_pathways
+  context: liver
+  path: INPUT_REQUIRED/metabolic_pathway_effects.tsv
+  species: mouse
+  genome: GRCm39
+  source_status: USER_REQUIRED
+  biological_unit: unknown
+  pairing: unknown
+  quality: USER_REQUIRED
+  required_columns:
+  - pathway
+  - log2FC
+  - p
+  - fdr
+gene_sets: INPUT_REQUIRED/mouse_native_gene_sets.rds
+figure_profile: ../shared/figure_style.json
+deepening:
+  seed: 1
+  permutations: 10000
+  program_collections:
+  - Mouse_MH
+  - Mouse_KEGG
+  - Mouse_Reactome
+  posttranscriptional:
+    selected_samples: INPUT_REQUIRED/{context}/plot_samples.tsv
+    das_metadata: INPUT_REQUIRED/{context}/rmats_run_metadata.tsv
+    deu_metadata: INPUT_REQUIRED/{context}/deu_sample_manifest.tsv
+    apa_metadata: INPUT_REQUIRED/{context}/apa_sample_manifest.tsv
+    der_metadata: INPUT_REQUIRED/{context}/der_sample_manifest.tsv
+    is_metadata: INPUT_REQUIRED/{context}/isoform_switch_sample_manifest.tsv
+    selected_de: INPUT_REQUIRED/{context}/selected_DE_results.csv
+    integrated_evidence: INPUT_REQUIRED/{context}/splicing_gene_evidence.csv
+    das_events: INPUT_REQUIRED/{context}/rmats_all_events.csv
+    deu_gene_tests: INPUT_REQUIRED/{context}/diffsplice_gene_simes.csv
+    apa_events: INPUT_REQUIRED/{context}/apa_all_events.csv
+    isoform_selected: INPUT_REQUIRED/{context}/significant_switch_genes.csv
+    der_regions: INPUT_REQUIRED/{context}/all_DERs.csv
+    der_gene_evidence: INPUT_REQUIRED/{context}/DER_gene_evidence.csv
+rna_context_order:
+- liver
+embryo_contexts: []
+rna_gene_panel: []
+cross_wgbs_pairs: []
+joint_inputs:
+  gtf: INPUT_REQUIRED/genome.gtf
+  txdb: INPUT_REQUIRED/genome.sqlite
+  cgi: INPUT_REQUIRED/cpg_islands.tsv.gz
+joint_rna_context:
+  liver: liver

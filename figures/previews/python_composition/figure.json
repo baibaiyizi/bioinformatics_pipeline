@@ -1,0 +1,21 @@
+{
+  "status": "COMPLETED",
+  "kind": "composition",
+  "rows": 14,
+  "input_sha256": "05110e95b5442a589e2fe221e5f12420aea6850adbbbf8380e6a6662061008b0",
+  "script_sha256": "9ffa46f485a0ad008a1e902ad5a54df7e3b6c9e0057ffe10fa96909d160ff7eb",
+  "profile_id": "bluepink_semantic_v2",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "value_label": "Captured cell proportion; n=1/library",
+  "statistics_recomputed": false,
+  "outputs": {
+    "pdf": {
+      "path": "figure.pdf",
+      "sha256": "ffe5d27ef1e9fca624bf84e705ae84c9237ea868d02824fb0aed57a98bb1141a"
+    },
+    "png": {
+      "path": "figure.png",
+      "sha256": "2ce8b0e55507f603a7ae1e5581ef109304d1d058ccf30b214cec7025145b9281"
+    }
+  }
+}

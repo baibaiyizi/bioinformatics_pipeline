@@ -11,6 +11,9 @@ def main():
     validate.add_argument('--full-input-audit', action='store_true')
     run = sub.add_parser('run', help='执行核心流程；不接受已有 run-id')
     run.add_argument('--run-id', required=True)
+    plots = sub.add_parser('plots', help='从已签名数值源重绘完整图谱，不调用统计')
+    plots.add_argument('--source-run', required=True)
+    plots.add_argument('--check', action='store_true')
     fixture = sub.add_parser('fixture', help='生成独立合成输入/配置，不能写入已存在目录')
     fixture.add_argument('--output', required=True)
     fixture.add_argument('--per-group', type=int, default=3)
@@ -35,6 +38,10 @@ def main():
         stats = config.data['statistics']
         print(audit.to_string(index=False))
         print(json.dumps(assess_eligibility(config.samples(), stats['min_independent_samples_per_group'], stats['case'], stats['control']), ensure_ascii=False, indent=2))
+        return 0
+    if args.command == 'plots':
+        from .replot import replot
+        print(json.dumps(replot(config, args.source_run, args.check), ensure_ascii=False))
         return 0
     from .pipeline import run_pipeline
     print(run_pipeline(config, args.run_id).run_dir)

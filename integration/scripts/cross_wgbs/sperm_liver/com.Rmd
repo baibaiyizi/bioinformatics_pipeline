@@ -1,0 +1,1057 @@
+```{r}
+knitr::opts_chunk$set(error=FALSE,fig.keep="none")
+if(!identical(Sys.getenv("PFOS_PLOTS_ONLY"),"1")) stop("请从 integration/run.sh --plots-only 调用冻结源绘图")
+cross_root <- normalizePath(Sys.getenv("CROSS_WGBS_ROOT_DIR"),mustWork=TRUE)
+cross_path <- function(value) normalizePath(if(grepl("^/",value)) value else file.path(cross_root,value),mustWork=FALSE)
+integration_root <- normalizePath(cross_path("../../.."),mustWork=TRUE)
+integration_config <- yaml::read_yaml(file.path(integration_root,"config/project.yml"))
+pair <- basename(cross_root)
+if(!pair %in% unlist(integration_config$cross_wgbs_pairs)) stop("未在cross_wgbs_pairs声明分支: ",pair)
+contexts <- strsplit(pair,"_",fixed=TRUE)[[1L]]
+if(length(contexts)!=2L) stop("pair名称须由两个context组成")
+resolve_item <- function(context) {
+  hit <- Filter(function(x)identical(x$id,paste0("wgbs_",context)),integration_config$inputs)
+  if(length(hit)!=1L) stop("WGBS输入ID必须唯一: ",context)
+  hit[[1L]]
+}
+items <- lapply(contexts,resolve_item)
+joint_abs <- function(value) normalizePath(if(grepl("^/",value)) value else file.path(integration_root,value),mustWork=TRUE)
+track_groups <- unlist(lapply(seq_along(items),function(i)lapply(c(integration_config$reference,integration_config$comparison),function(group)list(label=paste(group,contexts[i]),group=group,files=vapply(items[[i]]$tracks[[group]],joint_abs,character(1))))),recursive=FALSE)
+cross_config <- list(
+  source1_name=contexts[1L],source2_name=contexts[2L],source1_short=contexts[1L],source2_short=contexts[2L],
+  source1_generation=if(is.null(items[[1L]]$generation)) "unknown" else as.character(items[[1L]]$generation),source2_generation=if(is.null(items[[2L]]$generation)) "unknown" else as.character(items[[2L]]$generation),
+  source1_dmr_file=joint_abs(items[[1L]]$path),source2_dmr_file=joint_abs(items[[2L]]$path),
+  gtf_file=joint_abs(integration_config$joint_inputs$gtf),txdb_file=joint_abs(integration_config$joint_inputs$txdb),cgi_file=joint_abs(integration_config$joint_inputs$cgi),
+  expected_reference_group=integration_config$reference,expected_comparison_group=integration_config$comparison,
+  min_abs_effect=.10,enforce_effect_contract=TRUE,comparable_ratio_lower=.75,comparable_ratio_upper=1.25,
+  track_groups=track_groups,out_dir=file.path(Sys.getenv("FROZEN_RESULT_DIR"),"00_audit/cross_render",pair)
+)
+
+if (!dir.exists(cross_config$out_dir)) dir.create(cross_config$out_dir, recursive = TRUE)
+
+# 每次重跑前先清空当前结果目录，避免旧版脚本遗留文件和新版输出混在一起。
+existing_outputs <- list.files(
+  cross_config$out_dir,
+  pattern = "\\.(pdf|png|csv|tsv|txt)$",
+  full.names = TRUE,
+  recursive = TRUE
+)
+if (length(existing_outputs) > 0) unlink(existing_outputs, force = TRUE)
+
+suppressPackageStartupMessages({
+  library(GenomicRanges)
+  library(GenomeInfoDb)
+  library(dplyr)
+  library(tidyr)
+  library(readr)
+  library(ggplot2)
+  library(ggrepel)
+  library(pheatmap)
+  library(clusterProfiler)
+  library(org.Mm.eg.db)
+  library(Cairo)
+  library(grid)
+})
+
+figure_contract_file <- file.path(integration_root,"scripts/wgbs_figure_contract.R")
+if(!file.exists(figure_contract_file)) stop("WGBS figure contract not found: ", figure_contract_file)
+source(figure_contract_file, local = globalenv())
+cairo_pdf <- wgbs_cairo_pdf
+dev.off <- wgbs_dev_off
+ggsave <- wgbs_ggsave
+
+# 和主 WGBS 流程保持一致的配色语义
+feature_core_pal <- c(
+  "Promoter" = "#FF9F9B",
+  "UTR" = "#FFD3A8",
+  "Exon" = "#FFB482",
+  "Intron" = "#A1C9F4",
+  "Downstream" = "#B39FDB",
+  "Intergenic" = "#8DE5A1",
+  "Mixed" = "#79C6BE",
+  "Other" = "#D4D9DE"
+)
+feature_alias_pal <- c(
+  "Upstream" = feature_core_pal["Promoter"],
+  "5' UTR" = feature_core_pal["UTR"],
+  "3' UTR" = feature_core_pal["UTR"],
+  "Gene Body" = "#79C6BE",
+  "Distal" = feature_core_pal["Intergenic"]
+)
+
+viz_pal <- list(
+  group = setNames(c("#A1C9F4", "#FF9F9B"),c(integration_config$reference,integration_config$comparison)),
+  dmr = c(Hyper = "#FFB482", Hypo = "#A1C9F4"),
+  feature_core = feature_core_pal,
+  feature_alias = feature_alias_pal,
+  feature = c(feature_core_pal, feature_alias_pal),
+  category = c(
+    "Common_Hyper" = "#FFB482",
+    "Common_Hypo" = "#A1C9F4",
+    "Discordant" = "#D4D9DE"
+  ),
+  effect_state = c(
+    "Larger_in_source2" = "#FF9F9B",
+    "Comparable" = "#B39FDB",
+    "Smaller_in_source2" = "#8DE5A1",
+    "Opposite_direction" = "#D4D9DE"
+  ),
+  heat = colorRampPalette(c("#A1C9F4", "#FFFDF8", "#FF9F9B"))(100),
+  transition = colorRampPalette(c("#FFFDF8", "#FDFFB6", "#FFB482", "#FF9F9B"))(100),
+  neutral = c(light = "#FFFDF8", mid = "#D4D9DE", dark = "#5C6B73"),
+  neutral_light = "#FFFDF8",
+  neutral_mid = "#D4D9DE",
+  neutral_dark = "#5C6B73",
+  heat_compare = colorRampPalette(c("#A1C9F4", "#FDFFB6", "#FF9F9B"))(60),
+  heatmap_sequential = c(low = "#A1C9F4", mid = "#FDFFB6", high = "#FF9F9B"),
+  track_cgi = "#FDFFB6"
+)
+
+feature_levels <- c("Promoter", "UTR", "Exon", "Intron", "Downstream", "Intergenic", "Mixed", "Other")
+transition_levels <- c("Hyper / Hyper", "Hyper / Hypo", "Hypo / Hyper", "Hypo / Hypo")
+effect_state_levels <- c("Larger_in_source2", "Comparable", "Smaller_in_source2", "Opposite_direction")
+
+viz_style <- list(
+  base_size = wgbs_figure_base_size,
+  point_md = 1.2,
+  point_lg = 2.6
+)
+
+theme_wgbs_classic <- function(base_size = viz_style$base_size, legend = "right") {
+  wgbs_publication_theme(legend = legend)
+}
+
+theme_wgbs_minimal <- function(base_size = viz_style$base_size, legend = "right") {
+  wgbs_publication_theme(legend = legend)
+}
+
+theme_wgbs_bw <- function(base_size = viz_style$base_size, legend = "right") {
+  wgbs_publication_theme(legend = legend)
+}
+
+theme_wgbs_void <- function(base_size = viz_style$base_size, legend = "right") {
+  wgbs_publication_void_theme(legend = legend)
+}
+
+simplify_feature <- function(x) {
+  x <- stringr::str_replace(as.character(x), " \\(.*", "")
+  case_when(
+    is.na(x) | x == "" ~ "Other",
+    grepl("^Promoter|^Upstream$", x, ignore.case = TRUE) ~ "Promoter",
+    grepl("UTR", x, ignore.case = TRUE) ~ "UTR",
+    grepl("Exon", x, ignore.case = TRUE) ~ "Exon",
+    grepl("Intron", x, ignore.case = TRUE) ~ "Intron",
+    grepl("Downstream", x, ignore.case = TRUE) ~ "Downstream",
+    grepl("Distal Intergenic|Intergenic|^Distal$", x, ignore.case = TRUE) ~ "Intergenic",
+    TRUE ~ "Other"
+  )
+}
+
+safe_label <- function(symbol_vec, gene_vec, prefix = "DMR") {
+  raw_label <- dplyr::coalesce(symbol_vec, gene_vec, paste0(prefix, "_", seq_along(symbol_vec)))
+  make.unique(as.character(raw_label))
+}
+
+draw_pheatmap_pdf <- function(mat, out_pdf, annotation_row = NULL, annotation_colors = NULL,
+                              width = 8, height = 10, main = "", scale = "row",
+                              show_rownames = TRUE, cluster_cols = FALSE,
+                              cluster_rows = nrow(mat) > 1, fontsize_row = NULL) {
+  if (is.null(mat) || nrow(mat) == 0 || ncol(mat) == 0) return(invisible(FALSE))
+  if (is.null(fontsize_row)) fontsize_row <- if (nrow(mat) > 40) 6 else wgbs_figure_tick_size
+  fontsize_row <- max(6, min(wgbs_figure_tick_size, fontsize_row))
+  heatmap_plot <- pheatmap::pheatmap(
+    mat,
+    scale = scale,
+    show_rownames = show_rownames,
+    cluster_cols = cluster_cols,
+    cluster_rows = cluster_rows,
+    annotation_row = annotation_row,
+    annotation_colors = annotation_colors,
+    color = viz_pal$heat_compare,
+    main = "",
+    fontsize_row = fontsize_row,
+    fontsize = wgbs_figure_base_size,
+    fontfamily = wgbs_figure_font_family,
+    silent = TRUE
+  )
+  wgbs_draw_grid_dual(
+    file = out_pdf, width = width, height = height,
+    draw = {
+      grid::grid.newpage()
+      grid::grid.draw(heatmap_plot$gtable)
+    }
+  )
+  invisible(TRUE)
+}
+
+standardize_chr_style <- function(chr, target_has_chr = FALSE) {
+  chr <- as.character(chr)
+  chr <- sub("^chr", "", chr, ignore.case = TRUE)
+  if (target_has_chr) paste0("chr", chr) else chr
+}
+
+mouse_main_chr_levels <- function(target_has_chr = FALSE) {
+  standardize_chr_style(c(as.character(1:19), "X", "Y"), target_has_chr = target_has_chr)
+}
+
+quiet_gviz_deprecations <- function(expr) {
+  withCallingHandlers(
+    expr,
+    warning = function(w) {
+      warn_msg <- conditionMessage(w)
+      if (grepl("S4Vectors:::anyMissing", warn_msg, fixed = TRUE) ||
+          grepl("Use 'anyNA()' instead", warn_msg, fixed = TRUE)) {
+        invokeRestart("muffleWarning")
+      }
+    }
+  )
+}
+
+load_main_chr_cgi_context <- function(cgi_file, target_has_chr = FALSE) {
+  if (!file.exists(cgi_file)) return(NULL)
+  cgi_raw <- readr::read_tsv(cgi_file, col_names = FALSE, show_col_types = FALSE)
+  gr_island <- GRanges(
+    seqnames = standardize_chr_style(cgi_raw$X2, target_has_chr = target_has_chr),
+    ranges = IRanges(start = cgi_raw$X3 + 1, end = cgi_raw$X4)
+  )
+  strand(gr_island) <- "*"
+  gr_island <- gr_island[as.character(seqnames(gr_island)) %in% mouse_main_chr_levels(target_has_chr = target_has_chr)]
+  if (length(gr_island) == 0) return(NULL)
+
+  gr_n_shore <- flank(gr_island, width = 2000, start = TRUE)
+  gr_s_shore <- flank(gr_island, width = 2000, start = FALSE)
+  gr_n_shelf <- flank(gr_n_shore, width = 2000, start = TRUE)
+  gr_s_shelf <- flank(gr_s_shore, width = 2000, start = FALSE)
+
+  gr_all_cgi_context <- c(gr_n_shelf, gr_n_shore, gr_island, gr_s_shore, gr_s_shelf)
+  mcols(gr_all_cgi_context)$context <- rep(
+    c("N_Shelf", "N_Shore", "Island", "S_Shore", "S_Shelf"),
+    times = c(length(gr_n_shelf), length(gr_n_shore), length(gr_island), length(gr_s_shore), length(gr_s_shelf))
+  )
+  gr_all_cgi_context
+}
+
+build_mean_bw_track <- function(bw_files, chr_use, view_start, view_end, track_name, fill_col) {
+  bw_files <- bw_files[file.exists(bw_files)]
+  if (length(bw_files) == 0) return(NULL)
+
+  region_gr <- GRanges(chr_use, IRanges(view_start, view_end))
+  region_len <- width(region_gr)
+
+  score_list <- lapply(bw_files, function(bw_file) {
+    rle_list <- tryCatch(
+      rtracklayer::import(bw_file, which = region_gr, as = "RleList"),
+      error = function(e) NULL
+    )
+    if (is.null(rle_list) || !(chr_use %in% names(rle_list))) {
+      return(rep(NA_real_, region_len))
+    }
+    signal_rle <- rle_list[[chr_use]][view_start:view_end]
+    signal_vec <- as.numeric(signal_rle)
+    if (length(signal_vec) != region_len) {
+      signal_vec <- rep_len(signal_vec, region_len)
+    }
+    signal_vec
+  })
+
+  score_mat <- do.call(cbind, score_list)
+  mean_score <- rowMeans(score_mat, na.rm = TRUE)
+  if (!any(is.finite(mean_score))) return(NULL)
+  mean_score[!is.finite(mean_score)] <- 0
+
+  mean_rle <- Rle(mean_score)
+  run_starts <- cumsum(c(1L, head(runLength(mean_rle), -1L)))
+  run_ends <- cumsum(runLength(mean_rle))
+  mean_gr <- GRanges(
+    seqnames = chr_use,
+    ranges = IRanges(start = view_start + run_starts - 1L, end = view_start + run_ends - 1L),
+    score = runValue(mean_rle)
+  )
+
+  quiet_gviz_deprecations(Gviz::DataTrack(
+    range = mean_gr,
+    data = mcols(mean_gr)$score,
+    genome = "mm39",
+    chromosome = chr_use,
+    name = track_name,
+    type = "histogram",
+    fill = fill_col,
+    col = fill_col,
+    ylim = c(0, 1)
+  ))
+}
+
+read_dmr <- function(file_path, dataset_name, config) {
+  if(!file.exists(file_path)) stop("DMR输入不存在: ",file_path)
+  df <- read_csv(file_path,show_col_types=FALSE)
+  required <- c("DMR_id","seqnames","start","end","diffMethy","meanMethy_group1","meanMethy_group2","group1_label","group2_label")
+  if(length(setdiff(required,names(df)))) stop(dataset_name," 缺少现役DMR字段: ",paste(setdiff(required,names(df)),collapse=","))
+  group1 <- unique(as.character(df$group1_label));group2 <- unique(as.character(df$group2_label))
+  if(length(group1)!=1L || length(group2)!=1L || anyNA(c(group1,group2)) ||
+     !identical(group1,config$expected_reference_group) || !identical(group2,config$expected_comparison_group))
+    stop(dataset_name," DMR分组标签必须唯一且严格等于配置reference/comparison")
+  for(nm in c("gene_id_clean","SYMBOL","ENTREZID","annotation","annotation_simple")) if(!nm %in% names(df)) df[[nm]] <- NA_character_
+  df <- df %>% mutate(input_row=row_number(),seqnames=standardize_chr_style(seqnames,target_has_chr=FALSE),
+    start=as.integer(start),end=as.integer(end),meanMethy_WT=meanMethy_group1,meanMethy_PFOS=meanMethy_group2,
+    diffMethy_raw=diffMethy,diffMethy_pfos_wt=meanMethy_PFOS-meanMethy_WT,
+    annotation_simple=simplify_feature(dplyr::coalesce(annotation_simple,annotation)),
+    passes_effect_contract=is.finite(diffMethy_pfos_wt)&abs(diffMethy_pfos_wt)>=config$min_abs_effect)
+  if(anyNA(df[c("seqnames","start","end")]) || any(df$start<1L | df$end<df$start) || anyDuplicated(df[c("seqnames","start","end")])) stop(dataset_name," DMR坐标无效或重复")
+  if(any(!is.finite(df$diffMethy_raw)) || any(!is.finite(df$diffMethy_pfos_wt)) || any(abs(df$diffMethy_raw-df$diffMethy_pfos_wt)>1e-7)) stop(dataset_name," 原始DMR效应与显式comparison-reference均值差不一致")
+  n_input <- nrow(df);n_below <- sum(!df$passes_effect_contract)
+  if(isTRUE(config$enforce_effect_contract)) df <- df %>% filter(passes_effect_contract)
+  if(!nrow(df)) stop(dataset_name," 当前效果阈值下无DMR")
+  attr(df,"group1_label") <- group1;attr(df,"group2_label") <- group2
+  attr(df,"n_input") <- n_input;attr(df,"n_below_effect_contract") <- n_below
+  df
+}
+
+run_enrichment <- function(entrez_ids, title_prefix, out_prefix) {
+  source(file.path(integration_root,"scripts/joint_plot_helpers.R"),local=environment())
+  j <- new.env(parent=globalenv());j$root<-integration_root;j$out<-cross_config$out_dir
+  j$cfg<-integration_config;j$analysis<-paste0("wgbs_",basename(cross_root));j$rows<-list()
+  source_bg <- function(ctx) {
+    folder <- ctx
+    p <- joint_cached(j,"measured_regions_coverage_eligibility")
+    if(!file.exists(p)) stop("先运行当前rebuild_wgbs_rna.R生成直接覆盖背景: ",p)
+    z <- readr::read_tsv(p,show_col_types=FALSE)
+    unique(z$gene_id_clean[z$eligible])
+  }
+  universe <- intersect(source_bg(cross_config$source1_short),source_bg(cross_config$source2_short))
+  ids <- intersect(unique(na.omit(as.character(entrez_ids))),AnnotationDbi::keys(org.Mm.eg.db,keytype="ENTREZID"))
+  genes <- if(length(ids)) AnnotationDbi::select(org.Mm.eg.db,keys=ids,keytype="ENTREZID",columns="ENSEMBL")$ENSEMBL else character()
+  sets <- joint_gene_sets(j)
+  for(collection in c("GO_BP","KEGG")) {
+    z <- joint_ora(genes,universe,sets[[collection]])
+    write_csv(z,file.path(cross_config$out_dir,paste0("06_Table_",collection,"_",out_prefix,".csv")))
+    top <- z %>% filter(Count>0,pvalue<integration_config$p_cutoff) %>% slice_head(n=15L)
+    if(nrow(top)) {
+      p <- ggplot(top,aes(FoldEnrichment,reorder(Description,FoldEnrichment),size=Count,color=-log10(pvalue)))+
+        geom_point()+theme_wgbs_classic()+labs(title=paste(title_prefix,collection),subtitle="Exploratory raw P; BH retained; directly covered two-context universe",x="Fold enrichment",y=NULL)
+      ggsave(file.path(cross_config$out_dir,paste0("06_Enrich_",collection,"_",out_prefix,".pdf")),p,width=9,height=7,device=cairo_pdf)
+    }
+  }
+}
+
+message("⏳ 正在加载跨样本数据...")
+```
+
+```{r}
+# ==============================================================================
+# 2. 数据读取、方向统一与重叠 DMR 整理
+# ==============================================================================
+source1_df <- read_dmr(cross_config$source1_dmr_file, cross_config$source1_name, cross_config)
+source2_df <- read_dmr(cross_config$source2_dmr_file, cross_config$source2_name, cross_config)
+
+input_manifest <- tibble(
+  source = c(cross_config$source1_name, cross_config$source2_name),
+  generation = c(cross_config$source1_generation, cross_config$source2_generation),
+  path = normalizePath(
+    c(cross_config$source1_dmr_file, cross_config$source2_dmr_file),
+    winslash = "/",
+    mustWork = TRUE
+  ),
+  md5 = unname(tools::md5sum(c(cross_config$source1_dmr_file, cross_config$source2_dmr_file))),
+  modified_at = as.character(file.info(c(cross_config$source1_dmr_file, cross_config$source2_dmr_file))$mtime),
+  input_rows = c(attr(source1_df, "n_input"), attr(source2_df, "n_input")),
+  below_effect_contract = c(
+    attr(source1_df, "n_below_effect_contract"),
+    attr(source2_df, "n_below_effect_contract")
+  ),
+  analyzed_rows = c(nrow(source1_df), nrow(source2_df)),
+  input_group1 = c(attr(source1_df, "group1_label"), attr(source2_df, "group1_label")),
+  input_group2 = c(attr(source1_df, "group2_label"), attr(source2_df, "group2_label")),
+  analyzed_effect = paste0(
+    cross_config$expected_comparison_group, " - ", cross_config$expected_reference_group
+  ),
+  result_version = "current_configured_input"
+)
+write_csv(input_manifest, file.path(cross_config$out_dir, "00_Input_Manifest.csv"))
+
+message("✅ 数据加载完成: ", cross_config$source1_name, " DMRs = ", nrow(source1_df),
+        ", ", cross_config$source2_name, " DMRs = ", nrow(source2_df))
+
+gr_source1 <- GRanges(source1_df$seqnames, IRanges(source1_df$start, source1_df$end))
+gr_source2 <- GRanges(source2_df$seqnames, IRanges(source2_df$start, source2_df$end))
+hits <- findOverlaps(gr_source1, gr_source2, minoverlap = 1)
+
+if (length(hits) == 0) stop("❌ 两组 DMR 没有重叠，分析终止。")
+
+merged_dmr <- tibble(
+  source1_idx = queryHits(hits),
+  source2_idx = subjectHits(hits)
+) %>%
+  mutate(
+    source1_dmr_id = source1_df$DMR_id[source1_idx],
+    source2_dmr_id = source2_df$DMR_id[source2_idx],
+    source1_chr = source1_df$seqnames[source1_idx],
+    source1_start = source1_df$start[source1_idx],
+    source1_end = source1_df$end[source1_idx],
+    source2_chr = source2_df$seqnames[source2_idx],
+    source2_start = source2_df$start[source2_idx],
+    source2_end = source2_df$end[source2_idx],
+    source1_diff = source1_df$diffMethy_pfos_wt[source1_idx],
+    source2_diff = source2_df$diffMethy_pfos_wt[source2_idx],
+    source1_gene = source1_df$gene_id_clean[source1_idx],
+    source2_gene = source2_df$gene_id_clean[source2_idx],
+    source1_symbol = source1_df$SYMBOL[source1_idx],
+    source2_symbol = source2_df$SYMBOL[source2_idx],
+    source1_entrez = source1_df$ENTREZID[source1_idx],
+    source2_entrez = source2_df$ENTREZID[source2_idx],
+    source1_anno = source1_df$annotation[source1_idx],
+    source2_anno = source2_df$annotation[source2_idx],
+    source1_feature_simple = dplyr::coalesce(source1_df$annotation_simple[source1_idx], simplify_feature(source1_anno)),
+    source2_feature_simple = dplyr::coalesce(source2_df$annotation_simple[source2_idx], simplify_feature(source2_anno)),
+    source1_WT = source1_df$meanMethy_WT[source1_idx],
+    source1_PFOS = source1_df$meanMethy_PFOS[source1_idx],
+    source2_WT = source2_df$meanMethy_WT[source2_idx],
+    source2_PFOS = source2_df$meanMethy_PFOS[source2_idx]
+  ) %>%
+  mutate(
+    overlap_start = pmax(source1_start, source2_start),
+    overlap_end = pmin(source1_end, source2_end),
+    overlap_bp = overlap_end - overlap_start + 1L,
+    source1_width = source1_end - source1_start + 1L,
+    source2_width = source2_end - source2_start + 1L,
+    source1_overlap_fraction = overlap_bp / source1_width,
+    source2_overlap_fraction = overlap_bp / source2_width,
+    overlap_jaccard = overlap_bp / (source1_width + source2_width - overlap_bp),
+    symbol_match = !is.na(source1_symbol) & !is.na(source2_symbol) &
+      source1_symbol != "" & source1_symbol == source2_symbol,
+    gene_id_match = !is.na(source1_gene) & !is.na(source2_gene) &
+      source1_gene != "" & source1_gene == source2_gene,
+    gene_match = symbol_match | gene_id_match,
+    feature_match = source1_feature_simple == source2_feature_simple,
+    common_symbol = case_when(
+      symbol_match ~ source1_symbol,
+      gene_id_match ~ dplyr::coalesce(source1_symbol, source2_symbol, source1_gene),
+      TRUE ~ NA_character_
+    ),
+    common_entrez = ifelse(
+      gene_match,
+      dplyr::coalesce(as.character(source1_entrez), as.character(source2_entrez)),
+      NA_character_
+    ),
+    source1_state = ifelse(source1_diff >= 0, "Hyper", "Hypo"),
+    source2_state = ifelse(source2_diff >= 0, "Hyper", "Hypo"),
+    same_direction = sign(source1_diff) == sign(source2_diff),
+    Category = case_when(
+      source1_diff > 0 & source2_diff > 0 ~ "Common_Hyper",
+      source1_diff < 0 & source2_diff < 0 ~ "Common_Hypo",
+      TRUE ~ "Discordant"
+    ),
+    DirectionCombination = case_when(
+      source1_diff > 0 & source2_diff > 0 ~ "Hyper / Hyper",
+      source1_diff > 0 & source2_diff < 0 ~ "Hyper / Hypo",
+      source1_diff < 0 & source2_diff > 0 ~ "Hypo / Hyper",
+      TRUE ~ "Hypo / Hypo"
+    ),
+    source1_abs = abs(source1_diff),
+    source2_abs = abs(source2_diff),
+    Magnitude_Ratio = source2_abs / pmax(source1_abs, 1e-6),
+    EffectState = case_when(
+      Category == "Discordant" ~ "Opposite_direction",
+      Magnitude_Ratio >= cross_config$comparable_ratio_upper ~ "Larger_in_source2",
+      Magnitude_Ratio <= cross_config$comparable_ratio_lower ~ "Smaller_in_source2",
+      TRUE ~ "Comparable"
+    ),
+    Feature_Simple = ifelse(feature_match, source1_feature_simple, "Mixed"),
+    EvidenceTier = case_when(
+      gene_match & same_direction & source1_feature_simple == "Promoter" &
+        source2_feature_simple == "Promoter" ~ "A_same_gene_direction_promoter",
+      gene_match & same_direction ~ "B_same_gene_direction",
+      same_direction ~ "C_coordinate_direction_only",
+      TRUE ~ "D_direction_switch"
+    )
+  ) %>%
+  mutate(
+    Category = factor(Category, levels = c("Common_Hyper", "Common_Hypo", "Discordant")),
+    DirectionCombination = factor(DirectionCombination, levels = transition_levels),
+    EffectState = factor(EffectState, levels = effect_state_levels),
+    EvidenceTier = factor(
+      EvidenceTier,
+      levels = c(
+        "A_same_gene_direction_promoter",
+        "B_same_gene_direction",
+        "C_coordinate_direction_only",
+        "D_direction_switch"
+      )
+    ),
+    Feature_Simple = factor(Feature_Simple, levels = feature_levels)
+  )
+
+write_csv(merged_dmr, file.path(cross_config$out_dir, "01_overlap_details.csv"))
+
+# many-to-many overlap 必须分开报告 pair 数与两端唯一 DMR 数，避免把重复配对当作独立位点。
+overlap_accounting <- tibble(
+  metric = c(
+    "overlap_pairs",
+    "unique_source1_DMRs",
+    "unique_source2_DMRs",
+    "same_direction_pairs",
+    "same_gene_pairs",
+    "same_gene_same_direction_pairs",
+    "same_gene_same_direction_promoter_pairs"
+  ),
+  n = c(
+    nrow(merged_dmr),
+    n_distinct(merged_dmr$source1_idx),
+    n_distinct(merged_dmr$source2_idx),
+    sum(merged_dmr$same_direction),
+    sum(merged_dmr$gene_match),
+    sum(merged_dmr$gene_match & merged_dmr$same_direction),
+    sum(merged_dmr$EvidenceTier == "A_same_gene_direction_promoter")
+  )
+)
+write_csv(overlap_accounting, file.path(cross_config$out_dir, "01_Overlap_Accounting.csv"))
+
+# 数据驱动候选表：不预设 Mpc2 或任何其他基因。
+# 先按可解释的证据层级排序，层级内再按两端较小效应量和 Jaccard overlap 排序。
+candidate_table <- merged_dmr %>%
+  filter(gene_match, !is.na(common_symbol), common_symbol != "") %>%
+  group_by(common_symbol) %>%
+  arrange(EvidenceTier, desc(pmin(source1_abs, source2_abs)), desc(overlap_jaccard), .by_group = TRUE) %>%
+  mutate(n_overlap_pairs_for_gene = n()) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  arrange(EvidenceTier, desc(pmin(source1_abs, source2_abs)), desc(overlap_jaccard), common_symbol) %>%
+  mutate(candidate_rank = row_number())
+
+write_csv(candidate_table, file.path(cross_config$out_dir, "02_Data_Driven_Candidate_Ranking.csv"))
+```
+
+```{r}
+# ==============================================================================
+# 3. 重叠景观与方向转移总览
+# ==============================================================================
+pie_data <- merged_dmr %>% count(Category)
+
+p_pie <- ggplot(pie_data, aes(x = "", y = n, fill = Category)) +
+  geom_bar(stat = "identity", width = 1, color = "white") +
+  coord_polar("y", start = 0) +
+  theme_wgbs_void(base_size = 13) +
+  scale_fill_manual(values = viz_pal$category, drop = FALSE) +
+  geom_text(aes(label = paste0(Category, "\n", n)), position = position_stack(vjust = 0.5), size = 8 / ggplot2::.pt) +
+  labs(title = paste(cross_config$source1_name, "vs", cross_config$source2_name, "DMR Overlap Categories"))
+
+ggsave(file.path(cross_config$out_dir, "01_Overlap_Pie.pdf"), p_pie, width = 6, height = 6, device = cairo_pdf)
+
+transition_counts <- merged_dmr %>%
+  count(source1_state, source2_state) %>%
+  complete(source1_state = c("Hyper", "Hypo"), source2_state = c("Hyper", "Hypo"), fill = list(n = 0))
+
+write_csv(transition_counts, file.path(cross_config$out_dir, "01_DirectionCombination_Matrix_Counts.csv"))
+
+p_transition <- ggplot(transition_counts, aes(x = source1_state, y = source2_state, fill = n)) +
+  geom_tile(color = "white", linewidth = 0.8) +
+  geom_text(aes(label = n), size = 8 / ggplot2::.pt, color = viz_pal$neutral["dark"]) +
+  scale_fill_gradientn(colours = viz_pal$transition) +
+  theme_wgbs_classic(base_size = 13) +
+  labs(
+    title = "Direction Combination Matrix for Overlapping DMRs",
+    x = paste(cross_config$source1_name, "Direction"),
+    y = paste(cross_config$source2_name, "Direction")
+  )
+
+ggsave(file.path(cross_config$out_dir, "01_DirectionCombination_Matrix.pdf"), p_transition, width = 6, height = 5, device = cairo_pdf)
+
+common_heatmap_df <- merged_dmr %>%
+  filter(Category != "Discordant") %>%
+  filter(if_all(c(source1_WT, source1_PFOS, source2_WT, source2_PFOS), ~ !is.na(.x))) %>%
+  arrange(desc(source1_abs + source2_abs)) %>%
+  slice_head(n = 120)
+
+if (nrow(common_heatmap_df) > 0) {
+  mat_viz <- as.matrix(common_heatmap_df[, c("source1_WT", "source1_PFOS", "source2_WT", "source2_PFOS")])
+  common_gene_label <- ifelse(
+    common_heatmap_df$gene_match,
+    dplyr::coalesce(common_heatmap_df$source1_gene, common_heatmap_df$source2_gene),
+    NA_character_
+  )
+  rownames(mat_viz) <- safe_label(common_heatmap_df$common_symbol, common_gene_label, prefix = "CommonDMR")
+  colnames(mat_viz) <- c(
+    paste0(cross_config$source1_name, "\n", integration_config$reference),
+    paste0(cross_config$source1_name, "\n", integration_config$comparison),
+    paste0(cross_config$source2_name, "\n", integration_config$reference),
+    paste0(cross_config$source2_name, "\n", integration_config$comparison)
+  )
+
+  anno_row <- data.frame(
+    Category = common_heatmap_df$Category,
+    Feature = common_heatmap_df$Feature_Simple,
+    row.names = rownames(mat_viz)
+  )
+
+  draw_pheatmap_pdf(
+    mat = mat_viz,
+    out_pdf = file.path(cross_config$out_dir, "02_Common_DMR_Heatmap.pdf"),
+    annotation_row = anno_row,
+    annotation_colors = list(Category = viz_pal$category, Feature = viz_pal$feature),
+    width = 8,
+    height = 11,
+    main = "Top Common DMRs Across Two Contexts (Row-scaled)",
+    scale = "row",
+    show_rownames = TRUE,
+    cluster_cols = FALSE
+  )
+
+  write_csv(common_heatmap_df, file.path(cross_config$out_dir, "02_Common_DMR_Table.csv"))
+}
+```
+
+```{r}
+# ==============================================================================
+# 4. 跨背景方向一致性与效应量描述
+# ==============================================================================
+correlation_stats <- tibble(
+  n_overlap_pairs = nrow(merged_dmr),
+  spearman_rho_all_pairs = ifelse(
+    nrow(merged_dmr) >= 3,
+    cor(merged_dmr$source1_diff, merged_dmr$source2_diff, method = "spearman", use = "complete.obs"),
+    NA_real_
+  ),
+  same_direction_fraction = mean(merged_dmr$same_direction),
+  same_gene_same_direction_fraction = mean(merged_dmr$gene_match & merged_dmr$same_direction)
+)
+write_csv(correlation_stats, file.path(cross_config$out_dir, "03_Cross_Context_Summary.csv"))
+
+p_scatter <- ggplot(merged_dmr, aes(x = source1_diff, y = source2_diff, color = Category)) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = viz_pal$neutral["mid"]) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = viz_pal$neutral["mid"]) +
+  geom_point(alpha = 0.75, size = 2) +
+  scale_color_manual(values = viz_pal$category, drop = FALSE) +
+  theme_wgbs_classic(base_size = 13) +
+  labs(
+    title = "Signed Methylation Difference Concordance",
+    x = paste0(cross_config$source1_name, " ΔMethylation (", integration_config$comparison, " - ", integration_config$reference, ")"),
+    y = paste0(cross_config$source2_name, " ΔMethylation (", integration_config$comparison, " - ", integration_config$reference, ")")
+  )
+
+if (nrow(merged_dmr) >= 3) {
+  p_scatter <- p_scatter +
+    geom_smooth(method = "lm", se = TRUE, color = viz_pal$neutral["dark"], fill = "#D6ECAE") +
+    annotate(
+      "text",
+      x = min(merged_dmr$source1_diff, na.rm = TRUE),
+      y = max(merged_dmr$source2_diff, na.rm = TRUE),
+      hjust = 0,
+      vjust = 1,
+      size = 4.2,
+      color = viz_pal$neutral["dark"],
+      label = paste0(
+        "Overlap pairs (n = ", nrow(merged_dmr), ")\n",
+        "Descriptive overlap-pair rho = ", round(correlation_stats$spearman_rho_all_pairs, 3), "\n",
+        "Same direction = ", scales::percent(correlation_stats$same_direction_fraction, accuracy = 0.1)
+      )
+    )
+}
+
+ggsave(file.path(cross_config$out_dir, "03_Cross_Context_Correlation.pdf"), p_scatter, width = 7, height = 6, device = cairo_pdf)
+
+p_magnitude <- ggplot(merged_dmr, aes(x = source1_abs, y = source2_abs, color = EffectState)) +
+  geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = viz_pal$neutral["mid"]) +
+  geom_point(alpha = 0.75, size = 2) +
+  scale_color_manual(values = viz_pal$effect_state, drop = FALSE) +
+  theme_wgbs_classic(base_size = 13) +
+  labs(
+    title = "Magnitude Comparison of Overlapping DMRs",
+    x = paste0("|ΔMethylation| in ", cross_config$source1_name),
+    y = paste0("|ΔMethylation| in ", cross_config$source2_name)
+  )
+
+ggsave(file.path(cross_config$out_dir, "03_Magnitude_Comparison.pdf"), p_magnitude, width = 7, height = 6, device = cairo_pdf)
+
+effect_state_summary <- merged_dmr %>%
+  count(Category, EffectState) %>%
+  group_by(Category) %>%
+  mutate(Fraction = n / sum(n)) %>%
+  ungroup()
+
+write_csv(effect_state_summary, file.path(cross_config$out_dir, "03_Effect_State_Summary.csv"))
+
+p_prop <- ggplot(effect_state_summary, aes(x = Category, y = Fraction, fill = EffectState)) +
+  geom_col(color = "white", linewidth = 0.3) +
+  scale_fill_manual(values = viz_pal$effect_state, drop = FALSE) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  theme_wgbs_classic(base_size = 13) +
+  labs(title = "Cross-context Effect-size Composition", x = NULL, y = "Fraction")
+
+ggsave(file.path(cross_config$out_dir, "03_Effect_State_Barplot.pdf"), p_prop, width = 7, height = 5, device = cairo_pdf)
+```
+
+```{r}
+# ==============================================================================
+# 5. 启动子 DMR 聚焦分析
+# ==============================================================================
+promoter_dmrs <- merged_dmr %>%
+  filter(Feature_Simple == "Promoter") %>%
+  filter(if_all(c(source1_WT, source1_PFOS, source2_WT, source2_PFOS), ~ !is.na(.x))) %>%
+  arrange(desc(source1_abs + source2_abs)) %>%
+  slice_head(n = 60)
+
+if (nrow(promoter_dmrs) > 0) {
+  mat_promoter <- as.matrix(promoter_dmrs[, c("source1_WT", "source1_PFOS", "source2_WT", "source2_PFOS")])
+  promoter_gene_label <- ifelse(
+    promoter_dmrs$gene_match,
+    dplyr::coalesce(promoter_dmrs$source1_gene, promoter_dmrs$source2_gene),
+    NA_character_
+  )
+  rownames(mat_promoter) <- safe_label(promoter_dmrs$common_symbol, promoter_gene_label, prefix = "PromoterDMR")
+  colnames(mat_promoter) <- c(
+    paste0(cross_config$source1_name, "\n", integration_config$reference),
+    paste0(cross_config$source1_name, "\n", integration_config$comparison),
+    paste0(cross_config$source2_name, "\n", integration_config$reference),
+    paste0(cross_config$source2_name, "\n", integration_config$comparison)
+  )
+
+  anno_row_p <- data.frame(
+    Category = promoter_dmrs$Category,
+    EffectState = promoter_dmrs$EffectState,
+    row.names = rownames(mat_promoter)
+  )
+
+  draw_pheatmap_pdf(
+    mat = mat_promoter,
+    out_pdf = file.path(cross_config$out_dir, "04_Promoter_Cross_Context_Heatmap.pdf"),
+    annotation_row = anno_row_p,
+    annotation_colors = list(Category = viz_pal$category, EffectState = viz_pal$effect_state),
+    width = 8,
+    height = 10,
+    main = "Promoter-overlapping DMR Patterns (Row-scaled)",
+    scale = "row",
+    show_rownames = TRUE,
+    cluster_cols = FALSE
+  )
+
+  write_csv(promoter_dmrs, file.path(cross_config$out_dir, "04_Promoter_Cross_Context_Table.csv"))
+} else {
+  message("⚠️ 未找到启动子区域的重叠 DMR，跳过启动子热图。")
+}
+```
+
+```{r}
+# ==============================================================================
+# 6. 重叠 DMR 的基因组元件与方向一致性
+# ==============================================================================
+feature_distribution <- merged_dmr %>%
+  count(Category, Feature_Simple) %>%
+  group_by(Category) %>%
+  mutate(Fraction = n / sum(n)) %>%
+  ungroup()
+
+write_csv(feature_distribution, file.path(cross_config$out_dir, "05_Feature_Distribution_Summary.csv"))
+
+p_feature <- ggplot(feature_distribution, aes(x = Category, y = Fraction, fill = Feature_Simple)) +
+  geom_col(color = "white", linewidth = 0.3) +
+  scale_fill_manual(values = viz_pal$feature, drop = FALSE) +
+  scale_y_continuous(labels = scales::percent_format()) +
+  theme_wgbs_classic(base_size = 13) +
+  labs(title = "Feature Composition of Overlapping DMRs", x = NULL, y = "Fraction", fill = "Feature")
+
+ggsave(file.path(cross_config$out_dir, "05_Feature_Distribution.pdf"), p_feature, width = 7.5, height = 5.5, device = cairo_pdf)
+
+feature_concordance <- merged_dmr %>%
+  group_by(Feature_Simple) %>%
+  summarise(
+    n = n(),
+    direction_concordance = mean(Category != "Discordant"),
+    mean_source1_abs = mean(source1_abs, na.rm = TRUE),
+    mean_source2_abs = mean(source2_abs, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(!is.na(Feature_Simple), n >= 3)
+
+write_csv(feature_concordance, file.path(cross_config$out_dir, "05_Feature_Direction_Concordance.csv"))
+
+if (nrow(feature_concordance) > 0) {
+  p_concordance <- ggplot(feature_concordance, aes(x = reorder(as.character(Feature_Simple), direction_concordance), y = direction_concordance, color = Feature_Simple, size = n)) +
+    geom_segment(aes(xend = as.character(Feature_Simple), y = 0, yend = direction_concordance), linewidth = 1, show.legend = FALSE) +
+    geom_point(alpha = 0.9) +
+    coord_flip() +
+    scale_color_manual(values = viz_pal$feature, drop = FALSE) +
+    scale_y_continuous(labels = scales::percent_format(), limits = c(0, 1)) +
+    theme_wgbs_classic(base_size = 13) +
+    labs(title = "Direction Concordance Within Overlapping DMRs", x = NULL, y = "Concordance", color = "Feature", size = "Overlap Pairs")
+
+  ggsave(file.path(cross_config$out_dir, "05_Feature_Direction_Concordance.pdf"), p_concordance, width = 7.5, height = 5.5, device = cairo_pdf)
+}
+```
+
+```{r}
+# ==============================================================================
+# 7. 功能解释：富集与印记基因
+# ==============================================================================
+ids_hyper <- merged_dmr$common_entrez[merged_dmr$Category == "Common_Hyper"]
+ids_hypo <- merged_dmr$common_entrez[merged_dmr$Category == "Common_Hypo"]
+
+message("⏳ 分析 Common Hyper 基因 (n = ", length(unique(na.omit(ids_hyper))), ")...")
+run_enrichment(ids_hyper, "Same-gene Common Hyper", "Hyper")
+
+message("⏳ 分析 Common Hypo 基因 (n = ", length(unique(na.omit(ids_hypo))), ")...")
+run_enrichment(ids_hypo, "Same-gene Common Hypo", "Hypo")
+
+imprinted_genes <- c("H19", "Igf2", "Peg3", "Snrpn", "Kcnq1ot1", "Mest", "Plagl1", "Grb10", "Meg3", "Gnas")
+imprinted_hits <- merged_dmr %>%
+  filter(gene_match, common_symbol %in% imprinted_genes)
+
+if (nrow(imprinted_hits) > 0) {
+  write_csv(imprinted_hits, file.path(cross_config$out_dir, "06_Imprinted_Genes_Hit.csv"))
+  message("🚨 命中预设印记基因注释: ", paste(unique(na.omit(imprinted_hits$common_symbol)), collapse = ", "))
+} else {
+  message("✅ 在重叠 DMR 中未发现常见印记基因。")
+}
+```
+
+```{r}
+# ==============================================================================
+# 8. Common-direction 位点浏览图
+# ==============================================================================
+# 复用 sperm/liver 主流程已经导出的 BigWig，给所有 common-direction 位点生成四条分组轨道。
+message("⏳ 绘制 common-direction locus 浏览图...")
+
+has_locus_plot_pkgs <- requireNamespace("Gviz", quietly = TRUE) &&
+  requireNamespace("rtracklayer", quietly = TRUE)
+
+track_groups <- cross_config$track_groups
+all_track_files <- unlist(lapply(track_groups, `[[`, "files"), use.names = FALSE)
+missing_track_files <- all_track_files[!file.exists(all_track_files)]
+
+if (!has_locus_plot_pkgs) {
+  message("⚠️ 未检测到 Gviz/rtracklayer，跳过 common-direction locus 浏览图。")
+} else if (length(missing_track_files) > 0) {
+  message("⚠️ 缺少 BigWig 文件，跳过 common-direction locus 浏览图。")
+  message("   缺失文件示例: ", paste(head(missing_track_files, 4), collapse = "; "))
+} else {
+  plot_has_chr <- any(grepl("^chr", merged_dmr$source1_chr))
+  main_chr_levels <- mouse_main_chr_levels(target_has_chr = plot_has_chr)
+  txdb <- AnnotationDbi::loadDb(cross_config$txdb_file)
+  cgi_context_gr <- tryCatch(load_main_chr_cgi_context(cross_config$cgi_file, target_has_chr = plot_has_chr), error = function(e) NULL)
+
+  common_loci <- merged_dmr %>%
+    filter(Category != "Discordant") %>%
+    mutate(
+      locus_id = paste0("pair_", source1_idx, "_", source2_idx),
+      locus_chr = standardize_chr_style(source1_chr, target_has_chr = plot_has_chr),
+      locus_start = pmin(source1_start, source2_start, na.rm = TRUE),
+      locus_end = pmax(source1_end, source2_end, na.rm = TRUE),
+      locus_label = ifelse(
+        gene_match,
+        dplyr::coalesce(common_symbol, source1_gene, source2_gene),
+        NA_character_
+      ),
+      locus_label = ifelse(
+        is.na(locus_label) | locus_label == "",
+        paste0("CommonDMR_", source1_idx, "_", source2_idx),
+        locus_label
+      )
+    ) %>%
+    filter(locus_chr %in% main_chr_levels) %>%
+    group_by(locus_id, locus_label, Category, locus_chr) %>%
+    summarise(
+      chr = dplyr::first(locus_chr),
+      start = min(locus_start, na.rm = TRUE),
+      end = max(locus_end, na.rm = TRUE),
+      feature = names(sort(table(Feature_Simple), decreasing = TRUE))[1],
+      n_pairs = n(),
+      combined_score = max(source1_abs + source2_abs, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    filter(is.finite(start), is.finite(end), is.finite(combined_score)) %>%
+    arrange(Category, desc(combined_score), chr, start)
+
+  write_csv(common_loci, file.path(cross_config$out_dir, "08_Common_Direction_Loci.csv"))
+
+  if (nrow(common_loci) > 0) {
+    combined_pdf <- file.path(cross_config$out_dir, "08_Common_Direction_Loci.pdf")
+    cairo_pdf(combined_pdf, width = 12, height = 8)
+
+    old_ucsc_chromosome_names <- getOption("ucscChromosomeNames")
+    options(ucscChromosomeNames = FALSE)
+
+    tryCatch({
+      for (i in seq_len(nrow(common_loci))) {
+        locus_row <- common_loci[i, ]
+        chr_use <- as.character(locus_row$chr)
+        view_start <- max(1L, locus_row$start - 20000L)
+        view_end <- locus_row$end + 20000L
+
+        axis_track <- quiet_gviz_deprecations(Gviz::GenomeAxisTrack())
+        common_window_df <- merged_dmr %>%
+          mutate(
+            locus_chr = standardize_chr_style(source1_chr, target_has_chr = plot_has_chr),
+            locus_start = pmin(source1_start, source2_start, na.rm = TRUE),
+            locus_end = pmax(source1_end, source2_end, na.rm = TRUE)
+          ) %>%
+          filter(
+            Category != "Discordant",
+            locus_chr == chr_use,
+            locus_start <= view_end,
+            locus_end >= view_start
+          )
+
+        dmr_track <- NULL
+        if (nrow(common_window_df) > 0) {
+          common_gr <- GRanges(
+            seqnames = common_window_df$locus_chr,
+            ranges = IRanges(common_window_df$locus_start, common_window_df$locus_end),
+            Category = common_window_df$Category
+          )
+          dmr_track <- quiet_gviz_deprecations(Gviz::AnnotationTrack(
+            range = common_gr,
+            genome = "mm39",
+            chromosome = chr_use,
+            name = "Common DMR",
+            fill = ifelse(mcols(common_gr)$Category == "Common_Hyper",
+                          unname(viz_pal$category["Common_Hyper"]),
+                          unname(viz_pal$category["Common_Hypo"])),
+            col = NA,
+            shape = "box"
+          ))
+        }
+
+        cgi_track <- NULL
+        if (!is.null(cgi_context_gr)) {
+          cgi_window <- cgi_context_gr[
+            as.character(seqnames(cgi_context_gr)) == chr_use &
+              start(cgi_context_gr) <= view_end &
+              end(cgi_context_gr) >= view_start
+          ]
+          if (length(cgi_window) > 0) {
+            cgi_track <- quiet_gviz_deprecations(Gviz::AnnotationTrack(
+              range = cgi_window,
+              genome = "mm39",
+              chromosome = chr_use,
+              name = "CGI",
+              fill = viz_pal$track_cgi,
+              col = NA,
+              shape = "box"
+            ))
+          }
+        }
+
+        gene_track <- NULL
+        if (!is.null(txdb)) {
+          gene_track <- tryCatch(
+            quiet_gviz_deprecations(Gviz::GeneRegionTrack(
+              txdb,
+              genome = "mm39",
+              chromosome = chr_use,
+              start = view_start,
+              end = view_end,
+              name = locus_row$locus_label,
+              transcriptAnnotation = "transcript",
+              collapseTranscripts = "meta"
+            )),
+            error = function(e) NULL
+          )
+        }
+
+        bw_tracks <- lapply(track_groups, function(track_group) {
+          fill_col <- unname(viz_pal$group[track_group$group])
+          build_mean_bw_track(track_group$files, chr_use, view_start, view_end, track_group$label, fill_col)
+        })
+
+        named_tracks <- c(
+          list(axis = axis_track),
+          stats::setNames(bw_tracks, paste0("bw_", seq_along(bw_tracks))),
+          list(dmr = dmr_track, cgi = cgi_track, gene = gene_track)
+        )
+        named_tracks <- Filter(Negate(is.null), named_tracks)
+        track_list <- unname(named_tracks)
+        gviz_display_pars <- list(
+          fontfamily = wgbs_figure_font_family,
+          fontfamily.title = wgbs_figure_font_family,
+          fontsize = wgbs_figure_tick_size,
+          cex = 0.7,
+          cex.axis = 0.7,
+          cex.title = 0.55,
+          fontface.title = 1,
+          rotation.title = 90
+        )
+        track_list <- lapply(track_list, function(track) {
+          Gviz::displayPars(track) <- gviz_display_pars
+          track
+        })
+
+        if (length(track_list) > 1) {
+          track_sizes <- vapply(
+            names(named_tracks),
+            function(track_name) {
+              if (track_name == "axis") return(0.45)
+              if (grepl("^bw_", track_name)) return(1)
+              if (track_name == "dmr") return(0.55)
+              if (track_name == "cgi") return(0.4)
+              0.95
+            },
+            numeric(1)
+          )
+          quiet_gviz_deprecations(Gviz::plotTracks(
+            trackList = track_list,
+            from = view_start,
+            to = view_end,
+            chromosome = chr_use,
+            sizes = track_sizes,
+            background.title = "white",
+            col.title = viz_pal$neutral["dark"],
+            cex.main = 0.8,
+            fontface.main = 1,
+            margin = 4,
+            main = paste0(
+              locus_row$locus_label, " | ", locus_row$Category,
+              " | ", locus_row$feature,
+              " (", chr_use, ":", view_start, "-", view_end, ")"
+            )
+          ))
+        }
+      }
+    }, finally = {
+      options(ucscChromosomeNames = old_ucsc_chromosome_names)
+      dev.off()
+    })
+  } else {
+    message("⚠️ 未找到可用于 locus 浏览图的 common-direction 位点。")
+  }
+}
+```
+
+```{r}
+# ==============================================================================
+# 9. Motif 分析边界
+# ==============================================================================
+# 本 cross 流程不再把“motif 命中次数”误写为 motif 富集。
+# 正式 motif 证据应读取 sperm/liver 各自主流程 Step 7 的匹配背景富集结果；
+# 当 shared DMR 数量很少时，不在这里重复做低功效、无匹配背景的扫描。
+write_csv(
+  tibble(
+    analysis = "cross_context_motif",
+    status = "not_run_by_design",
+    reason = "Use stage-specific matched-background motif enrichment from WGBS Step 7"
+  ),
+  file.path(cross_config$out_dir, "07_Motif_Status.csv")
+)
+```
+
+```{r result_report, include=FALSE}
+source(file.path(integration_root,"scripts/joint_plot_helpers.R"),local=environment())
+j <- new.env(parent=globalenv());j$root<-integration_root;j$out<-cross_config$out_dir;j$cfg<-integration_config
+j$analysis<-paste0("wgbs_",basename(cross_root));j$rows<-list()
+write_csv(merged_dmr,file.path(cross_config$out_dir,"01_overlap_details.csv"))
+write_csv(tibble(source=c(cross_config$source1_short,cross_config$source2_short),path=c(cross_config$source1_dmr_file,cross_config$source2_dmr_file),md5=unname(tools::md5sum(c(cross_config$source1_dmr_file,cross_config$source2_dmr_file)))),file.path(cross_config$out_dir,"00_Current_Input_Manifest.csv"))
+pdfs <- list.files(cross_config$out_dir,pattern="\\.pdf$",full.names=TRUE)
+for(pdf in pdfs) {
+  id <- tools::file_path_sans_ext(basename(pdf));png<-sub("\\.pdf$",".png",pdf)
+  table <- if(grepl("Enrich",id)) {
+    file.path(cross_config$out_dir,paste0(sub("Enrich","Table",id),".csv"))
+  } else if(grepl("Loci",id)) file.path(cross_config$out_dir,"08_Common_Direction_Loci.csv") else file.path(cross_config$out_dir,"01_overlap_details.csv")
+  if(!file.exists(png)||!file.exists(table)) stop("图与源表必须成套: ",id)
+  joint_record(j,id,gsub("_"," ",id),table,png=png,pdf=pdf,
+    meaning="比较两个情境中的坐标重叠、效应方向和直接测量的位点甲基化。",
+    distribution=paste0("图内单位为DMR重叠pair，many-to-many可能重复区域；源表保留两端坐标和注释。",if(grepl("2cell",basename(cross_root)))"2cell仅高风险敏感性展示。" else ""),
+    conclusion="同位点或同方向只是描述一致性，不证明甲基化传递、sperm介导或位点因果性。")
+}
+for(expected in c("06_Enrich_GO_BP_Hyper","06_Enrich_GO_BP_Hypo","06_Enrich_KEGG_Hyper","06_Enrich_KEGG_Hypo")) {
+  if(!file.exists(file.path(cross_config$out_dir,paste0(expected,".pdf"))))
+    joint_skip(j,expected,gsub("_"," ",expected),"直接覆盖背景下候选数不足或没有raw-P合格条目；不沿用旧无背景富集","EMPTY")
+}
+joint_finish(j)
+```

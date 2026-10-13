@@ -1,0 +1,123 @@
+[
+  {
+    "example": "examples/metabolomics_volcano.tsv",
+    "source": "../../projects/pfos/mouse/metabolomics/liver/result/04_statistics/tables/PFOS_vs_WT_differential_features.csv",
+    "source_sha256": "64b179700292829fca41de52bdde29a6655cafea5d55d5249f87bb1e39201b50",
+    "example_sha256": "ea8ec280ec804a68bb563d5233247eff09ca363691fef075699200876f1fd7be",
+    "source_rows": 26359,
+    "display_rows": 26359,
+    "selection": "全部行；仅映射已有列",
+    "data_kind": "real_PFOS_frozen_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/marker_ora.tsv",
+    "source": "../../projects/pfos/mouse/scrnaseq/islet/result/06_enrichment/01_cluster/tables/cluster_0_ora_dotplot.tsv",
+    "source_sha256": "fc3e84fc355af27717af7ec4dc4f7e51b898b2764daff08b92ac5e05cdb94d8a",
+    "example_sha256": "afcec81713627576729e9b0ef6e3440335f150daf2ef24dc59e7790d4dd50837",
+    "source_rows": 24,
+    "display_rows": 24,
+    "selection": "全部行；仅映射已有列",
+    "data_kind": "real_PFOS_frozen_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/marker_expression.tsv",
+    "source": "../../projects/pfos/mouse/scrnaseq/islet/result/03_annotation/tables/marker_evidence_dotplot.tsv",
+    "source_sha256": "c50560521380856cd03047dc6176bf71d94952e133dfb18e0fb188f5d6082527",
+    "example_sha256": "70181b6d55d29c40fccc21ac2a4672f8de698cb9024e038d14ca12fd6afb1a1e",
+    "source_rows": 442,
+    "display_rows": 117,
+    "selection": "既定先验genes白名单/完整已展示ORA来源；不新增统计筛选",
+    "data_kind": "real_PFOS_frozen_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/program_matrix.tsv",
+    "source": "../../projects/pfos/mouse/scrnaseq/islet/result/04_descriptive/tables/module_score_profile.tsv",
+    "source_sha256": "82c8a392c5eb98d9181422ffb458168fcd77454f75755fb27eb7fddcf8ff6311",
+    "example_sha256": "6f8830547bd618e1316a444b1bb17889d1b39042f143dac660dd6168263135fc",
+    "source_rows": 126,
+    "display_rows": 126,
+    "selection": "全部行；仅映射已有列",
+    "data_kind": "real_PFOS_frozen_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/composition.tsv",
+    "source": "../../projects/pfos/mouse/scrnaseq/islet/result/04_descriptive/tables/captured_composition.tsv",
+    "source_sha256": "5ff8775c50c63610ced1dc5bebecba2af5727eb85fa8b99953602b39eba9c002",
+    "example_sha256": "05110e95b5442a589e2fe221e5f12420aea6850adbbbf8380e6a6662061008b0",
+    "source_rows": 14,
+    "display_rows": 14,
+    "selection": "全部行；仅映射已有列",
+    "data_kind": "real_PFOS_frozen_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/program_nes_full.tsv",
+    "source": "../../projects/pfos/mouse/integration/.deep-test-cv5h9r/02_program_integration/03_context_programs/tables/full_statistic_fgsea.tsv",
+    "source_sha256": "81878de4075b93c73f758d882368b0e8ff5859222dd7fdb28d145b2a858afd78",
+    "example_sha256": "81878de4075b93c73f758d882368b0e8ff5859222dd7fdb28d145b2a858afd78",
+    "source_rows": 9777,
+    "display_rows": 9777,
+    "selection": "全部冻结来源行；实际PFOS整合dry-run表，未重算统计",
+    "data_kind": "real_PFOS_frozen_dry_run_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/permutation_null.tsv",
+    "source": "../../projects/pfos/mouse/integration/.deep-test-cv5h9r/03_liver_multiomics/03_background_calibration/tables/stratified_permutation_null.tsv",
+    "source_sha256": "a0b565356d0820296c1e67e064f241ec023043c1bdb6e1cdce9c481b2202f955",
+    "example_sha256": "a0b565356d0820296c1e67e064f241ec023043c1bdb6e1cdce9c481b2202f955",
+    "source_rows": 30000,
+    "display_rows": 30000,
+    "selection": "全部冻结来源行；实际PFOS整合dry-run表，未重算统计",
+    "data_kind": "real_PFOS_frozen_dry_run_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/permutation_tests.tsv",
+    "source": "../../projects/pfos/mouse/integration/.deep-test-cv5h9r/03_liver_multiomics/03_background_calibration/tables/stratified_permutation_tests.tsv",
+    "source_sha256": "cb9c4ebed84f6d7b5f9f197b2eb18e4a0eedf7349fc88234092bf8ab36e6f4bf",
+    "example_sha256": "cb9c4ebed84f6d7b5f9f197b2eb18e4a0eedf7349fc88234092bf8ab36e6f4bf",
+    "source_rows": 3,
+    "display_rows": 3,
+    "selection": "全部冻结来源行；实际PFOS整合dry-run表，未重算统计",
+    "data_kind": "real_PFOS_frozen_dry_run_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/shared_locus.tsv",
+    "source": "../../projects/pfos/mouse/integration/.deep-test-cv5h9r/03_liver_multiomics/04_shared_loci/tables/five_candidate_locus_evidence.tsv",
+    "source_sha256": "4ebb76dfa2f4a6407628132d0d4ca12bcbb257325b4fbb77c5d148dfc5e9ffa5",
+    "example_sha256": "4ebb76dfa2f4a6407628132d0d4ca12bcbb257325b4fbb77c5d148dfc5e9ffa5",
+    "source_rows": 17,
+    "display_rows": 17,
+    "selection": "全部冻结来源行；实际PFOS整合dry-run表，未重算统计",
+    "data_kind": "real_PFOS_frozen_dry_run_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/program_nes_display.tsv",
+    "source": "examples/program_nes_full.tsv",
+    "source_sha256": "81878de4075b93c73f758d882368b0e8ff5859222dd7fdb28d145b2a858afd78",
+    "example_sha256": "c208c2daea89f5e2ed366e108144371fd872837ecff08be24c086193846b444b",
+    "source_rows": 9777,
+    "display_rows": 210,
+    "selection": "仅显示：每collection按pathway跨context最小既有BH排序取10条；ties按pathway名称稳定打破；保留该pathway所有context；完整9777行保留",
+    "data_kind": "real_PFOS_frozen_dry_run_source",
+    "statistics_recomputed": false
+  },
+  {
+    "example": "examples/gene_effect_violin.tsv",
+    "source": "../../projects/pfos/mouse/integration/result/05_pairwise_support/02_wgbs_rna/sperm/01_effect_association/tables/gene_centric_long.tsv",
+    "source_sha256": "b137b2373f2f8412a0fb7275ade906d0d6f4c4bc2b6c5350246ad9ace4c38ee1",
+    "example_sha256": "30065b69cbda3a71206be25107d90ee34508d304f2269a78887197ac96a8d5aa",
+    "source_rows": 3173,
+    "display_rows": 3173,
+    "selection": "全部3173行；Layer、MethylationDirection、log2FoldChange、gene_id_clean仅重命名；不重算RNA模型",
+    "data_kind": "real_PFOS_frozen_source",
+    "statistics_recomputed": false
+  }
+]

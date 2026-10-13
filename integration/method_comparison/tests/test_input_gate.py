@@ -30,12 +30,12 @@ class InputGate(unittest.TestCase):
         else:
             self.metadata=[{'sample':f'library_{i}','species':'Homo_sapiens','analysis_role':'method_comparison' if i<10 else 'spikein_pair','biological_sample':'2' if i<10 else '3','method':str(1 if i<3 else 2 if i<6 else i-3),'pair_id':f'pair_{i%3}' if i<6 else ''} for i in range(12)]
         stage=self.root/'result/describe'
-        (stage/'1_setup/1_expression_matrix').mkdir(parents=True)
-        (stage/'2_single/tables').mkdir(parents=True)
+        (stage/'01_setup/1_expression_matrix').mkdir(parents=True)
+        (stage/'02_single/tables').mkdir(parents=True)
         (stage/'run_status.tsv').write_text('State\ncompleted\n')
         (stage/'module_status.tsv').write_text('Module\tStatus\nqc\tcompleted\n')
-        (stage/'1_setup/1_expression_matrix/class_reads.tsv').write_text('fixture\n')
-        (stage/'2_single/tables/single_sample_qc_table.csv').write_text('fixture\n')
+        (stage/'01_setup/1_expression_matrix/class_reads.tsv').write_text('fixture\n')
+        (stage/'02_single/tables/single_sample_qc_table.csv').write_text('fixture\n')
         (self.root/'config').mkdir()
         self.write_metadata()
         for row in self.metadata:

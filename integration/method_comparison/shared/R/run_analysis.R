@@ -48,7 +48,7 @@ tryCatch({
   # 为全局 helper 保留当前作用域；模块局部仍用activate选择独立队列。
   list2env(ctx,envir=globalenv())
   # 联合算法需重建序列层特征；必须先与单组学标准类别计数逐值一致。
-  standard <- read_tsv_flex(file.path(ROOT_DIR,"result/describe/1_setup/1_expression_matrix/class_reads.tsv"))
+  standard <- read_tsv_flex(file.path(ROOT_DIR,"result/describe/01_setup/1_expression_matrix/class_reads.tsv"))
   standard_long <- standard %>% tidyr::pivot_longer(-MainCategory,names_to="Sample",values_to="StandardReads")
   regenerated <- ctx$sample_comp_view %>% transmute(Sample=as.character(Sample),MainCategory=as.character(MainCategory),Reads) %>%
     tidyr::pivot_wider(names_from=Sample,values_from=Reads,values_fill=0) %>%
@@ -58,7 +58,7 @@ tryCatch({
   write_tsv_safe(boundary,file.path(RESULT_DIR,"single_assay_boundary_check.tsv"))
   if(species=="mus")write_mii_setup_expression_matrices()else write_serum_setup_expression_matrices()
   write_common_audit(ctx)
-  files <- c(capture="09_differential_capture.Rmd",capture_bias="10_capture_bias_diagnostics.Rmd",similarity="11_method_similarity.Rmd",spikein="13_spikein_qc.Rmd")
+  files <- c(capture="04_differential_capture.Rmd",capture_bias="05_capture_bias_diagnostics.Rmd",similarity="02_method_similarity.Rmd",spikein="03_spikein_qc.Rmd")
   if(ENDO_ENABLED)files<-c(files,endo="09_endo_compare.Rmd")
   applicable <- if(PANDORA_ANALYSIS_STAGE=="describe")setdiff(names(files),c("capture","capture_bias")) else if(PANDORA_ANALYSIS_STAGE=="differential") {
     if(species=="mus")c("pca","sncrna","tsrna","rsrna","mirna","pirna",if(ENDO_ENABLED)"endo")else c("capture","capture_bias")

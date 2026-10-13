@@ -1,31 +1,21 @@
-# 联合分析模板
+# 项目级多组学整合模板
 
-一个物种内的跨组织、跨阶段和跨组学分析使用一个联合入口。复制后编辑 `config/project.yml` 的真实来源、方向与质量状态，再运行：
+阅读和分析顺序：项目全景、共同生物学程序、核心器官多层证据、细胞类型背景、两两分析支撑、证据依赖。
 
-```bash
-bash run.sh --check
-bash run.sh --all
-bash run.sh --stage liver
-```
+复制本模板到项目物种目录，填写 `config/project.yml` 的真实输入、来源资格、组别及冻结基因集；项目运行自己的本地代码。`INPUT_REQUIRED` 必须替换为真实已核验文件，缺失保持 MISSING，不能通过猜测样本配对补齐。
 
-默认配置含 `INPUT_REQUIRED`，不会搜索真实课题作为替代。相对路径从联合分析根解析；物种、基因组、方向、样本身份和生产状态均需显式核验。
+- `bash run.sh --check`：核验样本身份、方向、RNA 已完成生产凭据和输入签名。
+- `bash run.sh --integrate`：从冻结单组学统计和已完成联合分析数值源生成项目整合并重绘。
+- `bash run.sh --plots-only`：只从已签名数值源重绘；禁止重新运行差异、富集或覆盖构建。
 
-## 标准输入与职责
+深化模块在同一次原子执行中生成三组独立证据：七情境逐文库 ssGSEA 与完整 DE statistic fgsea、RNA–ATAC 完整测试域分层置换及共享位点、转录后方法测试域/队列签名/方法特异 ORA。项目必须显式声明所有输入；WGBS 仅保留 selected DMR 与覆盖资格，不能扩写为三层联合 P 值。不同样本签名的 selected/full 队列不计算同队列交集，event/region FDR 不能改称 gene FDR。
 
-- RNA：完整合格cohort的DE、表达矩阵、样本表与生产签名；`sampleA=comparison`、`sampleB=reference`。单组学producer为RNA模板的 `scripts/run_full_cohort_de.R`。
+结果按 `00_audit`、`01_project_atlas`、`02_program_integration`、`03_liver_multiomics`、`04_celltype_context`、`05_pairwise_support`、`06_synthesis` 编号，各方法下分 `plots/` 与 `tables/`。同名 PNG/PDF 并列，183 mm、Liberation Sans 8/7 pt、300 dpi 白底 RGB。分面、UpSet 与组合图保留。
 
-  该通用producer必须显式传入`--reference CONTROL --comparison TREATMENT`（替换为样本表实际标签），不会采用真实课题的组名。
-- WGBS：含明确组别和基因注释的DMR，坐标为1-based闭区间。DMR区域阈值不等于区域FDR。
-- ATAC：差异区域、基因注释、效应和明确方向。最近基因注释不等于远端靶向验证。
-- 代谢组：保留原始P、FDR、特征身份、鉴定等级和歧义；缺少反应/基因映射时报告连接缺失。
-- 单细胞：描述性细胞类型背景保持自身实验单位，不能以细胞数代替动物数。
+项目仅使用一份冻结 figure profile。WT/PFOS/NS、方向、连续尺度和无方向分类各有独立语义；同名方法、术语或簇跨图使用稳定身份色，显著性和方向另用形状、大小或专用色道表达。每张图保留源表及“生物学意义 / 数据分布特征 / 最终结论”三项解释。
 
-`--check` 只读；`--all` 依次执行 `rna`、`wgbs`、`liver`、`programs` 和报告。`--stage` 可独立更新；沿用其他阶段前须匹配输入、源码和产物签名。失配的阶段不出现在当前结论中。重算前的联合产物保存到本地history。
+本模板需要真实冻结来源及逐图清单；复制代码或通过合成 fixture 检查不等于真实数据重现。计算过程先在临时结果目录完成，来源改变或成图失败不覆盖当前有效结果。
 
-报告直接更新本模块README，HTML位于result/index.html；所有图表保存在所属阶段的result，不复制交付版。报告和图表也核验签名。执行前记录STARTED并失效旧成功报告；渲染失败记录FAILED。科学阶段未齐时总状态PARTIAL，不把局部完成写成全流程完成。区域feature注释与最近基因链接分别保留。
+`--integrate` 的前提是已有现役冻结结果合同：`result/00_audit/run.json` 为 `COMPLETED`，并带入其签名对应的 `source_catalog.tsv`、`figure_manifest.tsv`、`membership.tsv`、`term_id_map.tsv` 及真实数值源。四张 TSV 位于 `result/00_audit/tables/`。这些来自已经完成的实际联合分析；只填写配置不能从空 `result/` 启动。`--check` 会具体列出缺少的合同文件为 `MISSING`；输入/合同检查通过仍不表示已经完成真实整合。
 
-GO程序表是本地注释交汇，不提供富集P值或通路活性。各层效应与冲突分别保留，不输出未经校准的总分。历史上游来源不会因本次连接计算自动变为已复现。
-
-## 环境与复制
-
-沿用现有 Python pandas/numpy/matplotlib/PyYAML/Markdown，R GenomicRanges、AnnotationDbi、GO.db及所选OrgDb；不自动安装或升级。需要smallRNA方法比较时，在中心模板中单独选择 `integration/method_comparison`；复制通用integration不附带这个子模块。项目运行自己的代码副本，来源以 `template_snapshot.tsv` 冻结。
+不合并 P、不设计任意加权总分；同一程序不同成员与同一基因多层收敛分别报告。样本未配对时不运行样本级联合模型；细胞不是额外生物学重复。

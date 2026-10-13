@@ -1,5 +1,7 @@
 # 非靶向 LC-MS 模板
 
+绘图使用本地 `R/figure_style.json` 冻结配置，通用入口见[生信绘图库](../figures/README.md)。对照/处理绑定蓝/粉；相关固定±1、行标准化±2.5；火山图方向用色、既有robust/exploratory分类用形。复制项目时保留本地源码和profile，记录实际snapshot，不在运行时调用中心库。
+
 复制整个目录，只修改 `config/project.yml` 和 `config/samples.tsv`。比较方向始终为 `case_group - control_group`；每个纳入生物学样本占一行，当前支持独立两组、每组至少 3 个样本。重复进样、配对和重复测量需要先形成正确的分析单位，不能直接作为独立 n 输入。
 
 ## 两种明确输入
@@ -16,11 +18,17 @@ bash run.sh --help
 bash run.sh check                 # 只读检查，不创建结果
 bash metabo_first.sh --dry-run
 bash run.sh all
+bash run.sh --plots-only --check   # 仅核验已有数值源
+bash run.sh --plots-only           # 全量纯绘图，先校验后发布
 # 单模块；依赖必须已在当前签名下生成
 Rscript scripts/pipeline.R --module report
 ```
 
 `metabo_first.sh` 负责清单与峰矩阵；`metabo_second.sh` 负责预处理、QC、注释、limma、外部通路定量和报告。有效配置、软件版本、输入哈希、模块状态保存在结果中。已有结果必须匹配配置、源码及输入签名；改变输入/参数时使用新的 `result_dir`，不静默复用。各实际模块单独记录执行状态；失败或仍在运行的上游不能提供输入，已有完成下游时重跑上游必须使用新的结果目录。
+
+结果沿用 `01_audit`、`02_peak_table`、`03_qc`、`04_statistics`、`05_annotation`、`06_pathway` 的顺序。数值表放各阶段 `tables/`，图放相应 `plots/`，RDS 放 `objects/`，运行证据放 `logs/`；完整阅读入口为 `result/index.html`。
+
+纯绘图读取冻结 RDS、差异完整表及已有通路表，复用正式绘图函数；不运行 XCMS、预处理、limma 或通路检验。缺少已声明来源或来源/代码在绘图期间变化则拒绝发布。保留现有图型，未运行的可选通路保持 `not_run`。风格使用本地 `R/figure_style.R` 冻结副本：183 mm、Liberation Sans、8/7 pt、300 dpi RGB 白底 PNG 与嵌入字体 PDF。
 
 ## 统计与解释
 

@@ -3,11 +3,12 @@
 args <- commandArgs(trailingOnly = TRUE)
 if(length(args) != 1L) stop('用法：Rscript run_gene_methylation.R 分析模块目录')
 root <- normalizePath(args[[1]], mustWork = TRUE)
-input <- file.path(root, 'result/3_dmr/tables/2/dmr_annotated.csv')
-setup <- file.path(root, 'rmd/1_setup.Rmd')
-output <- file.path(root, 'result/8_gene_methylation')
+input <- file.path(root, 'result/03_dmr/02_annotation/tables/dmr_annotated.csv')
+setup <- file.path(root, 'rmd/01_setup.Rmd')
+output <- file.path(root, 'result/08_gene_methylation')
 stopifnot(file.exists(input), file.exists(setup))
 suppressPackageStartupMessages({library(dplyr);library(tidyr);library(readr);library(stringr);library(ggplot2)})
+source(file.path(root,'scripts/figure_style.R'),local=globalenv())
 # 仅载入三个纯函数，不执行 setup 的数据恢复和大对象处理。
 purl <- tempfile(fileext = '.R')
 knitr::purl(setup, output = purl, quiet = TRUE)
@@ -26,16 +27,15 @@ if(length(contrast) != 1L) stop('DMR 存在混合比较方向')
 long <- build_gene_methylation_summary(dmr)
 wide <- long %>% select(gene_id_clean, SYMBOL, Layer, diffMethy, DMR_id, RegionCount, DirectionConflict) %>%
  pivot_wider(names_from = Layer, values_from = c(diffMethy, DMR_id, RegionCount, DirectionConflict))
-tables <- file.path(output,'tables/1');plots <- file.path(output,'plots/1')
+tables <- file.path(output,'01_group_comparison/tables');plots <- file.path(output,'01_group_comparison/plots')
 dir.create(tables,recursive = TRUE,showWarnings = FALSE);dir.create(plots,recursive = TRUE,showWarnings = FALSE)
 write_csv(long,file.path(tables,'gene_methylation_long.csv'))
 write_csv(wide,file.path(tables,'gene_methylation_wide.csv'))
 p <- ggplot(long,aes(Layer,diffMethy)) + geom_boxplot(outlier.shape = NA) +
- geom_hline(yintercept = 0,linetype='dashed') + theme_classic(base_size=12) +
+ geom_hline(yintercept = 0,linetype='dashed') + pfos_theme() +
  labs(x='Genomic layer',y=paste('Methylation proportion difference:',contrast))
-ggsave(file.path(plots,'gene_methylation_layers.pdf'),p,width=8,height=6,device=cairo_pdf)
-ggsave(file.path(plots,'gene_methylation_layers.png'),p,width=8,height=6,dpi=300)
-manifest <- data.frame(Input='result/3_dmr/tables/2/dmr_annotated.csv',
+pfos_save(p,file.path(plots,'gene_methylation_layers.pdf'),height_mm=137.25)
+manifest <- data.frame(Input='result/03_dmr/02_annotation/tables/dmr_annotated.csv',
  SHA256=digest::digest(file=input,algo='sha256'),SourceStatus='PRESERVED_DMR_OUTPUT',
  Contrast=contrast,Rows=nrow(dmr),SourceSetupSHA256=digest::digest(file=setup,algo='sha256'))
 write_tsv(manifest,file.path(output,'input_manifest.tsv'))

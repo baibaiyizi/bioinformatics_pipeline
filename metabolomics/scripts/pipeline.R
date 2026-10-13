@@ -47,6 +47,7 @@ opts <- list(
   force = has_flag("--force"),
   dry_run = has_flag("--dry-run")
 )
+if (identical(opts$module, "plots-only")) { metabo_run(opts); quit(status = 0) }
 contract <- metabo_validate(opts$config_file,root_dir,opts$result_dir)
 modules <- c("audit","inventory","xcms","preprocess","plots","annotate","stats","pathway","report","all","upstream","downstream")
 if (!opts$module %in% modules) stop("未知模块: ",opts$module)
@@ -57,9 +58,9 @@ sig_opts <- opts[setdiff(names(opts),c("module","force","dry_run"))]
 small <- contract$files[!grepl("[.](mzML|mzXML)$",contract$files,ignore.case=TRUE)]
 raw <- setdiff(contract$files,small)
 sig <- digest::digest(list(opts=sig_opts,files=tools::md5sum(contract$files),code=tools::md5sum(c(script_path,list.files(file.path(root_dir,"R"),full.names=TRUE)))),algo="sha256")
-sig_path <- file.path(contract$result,"input_signature.txt")
+sig_path <- file.path(contract$result,"01_audit","input_signature.txt")
 if (dir.exists(contract$result) && length(list.files(contract$result,all.files=FALSE))) {
   if (!file.exists(sig_path) || !identical(readLines(sig_path),sig)) stop("结果目录来源未验证或签名变化；请选择新的 result_dir")
 }
-dir.create(contract$result,recursive=TRUE,showWarnings=FALSE); writeLines(sig,sig_path)
+dir.create(dirname(sig_path),recursive=TRUE,showWarnings=FALSE); writeLines(sig,sig_path)
 metabo_run(opts)

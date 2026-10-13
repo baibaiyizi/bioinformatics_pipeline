@@ -14,3 +14,5 @@
 本轮真实记录集中于workspace的 [maintenance/species_organization/smallrna_sc](../../../maintenance/species_organization/smallrna_sc/README.md)。MII实际producer门验证了current通过、failed拒绝、MD5变化拒绝和缺输入拒绝。没有安装或升级依赖，没有重跑原始FASTQ、SPORTS或长期上游。
 
 本目录validation下的旧运行记录保持原始身份；[前轮验收文档](../history/pre_species_organization_20261011/VALIDATION.md)描述抽离前33份源码及原血清差异入口，不能作为现役单组学仍执行方法比较的证明。其他三个母龄时期只做预检，历史describe凭据不冒充当前源码completed。实际运行与技术QA不等于生物学结论或人工审美验收。
+
+2026-10-12 编号调整核验：人类主步骤结果为 01–09，可选 endo 为 10；鼠原编号保留。四个 Mus/Homo × endo0/1 隔离案例重新实际执行，32 项检查通过，116 个复制源码与当前模板逐字节一致；包括含空格路径、只读预检、缺失 FASTQ 拒绝、无效模块拒绝、reads 守恒及 sncRNA 冲突边界。实际记录见 [template_portability.json](../../../maintenance/analysis_completion_20261012/smallrna/template_portability.json)。

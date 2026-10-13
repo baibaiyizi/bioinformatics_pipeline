@@ -53,7 +53,7 @@ if (Sys.getenv("PANDORA_SPECIES")=="Mus") {
     if (is.null(scope)) scope <- if (PANDORA_DESIGN=="method_capture") "method_comparison" else "all"
     assign("PANDORA_ANALYSIS_SCOPE",scope,envir=env)
     pair <- identical(scope,"spikein_pair")
-    root <- file.path(SPIKEIN_DIR,"prior_rmd_style",replay_module)
+    root <- file.path(SPIKEIN_DIR,"profiles",replay_module)
     fig <- if(pair) file.path(root,"plots") else default_fig_dir
     tab <- if(pair) file.path(root,"tables") else default_tab_dir
     assign("OUTPUT_FIG_DIR",fig,envir=env); assign("OUTPUT_TAB_DIR",tab,envir=env)

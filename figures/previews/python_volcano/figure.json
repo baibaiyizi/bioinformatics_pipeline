@@ -1,0 +1,21 @@
+{
+  "status": "COMPLETED",
+  "kind": "volcano",
+  "rows": 26359,
+  "input_sha256": "ea8ec280ec804a68bb563d5233247eff09ca363691fef075699200876f1fd7be",
+  "script_sha256": "9ffa46f485a0ad008a1e902ad5a54df7e3b6c9e0057ffe10fa96909d160ff7eb",
+  "profile_id": "bluepink_semantic_v2",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "value_label": "log2FC (PFOS − WT); frozen limma effect",
+  "statistics_recomputed": false,
+  "outputs": {
+    "pdf": {
+      "path": "figure.pdf",
+      "sha256": "999d45d5bda47a63ef7a869699b8d75286c06b1cead5c435c179eb4d221540f4"
+    },
+    "png": {
+      "path": "figure.png",
+      "sha256": "372def4e88f9065d9a12f13ba70cd14d5c0354629812c3b3f1d2998c02b5fa98"
+    }
+  }
+}

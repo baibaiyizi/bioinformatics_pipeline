@@ -1,0 +1,17 @@
+{
+  "status": "COMPLETED",
+  "recipe": "r_marker",
+  "data_kind": "real_PFOS_frozen_source",
+  "statistics_recomputed": false,
+  "input_sha256": {
+    "marker_expression.tsv": "70181b6d55d29c40fccc21ac2a4672f8de698cb9024e038d14ca12fd6afb1a1e"
+  },
+  "script_sha256": "222e2e5f5052d69fa963e20f84d3260453daced84ddf47d1bfdfd83b348ffc12",
+  "runner_sha256": "354956fefbaf8bb1c7d8e5125a3413269d04248f3b6c2ab5dab63e06ce9b33ac",
+  "style_sha256": "7fc1e558d3b0f23a916a74d2ab25d9b530c6f9a8ca299e72e6b851478fce6a10",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "output_sha256": {
+    "figure.pdf": "57b1d3c29da6cc6d995501dd5783332bf4db6e26a41ba4cc32210ab3ebe8ed9c",
+    "figure.png": "2cffeaeed980152e2259beefce0bb303e88eee03876daf4c5d6b3464cf160c13"
+  }
+}

@@ -1,7 +1,7 @@
 SHARED_RMD_DIR <- file.path(Sys.getenv("PANDORA_SHARED_ROOT"), "rmd")
 PANDORA_DIFFERENTIAL_RESULT_DIR <- file.path(ROOT_DIR,"result","differential")
 PANDORA_DESIGN <- Sys.getenv("PANDORA_DESIGN")
-ENDOSIRNA_COMPARE_DIR <- file.path(RESULT_DIR,"9_endosirna")
+ENDOSIRNA_COMPARE_DIR <- file.path(RESULT_DIR,if(Sys.getenv("PANDORA_SPECIES")=="Homo")"10_endosirna"else"9_endosirna")
 ENDOSIRNA_COMPARE_FIG <- file.path(ENDOSIRNA_COMPARE_DIR,"plots")
 ENDOSIRNA_COMPARE_TAB <- file.path(ENDOSIRNA_COMPARE_DIR,"tables")
 PROJECT_STAGE <- Sys.getenv("PROJECT_STAGE")

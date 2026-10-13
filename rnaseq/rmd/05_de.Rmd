@@ -233,7 +233,7 @@ if (nrow(sig_de) > 0) {
     primary = "result/05_de/5_6_top_DE_heatmap.pdf",
     width = 9,
     height = 11,
-    expr = pheatmap::pheatmap(
+    expr = pfos_pheatmap(
       heatmap_mat,
       annotation_col = annotation_col,
       annotation_colors = list(Group = group_colors),

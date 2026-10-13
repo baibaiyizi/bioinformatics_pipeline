@@ -671,7 +671,7 @@ check_required_tools() {
         fi
     fi
     if step_enabled 10 && [[ ! -x "$IDR_CMD" ]]; then
-        warn "IDR not available; Step 10 will be skipped."
+        warn "IDR not available; Step 9 will be skipped."
     fi
     if step_enabled 11 && ! command -v multiqc >/dev/null 2>&1; then
         warn "multiqc not available; Step 11 will be skipped."
@@ -686,34 +686,34 @@ check_required_tools() {
     fi
     if step_enabled 12; then
         if ! cmd_available "$TOBIAS_CMD"; then
-            warn "TOBIAS not available; Step 12 will only prepare consensus peaks and merged BAMs."
+            warn "TOBIAS not available; Step 10 will only prepare consensus peaks and merged BAMs."
         fi
         if [[ ! -f "$GENOME_FASTA" ]]; then
-            warn "Genome FASTA missing; TOBIAS Step 12 will be skipped."
+            warn "Genome FASTA missing; TOBIAS Step 10 will be skipped."
         fi
     fi
     if step_enabled 13; then
         if ! cmd_available "$TOBIAS_CMD"; then
-            warn "TOBIAS not available; Step 13 BINDetect will be skipped."
+            warn "TOBIAS not available; Step 11 BINDetect will be skipped."
         fi
         if [[ ! -f "$GENOME_FASTA" ]]; then
-            warn "Genome FASTA missing; TOBIAS Step 13 will be skipped."
+            warn "Genome FASTA missing; TOBIAS Step 11 will be skipped."
         fi
         if [[ -z "$TOBIAS_MOTIFS" || ! -f "$TOBIAS_MOTIFS" ]]; then
-            warn "TOBIAS motif database not configured; Step 13 BINDetect will be skipped."
+            warn "TOBIAS motif database not configured; Step 11 BINDetect will be skipped."
         fi
     fi
     if step_enabled 14; then
         if ! cmd_available "$FEATURECOUNTS_CMD"; then
-            warn "featureCounts not available; Step 14 will write SKIPPED rather than substitute alignment counts."
+            warn "featureCounts not available; Step 12 will write SKIPPED rather than substitute alignment counts."
         fi
     fi
     if step_enabled 15; then
         if ! cmd_available "$ATAQV_CMD"; then
-            warn "ataqv not available; Step 15 will write skipped status."
+            warn "ataqv not available; Step 13 will write skipped status."
         fi
         if [[ -z "$ATAQV_ORGANISM" ]]; then
-            warn "ATAQV_ORGANISM is not set; Step 15 will write skipped status unless configured."
+            warn "ATAQV_ORGANISM is not set; Step 13 will write skipped status unless configured."
         fi
     fi
 
@@ -1738,7 +1738,7 @@ step13_bindetect() {
     fi
     if [[ ! -s "$GENOME_FASTA" || -z "$TOBIAS_MOTIFS" || ! -s "$TOBIAS_MOTIFS" || ! -s "$peaks" || ! -s "$signal_comparison" || ! -s "$signal_reference" ]]; then
         write_bindetect_status "SKIPPED" "Required genome, motif, consensus peak or footprint signal input is missing"
-        warn "BINDetect inputs incomplete; run and verify Step 12 before Step 13."
+        warn "BINDetect inputs incomplete; run and verify Step 10 before Step 11."
         return 0
     fi
     local temp_manifest role path expected_hash
@@ -2242,8 +2242,8 @@ main() {
     log "  FRiP:     04counts/FRiP_scores.txt"
     log "  Counts:   04counts/consensus_peak_counts.raw.tsv"
     log "  Footprint:07footprinting/"
-    log "  BINDetect:07footprinting/bindetect_results.txt (Step 13, optional)"
-    log "  ataqv:    06qc_report/ataqv/Ataqv_QC_Status.tsv (Step 15, optional)"
+    log "  BINDetect:07footprinting/bindetect_results.txt (Step 11, optional)"
+    log "  ataqv:    06qc_report/ataqv/Ataqv_QC_Status.tsv (Step 13, optional)"
     log "  Manifest: metadata/sample_manifest.tsv"
     log "=============================================="
 }

@@ -1,0 +1,18 @@
+{
+  "status": "COMPLETED",
+  "recipe": "r_program_matrix",
+  "data_kind": "real_PFOS_frozen_source",
+  "statistics_recomputed": false,
+  "input_sha256": {
+    "program_matrix.tsv": "6f8830547bd618e1316a444b1bb17889d1b39042f143dac660dd6168263135fc",
+    "composition.tsv": "05110e95b5442a589e2fe221e5f12420aea6850adbbbf8380e6a6662061008b0"
+  },
+  "script_sha256": "222e2e5f5052d69fa963e20f84d3260453daced84ddf47d1bfdfd83b348ffc12",
+  "runner_sha256": "354956fefbaf8bb1c7d8e5125a3413269d04248f3b6c2ab5dab63e06ce9b33ac",
+  "style_sha256": "7fc1e558d3b0f23a916a74d2ab25d9b530c6f9a8ca299e72e6b851478fce6a10",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "output_sha256": {
+    "figure.pdf": "a90bfa0311013f1fc5c054e2557baf1310e99749db8022ae1db1a75082bb783f",
+    "figure.png": "a9a75b904d33e23a74476b21e6d78fd064ba9190aaac12f0713b160eb4462d9a"
+  }
+}

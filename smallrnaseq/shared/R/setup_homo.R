@@ -125,47 +125,47 @@ SPIKEIN_FIG        <- file.path(SPIKEIN_DIR, "plots")
 
 SPIKEIN_TAB        <- file.path(SPIKEIN_DIR, "tables")
 
-SETUP_DIR         <- file.path(RESULT_DIR, "1_setup")
+SETUP_DIR         <- file.path(RESULT_DIR, "01_setup")
 
 EXPRESSION_MATRIX_DIR <- file.path(SETUP_DIR, "1_expression_matrix")
 
-SINGLE_DIR        <- file.path(RESULT_DIR, "2_single")
+SINGLE_DIR        <- file.path(RESULT_DIR, "02_single")
 
 SINGLE_FIG        <- file.path(SINGLE_DIR, "plots")
 
 SINGLE_TAB        <- file.path(SINGLE_DIR, "tables")
 
-PCA_DIR           <- file.path(RESULT_DIR, "3_pca")
+PCA_DIR           <- file.path(RESULT_DIR, "03_pca")
 
 PCA_FIG           <- file.path(PCA_DIR, "plots")
 
 PCA_TAB           <- file.path(PCA_DIR, "tables")
 
-SNC_COMPARE_DIR   <- file.path(RESULT_DIR, "4_sncRNA_compare")
+SNC_COMPARE_DIR   <- file.path(RESULT_DIR, "04_sncRNA_compare")
 
 SNC_COMPARE_FIG   <- file.path(SNC_COMPARE_DIR, "plots")
 
 SNC_COMPARE_TAB   <- file.path(SNC_COMPARE_DIR, "tables")
 
-TSRNA_COMPARE_DIR <- file.path(RESULT_DIR, "5_tsrna_compare")
+TSRNA_COMPARE_DIR <- file.path(RESULT_DIR, "05_tsrna_compare")
 
 TSRNA_COMPARE_FIG <- file.path(TSRNA_COMPARE_DIR, "plots")
 
 TSRNA_COMPARE_TAB <- file.path(TSRNA_COMPARE_DIR, "tables")
 
-RSRNA_COMPARE_DIR <- file.path(RESULT_DIR, "6_rsrna_compare")
+RSRNA_COMPARE_DIR <- file.path(RESULT_DIR, "06_rsrna_compare")
 
 RSRNA_COMPARE_FIG <- file.path(RSRNA_COMPARE_DIR, "plots")
 
 RSRNA_COMPARE_TAB <- file.path(RSRNA_COMPARE_DIR, "tables")
 
-MIRNA_COMPARE_DIR <- file.path(RESULT_DIR, "7_mirna_compare")
+MIRNA_COMPARE_DIR <- file.path(RESULT_DIR, "07_mirna_compare")
 
 MIRNA_COMPARE_FIG <- file.path(MIRNA_COMPARE_DIR, "plots")
 
 MIRNA_COMPARE_TAB <- file.path(MIRNA_COMPARE_DIR, "tables")
 
-PIRNA_COMPARE_DIR <- file.path(RESULT_DIR, "8_pirna_compare")
+PIRNA_COMPARE_DIR <- file.path(RESULT_DIR, "08_pirna_compare")
 
 PIRNA_COMPARE_FIG <- file.path(PIRNA_COMPARE_DIR, "plots")
 
@@ -183,7 +183,7 @@ CAPTURE_BIAS_FIG   <- file.path(CAPTURE_BIAS_DIR, "plots")
 
 CAPTURE_BIAS_TAB   <- file.path(CAPTURE_BIAS_DIR, "tables")
 
-SNRNA_COMPARE_DIR  <- file.path(RESULT_DIR, "12_snRNA_compare")
+SNRNA_COMPARE_DIR  <- file.path(RESULT_DIR, "09_snRNA_compare")
 
 SNRNA_COMPARE_FIG  <- file.path(SNRNA_COMPARE_DIR, "plots")
 

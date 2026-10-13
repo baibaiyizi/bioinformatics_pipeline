@@ -11,7 +11,7 @@ for(e in parse(setup)) if(is.call(e) && identical(e[[1]], as.name('<-')) && is.s
 peaks <- read.csv(input,stringsAsFactors=FALSE)
 if(!'Comparison' %in% names(peaks) || length(unique(peaks$Comparison)) != 1L) stop('ATAC 来源缺少唯一比较方向')
 genes <- build_atac_gene_candidates(peaks)
-output <- file.path(root,'result/15_keygenes_locus_reports')
+output <- file.path(root,'result/13_keygenes_locus_reports')
 dir.create(file.path(output,'tables'),recursive=TRUE,showWarnings=FALSE)
 write.csv(genes,file.path(output,'tables/ATAC_Gene_Candidates.csv'),row.names=FALSE)
 key <- head(genes$geneSymbol,12)

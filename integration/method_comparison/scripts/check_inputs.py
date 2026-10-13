@@ -34,8 +34,8 @@ def main():
     for pair in {x['pair_id'] for x in paired}:
         members=[x for x in paired if x['pair_id']==pair]
         if len(members)!=2 or {x['method'] for x in members}!={'1','2'}:raise ValueError('UNVERIFIED: PairID必须各包含一个方法1和方法2文库')
-    if not (source/'1_setup/1_expression_matrix/class_reads.tsv').is_file():raise ValueError('MISSING: 标准类别计数矩阵')
-    if not (source/'2_single/tables/single_sample_qc_table.csv').is_file():raise ValueError('MISSING: 标准QC表')
+    if not (source/'01_setup/1_expression_matrix/class_reads.tsv').is_file():raise ValueError('MISSING: 标准类别计数矩阵')
+    if not (source/'02_single/tables/single_sample_qc_table.csv').is_file():raise ValueError('MISSING: 标准QC表')
     for row in metadata:
         if row['species'] not in {'Homo_sapiens','Homo sapiens'}:raise ValueError('UNVERIFIED: 方法比较只接受人类血清物种配置')
         for suffix in ('_summary.txt','_output.txt','_length_distribution.txt'):

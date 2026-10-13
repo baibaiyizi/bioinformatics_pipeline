@@ -204,11 +204,11 @@ plot_gsva_outputs <- function(gsva_list, leading_summary, heatmap_path, barplot_
       primary = heatmap_path,
       width = 10,
       height = 10,
-      expr = ComplexHeatmap::draw(
-        ComplexHeatmap::Heatmap(
+      expr = pfos_draw_heatmap(
+        pfos_heatmap(
           heat_scaled,
           name = "z-score",
-          col = heatmap_diverging_col_fun(heat_scaled),
+          col = heatmap_diverging_col_fun(heat_scaled,breaks=c(-2.5,0,2.5)),
           top_annotation = heatmap_group_annotation(sample_info[colnames(heat_scaled), "group"]),
           cluster_rows = TRUE,
           cluster_columns = TRUE,
@@ -290,11 +290,11 @@ run_gsva_module_correlation <- function(heat_mat, csv_path, pdf_path, source_lab
         primary = pdf_path,
         width = 10,
         height = 8,
-        expr = ComplexHeatmap::draw(
-          ComplexHeatmap::Heatmap(
+        expr = pfos_draw_heatmap(
+          pfos_heatmap(
             cor_mat,
             name = "r",
-            col = heatmap_diverging_col_fun(cor_mat, midpoint = 0),
+            col = heatmap_diverging_col_fun(cor_mat,midpoint=0,breaks=c(-1,0,1)),
             cluster_rows = TRUE,
             cluster_columns = TRUE,
             column_title = source_label

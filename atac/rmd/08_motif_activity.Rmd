@@ -554,9 +554,11 @@ if(length(chromvar_missing) > 0) {
     heatmap_mat <- motif_activity_z_mat[top_activity$motif_name, , drop = FALSE]
     sample_annotation <- data.frame(Group = group_vec, row.names = chromvar_sample_cols)
     if(should_render_plots() && nrow(top_activity) > 0) draw_pheatmap_dual(
-      step_plot_file("Step8", "ChromVAR_Motif_Activity_Heatmap.pdf"), width = 9, height = 11,
+      step_plot_file("Step8", "ChromVAR_Motif_Activity_Heatmap.pdf"), width = 9, height = 11, legend_title = "chromVAR Z",
       pheatmap(heatmap_mat, cluster_rows = nrow(heatmap_mat) > 1, cluster_cols = TRUE,
-               annotation_col = sample_annotation, annotation_colors = list(Group = viz_pal$group), color = viz_pal$heat_meth)
+               annotation_col = sample_annotation, annotation_colors = list(Group = viz_pal$group), color = viz_pal$heat_meth,
+               breaks = seq(-max(1, abs(motif_activity_z_mat), na.rm = TRUE), max(1, abs(motif_activity_z_mat), na.rm = TRUE), length.out = length(viz_pal$heat_meth) + 1),
+               na_col = unname(pfos_palette("neutral")["missing"]))
     )
     if(nrow(top_activity) == 0) write_skipped_state(
       "Step8", "ChromVAR_Motif_Activity_Heatmap", "No motif had a finite limma raw pvalue < 0.05.",

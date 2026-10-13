@@ -253,11 +253,11 @@ if (nrow(tf_activity_mat) > 1 && length(pathway_activity_list) > 0) {
       primary = "result/10_tf_regulator/10_8_TF_pathway_activity_correlation_heatmap.pdf",
       width = 10,
       height = 8,
-      expr = ComplexHeatmap::draw(
-        ComplexHeatmap::Heatmap(
-          cor_mat,
+      expr = pfos_draw_heatmap(
+        pfos_heatmap(
+          t(cor_mat),
           name = "r",
-          col = heatmap_diverging_col_fun(cor_mat, midpoint = 0),
+          col = heatmap_diverging_col_fun(cor_mat,midpoint=0,breaks=c(-1,0,1)),
           cluster_rows = TRUE,
           cluster_columns = TRUE
         )

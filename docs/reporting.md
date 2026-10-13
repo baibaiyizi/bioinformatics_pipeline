@@ -6,6 +6,8 @@
 
 使用中文，按结果模块及图表组织，先写实际图表信息，再写所支持的结论等级。需要自动摘要时用 `AUTO_CURRENT_SUMMARY_START` / `AUTO_CURRENT_SUMMARY_END` 包裹，标明生成日期和实际覆盖的运行；历史图不能冒充新源码已重跑。
 
+本次PFOS成图规范保留成熟图型、分面、组合和UpSet；统一183 mm宽、Liberation Sans、轴/图例标题8 pt、刻度/图例文字7 pt、白底RGB 300 dpi PNG和嵌入字体PDF。先统一活绘图对象，再组合；保留空轴、隐藏标题与旋转，不把导出图片缩放拼成统计面板。纯绘图单独记录执行及源表/对象/代码SHA，不重跑单组学差异和富集。缺少原拟合对象的MethylSeekR诊断按研究者选择保留历史图，并明确标为未统一重绘。
+
 固定七节结构：
 
 1. 实验层级与方向定义
@@ -155,21 +157,21 @@
 ### §2 脚本和结果目录
 
 - 列出主目录 / 结果目录 / Rmd 脚本完整清单。
-- 标准模块含义（以当前 `run_wgbs.sh` 实际模块为准，旧 9 号跨组学分支已退休；
-  `wgbs_sperm` 额外有 `11_sperm`）：
+- 标准模块含义（以当前 `run_wgbs.sh` 实际模块为准，单组学编号连续为 01–09；
+  `wgbs_sperm` 额外有 `10_sperm`）：
 
   | 模块 | 含义 |
   |------|------|
-  | `1_setup` | 路径、样本表、分组与比较方向初始化 |
-  | `2_qc` | 样本层 QC、覆盖度、相关性 / PCA |
-  | `3_dmr` | DSS DMR calling 和基因注释 |
-  | `4_dmroverview` | DMR 总体分布、长度、染色体负荷、TSS 距离 |
-  | `5_enrichment` | DMR 相关基因 GO / KEGG / GSEA |
-  | `6_genomecontext` | CpG island、repeat、genomic context |
-  | `7_regulatory` | motif、imprinted genes、repeatmasker 等调控注释 |
-  | `8_gene_methylation` | 纯基因甲基化汇总，保留区域数量与方向冲突 |
-  | `10_browser` | 代表位点浏览器图 |
-  | `11_sperm` | sperm 特有：精子发生阶段 / 父源遗传相关注释（仅 wgbs_sperm） |
+  | `01_setup` | 路径、样本表、分组与比较方向初始化 |
+  | `02_qc` | 样本层 QC、覆盖度、相关性 / PCA |
+  | `03_dmr` | DSS DMR calling 和基因注释 |
+  | `04_dmroverview` | DMR 总体分布、长度、染色体负荷、TSS 距离 |
+  | `05_enrichment` | DMR 相关基因 GO / KEGG / GSEA |
+  | `06_genomecontext` | CpG island、repeat、genomic context |
+  | `07_regulatory` | motif、imprinted genes、repeatmasker 等调控注释 |
+  | `08_gene_methylation` | 纯基因甲基化汇总，保留区域数量与方向冲突 |
+  | `09_browser` | 代表位点浏览器图 |
+  | `10_sperm` | sperm 特有：精子发生阶段 / 父源遗传相关注释（仅 wgbs_sperm） |
 
 - 说明 `05_enrichment` 下若含 `01_all / 02_up / 03_down` 三个方向目录
   （`up`=Hyper，`down`=Hypo），图件类型对称，解读时方向对应即可。
@@ -193,20 +195,20 @@
 - **imprinted / repeat 注释不能写成“已确认的功能性印记失调”**：只是富集 /
   共定位信号，需进一步验证。
 - **GSEA 各库严格 FDR 通过有限时，不能把单条通路写成严格显著**（需写明 `p.adjust` 上限）。
-- **缺失的模块结果不能推导“没有对应信号”**（如某项目未跑 `11_sperm`，
+- **缺失的模块结果不能推导“没有对应信号”**（如某项目未跑 `10_sperm`，
   不能写“精子相关甲基化无变化”）。
 
 ### §6 推荐阅读顺序
 
 - 推荐顺序：
-  1. `1_setup` 与 `2_qc`（覆盖度、PCA）确认样本质量
-  2. `3_dmr` 主表、火山图、DMR 总览
-  3. `4_dmroverview`（长度 / 染色体 / TSS 分布）
-  4. `5_enrichment`、`6_genomecontext`
-  5. `7_regulatory`（motif / imprinted / repeat）
-  6. `8_gene_methylation`（纯甲基化基因层汇总）；RNA 耦合另见 integration
-  7. `10_browser`（代表位点）
-  8. `11_sperm`（仅 sperm 项目）
+  1. `01_setup` 与 `02_qc`（覆盖度、PCA）确认样本质量
+  2. `03_dmr` 主表、火山图、DMR 总览
+  3. `04_dmroverview`（长度 / 染色体 / TSS 分布）
+  4. `05_enrichment`、`06_genomecontext`
+  5. `07_regulatory`（motif / imprinted / repeat）
+  6. `08_gene_methylation`（纯甲基化基因层汇总）；RNA 耦合另见 integration
+  7. `09_browser`（代表位点）
+  8. `10_sperm`（仅 sperm 项目）
 - 再列“最值得作为主图 / 主结果来源”的模块清单
   （DMR 总览、DMR 火山图、富集 top、纯基因甲基化汇总等）。
 
@@ -221,8 +223,8 @@
 - wgbs/<project>/result/05_enrichment/01_all/tables/*.csv  # GO/KEGG/GSEA（如有方向目录）
 - wgbs/<project>/result/06_genomecontext/tables/*.csv
 - wgbs/<project>/result/07_regulatory/tables/*.csv
-- result/8_gene_methylation/tables/1/gene_methylation_long.csv
-- result/8_gene_methylation/tables/1/gene_methylation_wide.csv
+- result/08_gene_methylation/tables/1/gene_methylation_long.csv
+- result/08_gene_methylation/tables/1/gene_methylation_wide.csv
 ```
 
 > 注意：WGBS 各模块的表格文件名**不固定**（不像 rna_seq 有 `5_1_*` 编号约定），
@@ -260,12 +262,12 @@ DMR 总数、Hyper/Hypo、promoter DMR、feature 计数均从该模块表核对�
 | `05_differential_accessibility` | 差异开放主表与方向 |
 | `06_genome_tracks` | 本组学代表位点轨道 |
 | `07_peak_gene_enrichment` | peak-gene 注释、GO/KEGG 与排序富集 |
-| `08_motif_activity` / `10_footprinting_tf_evidence` | motif、chromVAR、足迹及 TF 证据 |
-| `12_tf_gene_network` | 本组学 TF 位点网络 |
-| `13_conservation_gc` / `14_machine_learning` | 保守性/GC 和探索性预测 |
-| `15_keygenes_locus_reports` / `16_export_summary_manifest` | ATAC 候选与来源清单 |
+| `08_motif_activity` / `09_footprinting_tf_evidence` | motif、chromVAR、足迹及 TF 证据 |
+| `10_tf_gene_network` | 本组学 TF 位点网络 |
+| `11_sequence_conservation_gc` / `12_machine_learning` | 保守性/GC 和探索性预测 |
+| `13_keygenes_locus_reports` / `14_export_summary_manifest` | ATAC 候选与来源清单 |
 
-旧 09 RNA 和 11 WGBS 联合分支已退休，跨组学归 integration。UP/DOWN 各方向的富集和 motif 结果分别解释，UP 为开放度升高，DOWN 为降低。旧批次调试 `90_*` 不纳入当前主线。
+跨组学归 integration；本组学现役编号连续为 01–14。UP/DOWN 各方向的富集和 motif 结果分别解释，UP 为开放度升高，DOWN 为降低。旧批次调试 `90_*` 不纳入当前主线。
 
 ### §4 能直接支持什么
 
@@ -293,7 +295,15 @@ DMR 总数、Hyper/Hypo、promoter DMR、feature 计数均从该模块表核对�
 
 ### §7 优先读取文件
 
-逐项目列出实际 `result/*/tables` CSV：QC、peak 注释、差异开放、peak-gene 富集、motif/足迹、TF 网络和候选表。文件名以磁盘为准，优先给出 `result/15_keygenes_locus_reports/tables/ATAC_Gene_Candidates.csv`；旧模块编号不补造当前文件。
+逐项目列出实际 `result/*/tables` CSV：QC、peak 注释、差异开放、peak-gene 富集、motif/足迹、TF 网络和候选表。文件名以磁盘为准，优先给出 `result/13_keygenes_locus_reports/tables/ATAC_Gene_Candidates.csv`；未运行模块按真实状态说明，不补造当前文件。
 
 
 peak 总数、consensus 数、差异 UP/DOWN 数、TSS 强度和 genomic context 计数必须与实际 CSV 一致。原位点关联或最近基因注释不能升级为已验证的调控边。
+
+## 小提琴与主题背景的现役规则（2026-10-13）
+
+PFOS同类小提琴统一为透明度0.30的填色，不绘外轮廓和箱体；1.1mm实心点为中位数，0.25mm细线为Q1–Q3（有限观测值、type7分位数），不解释为置信区间。已有真实样本点保留，已有均值改为空心菱形并说明。普通笛卡尔图的横纵轴有可见刻度或标题时，补回左侧/下侧#333333轴线及刻度线；二者均采用profile的line_mm=0.35作为ggplot2 linewidth参数，不等同于PDF物理描边宽度；保留显式无轴布局、已有自定义轴线，以及热图、网络、流图等非普通坐标表达。普通panel、legend/key、facet strip采用白底；灰色缺失、未显著或有明确阅读含义的UpSet交替行保留，不能仅按像素颜色批量涂白。
+
+长标签分面必须在实际183mm导出宽度下可读；本轮RNA免疫采用实际组合三列分面，Human ortholog采用实际组合四列分面、family与换行后pathway合并为一个标题条带、每面板free_y及两个边界刻度，单页高度不超过240mm。PFOS七个context的实际最小范围为0.0029503，Human刻度仅按0.001显示精度格式化，实际值和边界位置保持；核对每面板两个显示值互异、全部标题完整、文字不交叠。其余原字段、值和分组保留，记录排版变化。随机绘图抽样必须冻结种子及实际选中行；旧随机子集未知时明确UNVERIFIED，不能声称与旧图同一抽样。
+
+新小提琴的真实来源示例与接口见[中心绘图库](../figures/README.md)；单项目同类图固定一种呈现。绘图临时目录由模块锁和进程生命周期管理，成功或失败都收尾，只在maintenance保留最小来源/命令/错误证据，不复制完整结果作为版本。

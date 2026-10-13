@@ -126,11 +126,11 @@ if (nrow(immune_heatmap_mat) >= 2) {
     primary = file.path(step12_dir, "16_6_immune_composition_heatmap.pdf"),
     width = 9,
     height = 10,
-    expr = ComplexHeatmap::draw(
-      ComplexHeatmap::Heatmap(
+    expr = pfos_draw_heatmap(
+      pfos_heatmap(
         immune_heatmap_scaled,
         name = "z-score",
-        col = heatmap_diverging_col_fun(immune_heatmap_scaled),
+        col = heatmap_diverging_col_fun(immune_heatmap_scaled,breaks=c(-2.5,0,2.5)),
         top_annotation = heatmap_group_annotation(sample_info$group),
         cluster_rows = TRUE,
         cluster_columns = TRUE,
@@ -161,14 +161,17 @@ immune_score_long <- bind_rows(
 
 if (nrow(immune_score_long) > 0) {
   immune_violin <- ggplot(immune_score_long, aes(x = group, y = score, fill = group)) +
-    geom_violin(trim = TRUE, alpha = 0.8) +
-    geom_boxplot(width = 0.18, outlier.size = 0.3, fill = viz_pal$neutral["light"]) +
-    facet_grid(method ~ cell_type, scales = "free_y") +
+    geom_violin(trim = TRUE, alpha = 0.30, colour = NA) +
+    stat_summary(fun.data = pfos_violin_summary, geom = "linerange", show.legend = FALSE, linewidth = 0.25, colour = pfos_palette("neutral")[["dark"]]) +
+    stat_summary(fun = function(y) pfos_violin_summary(y)$y, geom = "point", show.legend = FALSE, size = 1.1, colour = pfos_palette("neutral")[["dark"]]) +
+    facet_wrap(vars(method, cell_type), scales = "free_y", ncol = 3,
+      labeller = labeller(.default = function(x) stringr::str_wrap(gsub("_", " ", x, fixed = TRUE), width = 28))) +
     scale_fill_manual(values = group_colors) +
     labs(title = "Top differential immune infiltration signals", x = NULL, y = "Immune score") +
     theme_rnaseq_publication(base_size = viz_style$compact_size) +
-    theme(axis.text.x = element_text(angle = 45, hjust = 1))
-  save_plot_versions(immune_violin, file.path(step12_dir, "16_7_top_immune_boxplots.pdf"), width = 12, height = 8)
+    theme(strip.text.x = element_text(size = 7), axis.text.x = element_text(angle = 45, hjust = 1))
+  save_plot_versions(immune_violin, file.path(step12_dir, "16_7_top_immune_boxplots.pdf"), width = 12,
+    height = max(8, (20 + 35 * ceiling(nrow(dplyr::distinct(immune_score_long, method, cell_type)) / 3)) * 12 / 183))
 }
 
 if (nrow(immune_method_concordance) > 0) {
@@ -187,7 +190,7 @@ if (nrow(immune_method_concordance) > 0) {
   concord_df$correlation <- as.vector(concord_mat)
   concord_heatmap <- ggplot(concord_df, aes(feature_x, feature_y, fill = correlation)) +
     geom_tile(color = viz_pal$neutral["light"]) +
-    scale_fill_heatmap_diverging(midpoint = 0) +
+    scale_fill_heatmap_diverging(midpoint=0, limits=c(-1,1)) +
     labs(title = "Immune score sample-correlation heatmap", x = NULL, y = NULL, fill = "r") +
     theme_rnaseq_publication(base_size = viz_style$compact_size) +
     theme(axis.text.x = element_text(angle = 45, hjust = 1))
@@ -226,7 +229,7 @@ immune_rank_plot <- immune_rank_plot_tbl %>%
   ggplot(aes(x = label, y = logFC, fill = method)) +
   geom_col(width = 0.75) +
   coord_flip() +
-  scale_fill_manual(values = resolve_named_colors(c(viz_pal$group, viz_pal$accent), immune_rank_plot_tbl$method)) +
+  scale_fill_manual(values = resolve_named_colors(pfos_palette("rna_category"), immune_rank_plot_tbl$method)) +
   labs(title = "Differential immune infiltration ranking", x = NULL, y = paste0(group2_label, " - ", group1_label, " logFC")) +
   theme_rnaseq_publication()
 save_plot_versions(immune_rank_plot, file.path(step12_dir, "16_11_differential_immune_ranking_plot.pdf"), width = 9, height = 7)

@@ -1,0 +1,15 @@
+library_id	condition	cell_type	cells	proportion	interpretation
+PFOS_Lib01	PFOS	alpha	1958	0.1302294645826405	captured composition; no animal-level inference
+PFOS_Lib01	PFOS	beta	9068	0.6031260392417692	captured composition; no animal-level inference
+PFOS_Lib01	PFOS	delta	1453	0.0966411706019288	captured composition; no animal-level inference
+PFOS_Lib01	PFOS	endothelial	805	0.0535417359494512	captured composition; no animal-level inference
+PFOS_Lib01	PFOS	immune	231	0.0153641503159294	captured composition; no animal-level inference
+PFOS_Lib01	PFOS	mesenchymal	259	0.0172264715663451	captured composition; no animal-level inference
+PFOS_Lib01	PFOS	unknown	1261	0.0838709677419354	captured composition; no animal-level inference
+WT_Lib01	WT	alpha	1162	0.1168426344896933	captured composition; no animal-level inference
+WT_Lib01	WT	beta	5236	0.5264957264957265	captured composition; no animal-level inference
+WT_Lib01	WT	delta	1187	0.1193564605329311	captured composition; no animal-level inference
+WT_Lib01	WT	endothelial	768	0.0772247360482654	captured composition; no animal-level inference
+WT_Lib01	WT	immune	179	0.0179989944695827	captured composition; no animal-level inference
+WT_Lib01	WT	mesenchymal	237	0.0238310708898944	captured composition; no animal-level inference
+WT_Lib01	WT	unknown	1176	0.1182503770739064	captured composition; no animal-level inference

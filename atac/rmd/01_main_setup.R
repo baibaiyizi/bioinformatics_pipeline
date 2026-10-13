@@ -166,9 +166,24 @@ atac_publication_typography <- function(coordinate_system = c("axes", "none")) {
   out
 }
 
+atac_text_layers <- function(plot) {
+  if(inherits(plot,"patchwork"))plot$patches$plots<-lapply(plot$patches$plots,atac_text_layers)
+  if(inherits(plot,"ggplot"))for(i in seq_along(plot$layers)) {
+    layer<-plot$layers[[i]]
+    if(any(class(layer$geom)%in%c("GeomText","GeomTextRepel","GeomLabel","GeomLabelRepel")) &&
+       !"size"%in%names(layer$mapping) &&
+       (!"size"%in%names(plot$mapping) || !is.null(layer$aes_params$size))) {
+      plot$layers[[i]]$aes_params$size<-atac_figure_tick_size/ggplot2::.pt
+      plot$layers[[i]]$aes_params$family<-atac_figure_font_family
+    }
+  }
+  plot
+}
+
 atac_standardize_plot <- function(plot, coordinate_system = c("axes", "none")) {
   coordinate_system <- match.arg(coordinate_system)
   typography <- atac_publication_typography(coordinate_system)
+  plot<-atac_text_layers(plot)
   if(inherits(plot, "patchwork")) return(plot & typography)
   plot + typography
 }
@@ -561,7 +576,7 @@ if(file.exists(blacklist_file)) {
   report_status("WARN", "Blacklist 文件未找到；不能声称已完成 blacklist 过滤。")
 }
 
-step_dirs <- paste0("Step", c(2:8, 10, 12:16))
+step_dirs <- paste0("Step", 2:14)
 step_output_dirs <- stats::setNames(
   c(
     "02_project_inventory",
@@ -571,12 +586,12 @@ step_output_dirs <- stats::setNames(
     "06_genome_tracks",
     "07_peak_gene_enrichment",
     "08_motif_activity",
-    "10_footprinting_tf_evidence",
-    "12_tf_gene_network",
-    "13_sequence_conservation_gc",
-    "14_machine_learning",
-    "15_keygenes_locus_reports",
-    "16_export_summary_manifest"
+    "09_footprinting_tf_evidence",
+    "10_tf_gene_network",
+    "11_sequence_conservation_gc",
+    "12_machine_learning",
+    "13_keygenes_locus_reports",
+    "14_export_summary_manifest"
   ),
   step_dirs
 )
@@ -903,9 +918,32 @@ draw_object_expression_dual <- function(file, width = 10, height = 8, expr, dpi 
   )
 }
 
-draw_pheatmap_dual <- function(file, width = 10, height = 8, expr, dpi = plot_png_dpi, bg = "white") {
+atac_label_heatmap_legend <- function(plot_obj, title) {
+  # 原生gtable在实际导出设备内留出文字边距；不改变矩阵、聚类或图形层。
+  plot_obj$gtable$vp <- grid::viewport(width = grid::unit(1, "npc") - grid::unit(8, "mm"),
+    height = grid::unit(1, "npc") - grid::unit(8, "mm"))
+  if(is.null(title) || !nzchar(title)) return(plot_obj)
+  index <- which(plot_obj$gtable$layout$name == "legend")
+  if(length(index) != 1L) stop("pheatmap 数值图例缺失")
+  legend <- plot_obj$gtable$grobs[[index]]
+  for(j in seq_along(legend$children)) {
+    if(!is.null(legend$children[[j]]$y)) legend$children[[j]]$y <- legend$children[[j]]$y - grid::unit(12, "pt")
+  }
+  heading <- grid::textGrob(title, name = "quantity_title", x = grid::unit(0, "npc"), y = grid::unit(1, "npc"), just = c("left", "top"),
+    gp = grid::gpar(fontfamily = "Liberation Sans", fontsize = 7, fontface = "bold"))
+  plot_obj$gtable$grobs[[index]] <- grid::addGrob(legend, heading)
+  column <- plot_obj$gtable$layout$l[index]
+  old_width <- plot_obj$gtable$widths[column]
+  new_width <- grid::unit.pmax(old_width, grid::grobWidth(heading) + grid::unit(8, "pt"))
+  matrix_column <- plot_obj$gtable$layout$l[plot_obj$gtable$layout$name == "matrix"]
+  plot_obj$gtable$widths[matrix_column] <- plot_obj$gtable$widths[matrix_column] - (new_width - old_width)
+  plot_obj$gtable$widths[column] <- new_width
+  plot_obj
+}
+
+draw_pheatmap_dual <- function(file, width = 10, height = 8, expr, dpi = plot_png_dpi, bg = "white", legend_title = NULL) {
   expr_sub <- force_pheatmap_silent(substitute(expr))
-  plot_obj <- eval(expr_sub, envir = parent.frame())
+  plot_obj <- atac_label_heatmap_legend(eval(expr_sub, envir = parent.frame()), legend_title)
   export_obj <- atac_exportable_plot(plot_obj, width = width, height = height)
   atac_save_object_dual(
     plot_obj = export_obj,
@@ -942,10 +980,21 @@ draw_upset_dual <- function(file, width = 10, height = 8, expr, dpi = plot_png_d
 }
 
 draw_gviz_dual <- function(file, width = 10, height = 8, expr, dpi = plot_png_dpi, bg = "white") {
-  draw_base_plot_dual(file = file, width = width, height = height, expr = expr, dpi = dpi, bg = bg)
-  if(isTRUE(save_png_previews) && !file.exists(plot_png_file(file))) {
-    sync_pdf_preview_png(file, force = TRUE, density = dpi)
+  drawing<-substitute(expr);env<-parent.frame()
+  style<-function(x) {
+    if(!is.call(x))return(x)
+    if(grepl("plotTracks$",paste(deparse(x[[1]]),collapse=""))) {
+      x$fontsize<-atac_figure_base_size;x$cex<-1
+      x$cex.axis<-atac_figure_tick_size/atac_figure_base_size
+      x$cex.title<-1;x$cex.main<-1
+      x$fontsize.group<-7;x$cex.group<-1;x$fontfamily.group<-atac_figure_font_family
+      x$fontfamily<-atac_figure_font_family;x$fontfamily.title<-atac_figure_font_family
+    }
+    for(i in seq_along(x)[-1])if(!identical(x[[i]],quote(expr=)))x[[i]]<-style(x[[i]])
+    x
   }
+  drawing<-style(drawing)
+  pfos_save(function()eval(drawing,env),file,max(80,183*height/width))
   invisible(file)
 }
 
@@ -990,7 +1039,7 @@ sync_plot_previews <- function(plot_root_dir, force = FALSE, density = plot_png_
   invisible(unname(png_files[nzchar(png_files)]))
 }
 
-audit_plot_preview_pairs <- function(plot_root = plot_root_dir, step = "Step16") {
+audit_plot_preview_pairs <- function(plot_root = plot_root_dir, step = "Step14") {
   empty_audit <- data.frame(
     PdfPath = character(),
     PngPath = character(),
@@ -1094,7 +1143,7 @@ read_step_table <- function(step, file_name, ...) {
     "Footprint_Supported_Gene_Summary.csv", "TF_Gene_Concordance_Summary.csv",
     "TF_Evidence_Matrix.csv", "TF_Target_Module_Edges.csv"
   )
-  if(identical(step, "Step10") && file_name %in% bindetect_derived &&
+  if(identical(step, "Step9") && file_name %in% bindetect_derived &&
      !identical(validate_bindetect_provenance()$Status[1], "VERIFIED")) return(data.frame())
   file <- step_table_file(step, file_name)
   if(!file.exists(file)) return(data.frame())
@@ -1162,8 +1211,8 @@ read_consensus_count_library_size <- function() {
 
 build_stepwise_result_view <- function(result_dir = result_dir) {
   step_info <- data.frame(
-    Module = sprintf("Module%02d", c(2:8, 10, 12:16)),
-    Directory = unname(step_output_dirs[paste0("Step", c(2:8, 10, 12:16))]),
+    Module = sprintf("Module%02d", 2:14),
+    Directory = unname(step_output_dirs[paste0("Step", 2:14)]),
     Title = c(
       "Project inventory and run context",
       "ATAC sample QC and integrated grading",
@@ -1219,7 +1268,7 @@ build_stepwise_result_view <- function(result_dir = result_dir) {
     plot_abs <- file.path(step_dir, "plots")
     has_tables <- dir.exists(table_abs)
     has_plots <- dir.exists(plot_abs)
-    has_igv <- identical(info$Module, "Module16") && dir.exists(file.path(result_dir, "IGV"))
+    has_igv <- identical(info$Module, "Module14") && dir.exists(file.path(result_dir, "IGV"))
 
     if(!has_tables) dir.create(table_abs, recursive = TRUE, showWarnings = FALSE)
     if(!has_plots) dir.create(plot_abs, recursive = TRUE, showWarnings = FALSE)
@@ -1394,7 +1443,7 @@ plot_pixel_sd <- function(file) {
   NA_real_
 }
 
-audit_plot_integrity <- function(plot_root = plot_root_dir, step = "Step16") {
+audit_plot_integrity <- function(plot_root = plot_root_dir, step = "Step14") {
   deep_plot_audit <- env_bool("ATAC_DEEP_PLOT_AUDIT", FALSE)
   if(!dir.exists(plot_root)) {
     audit <- data.frame(
@@ -1610,6 +1659,17 @@ prepare_enrichment_plot_object <- function(enrich_obj, width = 38) {
   plot_obj
 }
 
+ratio_to_numeric <- function(x) {
+  vapply(strsplit(as.character(x), "/", fixed = TRUE), function(parts) {
+    nums <- suppressWarnings(as.numeric(parts))
+    if(length(nums) >= 2 && !any(is.na(nums[1:2])) && nums[2] != 0) {
+      nums[1] / nums[2]
+    } else {
+      suppressWarnings(as.numeric(parts[1]))
+    }
+  }, numeric(1))
+}
+
 plot_enrichment_suite <- function(enrich_obj, prefix, title, plot_dir, show_n = 15) {
   enrich_obj <- filter_enrich_result(enrich_obj, p_cutoff = 0.05)
   enrich_df <- tryCatch(as.data.frame(enrich_obj), error = function(e) data.frame())
@@ -1617,27 +1677,22 @@ plot_enrichment_suite <- function(enrich_obj, prefix, title, plot_dir, show_n = 
 
   plot_obj <- prepare_enrichment_plot_object(enrich_obj)
   show_n <- min(show_n, nrow(enrich_df))
-  # pvalue is plotted directly: reverse the RNA-seq enrichment palette so
-  # smaller (more significant) values are coral and larger values are blue.
-  pvalue_colors <- rev(unname(viz_pal$enrich_p))
+  # 展示派生值单独计算；冻结的 pvalue / p.adjust 不修改。
+  ora_plot_df <- enrich_df %>% arrange(pvalue, desc(Count)) %>% slice_head(n = show_n) %>%
+    mutate(GeneRatioNum = ratio_to_numeric(GeneRatio), NegLog10P = -log10(pmax(pvalue, 1e-300)),
+           Description = factor(Description, levels = rev(unique(Description))))
+  pvalue_colors <- unname(viz_pal$enrich_p)
   safe_save_enrichment_plot(
-    barplot(plot_obj, showCategory = show_n, color = "pvalue") +
-      labs(title = NULL) +
-      scale_fill_gradientn(colors = pvalue_colors) +
-      theme_atac_classic(base_size = 8),
-    file.path(plot_dir, paste0(prefix, "_barplot.pdf")),
-    width = 10,
-    height = 8
+    ggplot(ora_plot_df, aes(x = GeneRatioNum, y = Description, fill = NegLog10P)) +
+      geom_col(width = 0.75) + scale_fill_gradientn(colors = pvalue_colors, limits = unlist(pfos_profile$scales$ora_minus_log10_p), oob = scales::squish, breaks = seq(0, 10, 2), labels = c("0", "2", "4", "6", "8", "≥10")) +
+      labs(title = NULL, x = "Gene ratio", y = NULL, fill = "-log10(pvalue)") + theme_atac_classic(base_size = 8),
+    file.path(plot_dir, paste0(prefix, "_barplot.pdf")), width = 10, height = 8
   )
   safe_save_enrichment_plot(
-    enrichplot::dotplot(plot_obj, showCategory = show_n, color = "pvalue") +
-      labs(title = NULL) +
-      scale_color_gradientn(colors = pvalue_colors) +
-      scale_size(range = c(1.5, 4)) +
-      theme_atac_classic(base_size = 8),
-    file.path(plot_dir, paste0(prefix, "_dotplot.pdf")),
-    width = 10,
-    height = 8
+    ggplot(ora_plot_df, aes(x = GeneRatioNum, y = Description, color = NegLog10P, size = Count)) +
+      geom_point(alpha = 0.88) + scale_color_gradientn(colors = pvalue_colors, limits = unlist(pfos_profile$scales$ora_minus_log10_p), oob = scales::squish, breaks = seq(0, 10, 2), labels = c("0", "2", "4", "6", "8", "≥10")) + scale_size_area(max_size = 4.5) +
+      labs(title = NULL, x = "Gene ratio", y = NULL, color = "-log10(pvalue)", size = "Gene count") + theme_atac_classic(base_size = 8),
+    file.path(plot_dir, paste0(prefix, "_dotplot.pdf")), width = 10, height = 8
   )
 
   if(nrow(enrich_df) >= 3) {
@@ -1650,14 +1705,14 @@ plot_enrichment_suite <- function(enrich_obj, prefix, title, plot_dir, show_n = 
           showCategory = min(8L, show_n, nrow(as.data.frame(tree_obj))),
           nCluster = min(3L, 8L, show_n, nrow(as.data.frame(tree_obj))),
           label_format = 30,
-          fontsize_tiplab = 2.4,
-          fontsize_cladelab = 2.4,
+          fontsize_tiplab = 7 / ggplot2::.pt,
+          fontsize_cladelab = 7 / ggplot2::.pt,
           hilight = FALSE,
           align = "none",
           hexpand = 0.45,
           tiplab_offset = 0.1
         ) +
-          scale_color_gradientn(colors = pvalue_colors) +
+          scale_color_gradientn(colors = pvalue_colors, transform = scales::new_transform("neglog10", transform = function(x) -log10(pmax(x, 1e-300)), inverse = function(x) 10^(-x)), limits = c(1, 1e-10), oob = scales::squish, breaks = 10^(-seq(0, 10, 2)), labels = c("0", "2", "4", "6", "8", "≥10"), name = "-log10(pvalue)") +
           labs(title = NULL, x = NULL, y = NULL) +
           theme_atac_void(base_size = 8),
         file.path(plot_dir, paste0(prefix, "_treeplot.pdf")),
@@ -1670,14 +1725,15 @@ plot_enrichment_suite <- function(enrich_obj, prefix, title, plot_dir, show_n = 
 
   if(nrow(enrich_df) >= 5) {
     cnet_obj <- tryCatch(
-      enrichplot::cnetplot(plot_obj, showCategory = min(5, nrow(enrich_df)), node_label = "category"),
+      enrichplot::cnetplot(plot_obj, showCategory = min(5, nrow(enrich_df)), node_label = "category",
+        color_category = unname(pfos_palette("accent")["warm"]), color_item = viz_pal$neutral_mid, color_edge = viz_pal$neutral_mid),
       error = function(e) NULL
     )
     if(!is.null(cnet_obj)) {
       for(i in seq_along(cnet_obj$layers)) {
         geom_class <- class(cnet_obj$layers[[i]]$geom)
         if(any(geom_class %in% c("GeomText", "GeomTextRepel", "GeomLabel", "GeomLabelRepel"))) {
-          cnet_obj$layers[[i]]$aes_params$size <- 2.4
+          cnet_obj$layers[[i]]$aes_params$size <- 7 / ggplot2::.pt
         }
       }
       safe_save_enrichment_plot(
@@ -1697,16 +1753,7 @@ plot_compare_cluster_suite <- function(compare_obj, prefix, title, plot_dir, sho
   compare_obj <- filter_compare_cluster_result(compare_obj, p_cutoff = 0.05)
   compare_df <- tryCatch(as.data.frame(compare_obj), error = function(e) data.frame())
   if(is.null(compare_obj) || nrow(compare_df) == 0) return(invisible(NULL))
-  ratio_to_numeric <- function(x) {
-    vapply(strsplit(as.character(x), "/", fixed = TRUE), function(parts) {
-      nums <- suppressWarnings(as.numeric(parts))
-      if(length(nums) >= 2 && !any(is.na(nums[1:2])) && nums[2] != 0) {
-        nums[1] / nums[2]
-      } else {
-        suppressWarnings(as.numeric(parts[1]))
-      }
-    }, numeric(1))
-  }
+
 
   compare_df <- compare_df %>%
     mutate(
@@ -1714,6 +1761,7 @@ plot_compare_cluster_suite <- function(compare_obj, prefix, title, plot_dir, sho
       DescriptionShort = ifelse(nchar(Description) > 55, paste0(substr(Description, 1, 52), "..."), Description),
       GeneRatioNum = if("GeneRatio" %in% colnames(compare_df)) ratio_to_numeric(GeneRatio) else NA_real_,
       pvalue = suppressWarnings(as.numeric(pvalue)),
+      NegLog10P = -log10(pmax(as.numeric(pvalue), 1e-300)),
       p.adjust.num = if("p.adjust" %in% colnames(compare_df)) suppressWarnings(as.numeric(.data[["p.adjust"]])) else NA_real_,
       Count = suppressWarnings(as.numeric(Count))
     ) %>%
@@ -1726,25 +1774,23 @@ plot_compare_cluster_suite <- function(compare_obj, prefix, title, plot_dir, sho
   if(nrow(compare_df) == 0) return(invisible(NULL))
 
   cluster_cols <- resolve_named_colors(unique(compare_df$Cluster), c(viz_pal$group, viz_pal$de), fallback_colors = viz_pal$feature_accent)
-  # pvalue is plotted directly: reverse the RNA-seq enrichment palette so
-  # smaller (more significant) values are coral and larger values are blue.
-  pvalue_colors <- rev(unname(viz_pal$enrich_p))
+  pvalue_colors <- unname(viz_pal$enrich_p)
 
   dotplot_obj <- ggplot(
     compare_df,
-    aes(x = GeneRatioNum, y = reorder(DescriptionShort, GeneRatioNum), size = Count, color = pvalue)
+    aes(x = GeneRatioNum, y = reorder(DescriptionShort, GeneRatioNum), size = Count, color = NegLog10P)
   ) +
     geom_point(alpha = 0.85) +
     facet_wrap(~Cluster, scales = "free_y") +
-    scale_color_gradientn(colors = pvalue_colors) +
-    scale_size(range = c(1.5, 4.5)) +
+    scale_color_gradientn(colors = pvalue_colors, limits = unlist(pfos_profile$scales$ora_minus_log10_p), oob = scales::squish, breaks = seq(0, 10, 2), labels = c("0", "2", "4", "6", "8", "≥10")) +
+    scale_size_area(max_size = 4.5) +
     theme_atac_classic(base_size = 12) +
     labs(
       title = title,
       x = "Gene ratio",
       y = NULL,
       size = "Gene count",
-      color = "pvalue"
+      color = "-log10(pvalue)"
     )
   safe_save_enrichment_plot(
     dotplot_obj,
@@ -1801,17 +1847,14 @@ derive_feature_layer <- function(feature_vec) {
   )
 }
 
-resolve_named_colors <- function(levels_vec, palette_map, fallback_colors = NULL, default_color = "#D4D9DE") {
+resolve_named_colors <- function(levels_vec, palette_map, fallback_colors = NULL, default_color = "#B7BEC6") {
   levels_vec <- unique(as.character(levels_vec))
   cols <- unname(palette_map[levels_vec])
   names(cols) <- levels_vec
   missing_idx <- is.na(cols)
   if(any(missing_idx)) {
-    if(is.null(fallback_colors) || length(fallback_colors) == 0) {
-      cols[missing_idx] <- default_color
-    } else {
-      cols[missing_idx] <- rep(fallback_colors, length.out = sum(missing_idx))
-    }
+    # 无方向 term/cluster 使用名称身份色，集合子集和输入顺序不改变颜色。
+    cols[missing_idx] <- pfos_identity_colors(levels_vec[missing_idx])
   }
   cols
 }
@@ -2324,7 +2367,7 @@ diff_peak_granges <- function(df) {
 }
 
 build_footprint_supported_tables <- function() {
-  motif_candidates <- c(step_table_file("Step10", "Motif_Binding_Sites.csv"))
+  motif_candidates <- c(step_table_file("Step9", "Motif_Binding_Sites.csv"))
   anno_candidates <- c(
     step_table_file("Step7", "Annotated_DiffPeaks.csv")
   )
@@ -2378,9 +2421,9 @@ build_footprint_supported_tables <- function() {
     ) %>%
     arrange(desc(MotifCount), geneSymbol)
 
-  write.csv(edges, step_table_file("Step10", "Footprint_Supported_Motif_Target_Edges.csv"), row.names = FALSE)
-  write.csv(motif_summary, step_table_file("Step10", "Footprint_Supported_Motif_Summary.csv"), row.names = FALSE)
-  write.csv(gene_summary, step_table_file("Step10", "Footprint_Supported_Gene_Summary.csv"), row.names = FALSE)
+  write.csv(edges, step_table_file("Step9", "Footprint_Supported_Motif_Target_Edges.csv"), row.names = FALSE)
+  write.csv(motif_summary, step_table_file("Step9", "Footprint_Supported_Motif_Summary.csv"), row.names = FALSE)
+  write.csv(gene_summary, step_table_file("Step9", "Footprint_Supported_Gene_Summary.csv"), row.names = FALSE)
 
   list(edges = edges, motif_summary = motif_summary, gene_summary = gene_summary)
 }
@@ -2579,7 +2622,7 @@ cache_04_peak_context_path <- atac_state_file("04_peak_context.rds")
 cache_05_differential_accessibility_state_path <- atac_state_file("05_differential_accessibility_state.rds")
 cache_07_peak_gene_enrichment_state_path <- atac_state_file("07_peak_gene_enrichment_state.rds")
 cache_08_motif_state_path <- atac_state_file("08_motif_state.rds")
-cache_10_footprint_state_path <- atac_state_file("10_footprint_state.rds")
+cache_09_footprint_state_path <- atac_state_file("09_footprint_state.rds")
 
 save_state <- function(file_name, object_names, env = parent.frame()) {
   object_names <- unique(as.character(object_names))
@@ -2640,20 +2683,20 @@ load_atac_context <- function(module_id, env = parent.frame()) {
     return(invisible(NULL))
   }
 
-  if(module_id %in% c(5, 6, 7, 8, 10, 12, 13, 14, 15, 16)) {
+  if(module_id %in% c(5, 6, 7, 8, 9, 10, 11, 12, 13, 14)) {
     load_state("04_peak_context.rds", env = env, required = module_id %in% c(5, 6, 7, 8))
   }
-  if(module_id %in% c(6, 7, 8, 10, 12, 13, 14, 15, 16)) {
+  if(module_id %in% c(6, 7, 8, 9, 10, 11, 12, 13, 14)) {
     load_state("05_differential_accessibility_state.rds", env = env, required = TRUE)
   }
-  if(module_id %in% c(10, 12, 15, 16)) {
-    load_state("07_peak_gene_enrichment_state.rds", env = env, required = module_id %in% c(15))
+  if(module_id %in% c(9, 10, 13, 14)) {
+    load_state("07_peak_gene_enrichment_state.rds", env = env, required = module_id %in% c(13))
   }
-  if(module_id %in% c(10, 12, 15, 16)) {
-    load_state("08_motif_state.rds", env = env, required = module_id %in% c(10, 12))
+  if(module_id %in% c(9, 10, 13, 14)) {
+    load_state("08_motif_state.rds", env = env, required = module_id %in% c(9, 10))
   }
-  if(module_id %in% c(12, 15, 16)) {
-    load_state("10_footprint_state.rds", env = env, required = FALSE)
+  if(module_id %in% c(10, 13, 14)) {
+    load_state("09_footprint_state.rds", env = env, required = FALSE)
   }
 
   invisible(NULL)
@@ -2663,48 +2706,66 @@ load_atac_context <- function(module_id, env = parent.frame()) {
 # 绘图与组别配色
 # ------------------------------------------------------------------
 
-rna_group_palette <- stats::setNames(c("#A1C9F4", "#FF9F9B"), c(baseline_group, treatment_group))
+# 本地冻结的绘图实现与显式项目语义规范。
+source(file.path(work_dir, "rmd", "figure_style.R"), local = globalenv())
+rna_group_palette <- stats::setNames(unname(pfos_palette("group")[c("WT", "PFOS")]), c(baseline_group, treatment_group))
 
-
-rna_group_palette <- rna_group_palette[!duplicated(names(rna_group_palette))]
 group1_color <- unname(rna_group_palette[[baseline_group]])
 group2_color <- unname(rna_group_palette[[treatment_group]])
-rna_de_palette <- c(
-  "up" = "#FF9F9B",
-  "down" = "#A1C9F4",
-  "ns" = "#D4D9DE",
-  "Neutral" = "#D4D9DE"
-)
-rna_de_palette[comparison_open_label] <- "#FF9F9B"
-rna_de_palette[reference_open_label] <- "#A1C9F4"
+# DiffBind 3.20 的公开 Venn 入口不传递颜色；局部复制显示函数，保留原集合与布局。
+# 不修改包命名空间；Gain/Loss 始终采用与差异图相同的方向身份色。
+atac_plot_direction_venn <- function(DBA, ...) {
+  native_ns <- asNamespace("DiffBind")
+  display_env <- new.env(parent = native_ns)
+  native_venn <- get("vennPlot", envir = native_ns)
+  direction_colors <- unname(pfos_palette("de")[c("up", "down")])
+  display_env$vennPlot <- function(...) native_venn(..., lcol = direction_colors, lines = direction_colors)
+  for(name in c("pv.venn2", "pv.plotVenn", "dba.plotVenn")) {
+    native <- get(name, envir = native_ns)
+    environment(native) <- display_env
+    assign(name, native, envir = display_env)
+  }
+  display_env$dba.plotVenn(DBA, ...)
+}
 
-rna_de_palette <- rna_de_palette[!duplicated(names(rna_de_palette))]
-rna_sig_palette <- c("significant" = "#FF9F9B", "Significant" = "#FF9F9B", "ns" = "#D4D9DE", "Not Significant" = "#D4D9DE")
-rna_neutral_palette <- c("light" = "#FFFDF8", "mid" = "#D4D9DE", "dark" = "#5C6B73")
-rna_accent_palette <- c("warm" = "#FFB482", "green" = "#8DE5A1", "purple" = "#B39FDB", "yellow" = "#FDFFB6", "teal" = "#9ED9CC", "peach" = "#FFD3A8")
-rna_red_yellow_blue_palette <- c("low" = "#A1C9F4", "mid" = "#FDFFB6", "high" = "#FF9F9B")
-rna_red_yellow_blue_binary_palette <- c(
-  "zero" = unname(rna_red_yellow_blue_palette["low"]),
-  "mid" = unname(rna_red_yellow_blue_palette["mid"]),
-  "one" = unname(rna_red_yellow_blue_palette["high"])
-)
+# 保留 UpSetR 原生排序与布局；组集合用身份色，交集计数用中性色。
+atac_plot_peak_upset <- function(data) {
+  sets <- colnames(data)
+  ordered_sets <- sets[order(colSums(data), decreasing = TRUE)]
+  if(!all(sets %in% names(viz_pal$group))) stop("UpSet 分组身份未确认")
+  native_ns <- asNamespace("UpSetR")
+  display_env <- new.env(parent = native_ns)
+  sizes <- get("Make_size_plot", envir = native_ns)
+  short_count_labels <- function(e) {
+    if(!is.call(e)) return(e)
+    if(identical(e[[1]], as.name("scale_y_continuous"))) e$labels <- quote(scales::label_number(scale_cut = scales::cut_short_scale()))
+    for(j in seq_along(e)[-1]) if(!is.null(e[[j]]) && !identical(e[[j]], quote(expr=))) e[[j]] <- short_count_labels(e[[j]])
+    e
+  }
+  body(sizes) <- short_count_labels(body(sizes))
+  display_env$Make_size_plot <- sizes
+  draw <- UpSetR::upset
+  environment(draw) <- display_env
+  result <- draw(data, sets = sets, order.by = "freq", main.bar.color = viz_pal$neutral_mid, number.colors = viz_pal$neutral_dark,
+    sets.bar.color = unname(viz_pal$group[ordered_sets]),
+    text.scale = c(8/8.3, 1, 8/8.3, 1, 1, 7/(2.2*ggplot2::.pt)))
+  stopifnot(identical(result$Set_names, ordered_sets))
+  result$Sizes$widths[1] <- result$Sizes$widths[1] + grid::unit(12, "pt")
+  result
+}
 
-feature_core_pal <- c(
-  "Promoter" = "#FF9F9B",
-  "UTR" = "#FFD3A8",
-  "Exon" = "#FFB482",
-  "Intron" = "#A1C9F4",
-  "Downstream" = "#B39FDB",
-  "Intergenic" = "#8DE5A1",
-  "Other" = "#D4D9DE"
-)
-feature_alias_pal <- c(
-  "Upstream" = feature_core_pal["Promoter"],
-  "5' UTR" = feature_core_pal["UTR"],
-  "3' UTR" = feature_core_pal["UTR"],
-  "Gene Body" = "#9ED9CC",
-  "Distal" = feature_core_pal["Intergenic"]
-)
+rna_de_palette <- c(pfos_palette("de"), Neutral = unname(pfos_palette("de")["ns"]))
+rna_de_palette[comparison_open_label] <- unname(pfos_palette("de")["up"])
+rna_de_palette[reference_open_label] <- unname(pfos_palette("de")["down"])
+rna_sig_palette <- setNames(unname(pfos_palette("de")[c("up", "up", "ns", "ns")]), c("significant", "Significant", "ns", "Not Significant"))
+
+rna_neutral_palette <- pfos_palette("neutral")
+rna_accent_palette <- pfos_palette("accent")
+rna_red_yellow_blue_palette <- pfos_palette("diverging")
+rna_red_yellow_blue_binary_palette <- c(zero = unname(pfos_palette("binary")[1]), mid = unname(pfos_palette("binary")[1]), one = unname(tail(pfos_palette("binary"), 1)))
+
+feature_core_pal <- pfos_palette("feature")[c("Promoter", "UTR", "Exon", "Intron", "Downstream", "Intergenic", "Other")]
+feature_alias_pal <- c("Upstream" = unname(feature_core_pal["Promoter"]), "5' UTR" = unname(feature_core_pal["UTR"]), "3' UTR" = unname(feature_core_pal["UTR"]), "Gene Body" = unname(rna_accent_palette["teal"]), "Distal" = unname(feature_core_pal["Intergenic"]))
 
 viz_pal <- list(
   group = rna_group_palette,
@@ -2721,44 +2782,29 @@ viz_pal <- list(
   feature_accent = unname(rna_accent_palette),
   feature = c(feature_core_pal, feature_alias_pal),
   dmr = c("Hyper" = unname(rna_accent_palette["warm"]), "Hypo" = group1_color, "Neutral" = unname(rna_neutral_palette["mid"])),
-  quadrant = c(
-    "Hyper-Up" = unname(rna_red_yellow_blue_palette["high"]),
-    "Hyper-Down" = unname(rna_accent_palette["purple"]),
-    "Hypo-Down" = unname(rna_accent_palette["green"]),
-    "Hypo-Up" = unname(rna_red_yellow_blue_palette["low"]),
-    "NS" = unname(rna_neutral_palette["mid"])
-  ),
-  cgi = c(
-    "Island" = unname(rna_red_yellow_blue_palette["low"]),
-    "N_Shore" = unname(rna_accent_palette["green"]),
-    "S_Shore" = unname(rna_red_yellow_blue_palette["mid"]),
-    "N_Shelf" = unname(rna_accent_palette["warm"]),
-    "S_Shelf" = unname(rna_red_yellow_blue_palette["high"]),
-    "Open_Sea" = unname(rna_neutral_palette["mid"]),
-    "Others" = unname(rna_neutral_palette["mid"]),
-    "NS" = unname(rna_neutral_palette["mid"])
-  ),
-  status = c("PASS" = "#8DE5A1", "WARN" = "#FFB482", "NA" = "#D4D9DE"),
+  quadrant = pfos_palette("quadrant"),
+  cgi = pfos_palette("cgi"),
+  status = c("PASS" = unname(rna_accent_palette["green"]), "WARN" = unname(rna_accent_palette["warm"]), "NA" = unname(rna_neutral_palette["mid"])),
   overlap = c(
-    "Activated" = "#FF9F9B",
-    "Repressed" = "#A1C9F4",
-    "ATAC_up_RNA_down" = "#B39FDB",
-    "ATAC_down_RNA_up" = "#8DE5A1",
-    "Neutral" = "#D4D9DE"
+    "Activated" = unname(rna_red_yellow_blue_palette["high"]),
+    "Repressed" = unname(rna_red_yellow_blue_palette["low"]),
+    "ATAC_up_RNA_down" = unname(rna_accent_palette["purple"]),
+    "ATAC_down_RNA_up" = unname(rna_accent_palette["green"]),
+    "Neutral" = unname(rna_neutral_palette["mid"])
   ),
   candidate_status = c(
-    "DE_and_DAS_splicing" = "#FF9F9B",
-    "DE_splicing" = "#A1C9F4",
-    "DAS_splicing" = "#8DE5A1",
-    "Background_splicing" = "#D4D9DE"
+    "DE_and_DAS_splicing" = unname(rna_red_yellow_blue_palette["high"]),
+    "DE_splicing" = unname(rna_red_yellow_blue_palette["low"]),
+    "DAS_splicing" = unname(rna_accent_palette["green"]),
+    "Background_splicing" = unname(rna_neutral_palette["mid"])
   ),
-  tier = c("Tier1" = "#FF9F9B", "Tier2" = "#FFB482", "Tier3" = "#D4D9DE"),
-  go_category = c("BP" = "#FF9F9B", "CC" = "#A1C9F4", "MF" = "#B39FDB"),
-  enrich_p = rna_red_yellow_blue_palette,
-  score = c("pos" = "#FF9F9B", "neg" = "#A1C9F4"),
-  upset = c("sets" = group2_color, "main" = group1_color),
-  upset_sets = group2_color,
-  upset_main = group1_color,
+  tier = c("Tier1" = unname(rna_red_yellow_blue_palette["high"]), "Tier2" = unname(rna_accent_palette["warm"]), "Tier3" = unname(rna_neutral_palette["mid"])),
+  go_category = pfos_palette("go_category"),
+  enrich_p = pfos_palette("sequential"),
+  score = c("pos" = unname(rna_red_yellow_blue_palette["high"]), "neg" = unname(rna_red_yellow_blue_palette["low"])),
+  upset = c("sets" = unname(rna_neutral_palette["mid"]), "main" = unname(rna_neutral_palette["mid"])),
+  upset_sets = unname(rna_neutral_palette["mid"]),
+  upset_main = unname(rna_neutral_palette["mid"]),
   motif = unname(rna_accent_palette["green"]),
   burden_density = group1_color,
   burden_ratio = unname(rna_red_yellow_blue_palette["mid"]),
@@ -2766,13 +2812,13 @@ viz_pal <- list(
   track_cgi = unname(rna_red_yellow_blue_palette["mid"]),
   diverging = rna_red_yellow_blue_palette,
   heatmap_diverging = rna_red_yellow_blue_palette,
-  heatmap_sequential = rna_red_yellow_blue_palette,
+  heatmap_sequential = pfos_palette("sequential"),
   heatmap_binary = rna_red_yellow_blue_binary_palette,
-  heat = colorRampPalette(c("#A1C9F4", "#FDFFB6", "#FF9F9B"))(100),
-  heat_meth = colorRampPalette(c("#A1C9F4", "#FDFFB6", "#FF9F9B"))(100),
-  heat_warm = colorRampPalette(c("#FFFDF8", "#FDFFB6", "#FF9F9B"))(50),
-  heat_compare = colorRampPalette(c("#FFFDF8", "#A1C9F4", "#B39FDB"))(60),
-  transition = colorRampPalette(c("#FFFDF8", "#FDFFB6", "#FFB482", "#FF9F9B"))(100),
+  heat = colorRampPalette(c(unname(rna_red_yellow_blue_palette["low"]), unname(rna_red_yellow_blue_palette["mid"]), unname(rna_red_yellow_blue_palette["high"])))(100),
+  heat_meth = colorRampPalette(c(unname(rna_red_yellow_blue_palette["low"]), unname(rna_red_yellow_blue_palette["mid"]), unname(rna_red_yellow_blue_palette["high"])))(100),
+  heat_warm = colorRampPalette(c(unname(rna_neutral_palette["light"]), unname(rna_red_yellow_blue_palette["mid"]), unname(rna_red_yellow_blue_palette["high"])))(50),
+  heat_compare = colorRampPalette(c(unname(rna_neutral_palette["light"]), unname(rna_red_yellow_blue_palette["low"]), unname(rna_accent_palette["purple"])))(60),
+  transition = colorRampPalette(c(unname(rna_neutral_palette["light"]), unname(rna_red_yellow_blue_palette["mid"]), unname(rna_accent_palette["warm"]), unname(rna_red_yellow_blue_palette["high"])))(100),
   feature_fun = function(n) colorRampPalette(c(unname(rna_red_yellow_blue_palette), unname(rna_accent_palette)))(n),
   cgi_fun = function(n) colorRampPalette(c(group1_color, unname(rna_accent_palette["green"]), unname(rna_red_yellow_blue_palette["mid"]), unname(rna_accent_palette["warm"]), group2_color))(n),
   meth_bin_fun = function(n) colorRampPalette(unname(rna_red_yellow_blue_palette))(n)
@@ -2809,7 +2855,7 @@ build_color_palette_audit <- function() {
   }))
 }
 
-write_color_palette_audit <- function(step = "Step16") {
+write_color_palette_audit <- function(step = "Step14") {
   save_step_table(build_color_palette_audit(), step, "Color_Palette_Audit.csv")
 }
 
@@ -2928,22 +2974,16 @@ heatmap_diverging_col_fun <- function(x = NULL, midpoint = 0, breaks = NULL, col
   values <- as.numeric(x)
   values <- values[is.finite(values)]
   if(length(values) == 0) return(circlize::colorRamp2(c(-1, midpoint, 1), colors))
-  low_value <- min(values, na.rm = TRUE)
-  high_value <- max(values, na.rm = TRUE)
-  if(!is.finite(low_value) || !is.finite(high_value) || low_value == high_value) {
-    low_value <- midpoint - 1
-    high_value <- midpoint + 1
-  } else if(midpoint <= low_value || midpoint >= high_value) {
-    midpoint <- mean(c(low_value, high_value))
-  }
-  circlize::colorRamp2(c(low_value, midpoint, high_value), colors)
+  span <- max(abs(values - midpoint), na.rm = TRUE)
+  if(!is.finite(span) || span == 0) span <- 1
+  circlize::colorRamp2(c(midpoint - span, midpoint, midpoint + span), colors)
 }
 
 heatmap_sequential_col_fun <- function(x = NULL, breaks = NULL, colors = unname(viz_pal$heatmap_sequential)) {
   if(!is.null(breaks)) return(circlize::colorRamp2(breaks, colors))
   values <- as.numeric(x)
   values <- values[is.finite(values)]
-  if(length(values) == 0) return(circlize::colorRamp2(c(0, 0.5, 1), colors))
+  if(length(values) == 0) return(circlize::colorRamp2(seq(0, 1, length.out = length(colors)), colors))
   low_value <- min(values, na.rm = TRUE)
   high_value <- max(values, na.rm = TRUE)
   if(!is.finite(low_value) || !is.finite(high_value) || low_value == high_value) {
@@ -2951,11 +2991,11 @@ heatmap_sequential_col_fun <- function(x = NULL, breaks = NULL, colors = unname(
     high_value <- max(1, high_value)
   }
   mid_value <- mean(c(low_value, high_value))
-  circlize::colorRamp2(c(low_value, mid_value, high_value), colors)
+  circlize::colorRamp2(seq(low_value, high_value, length.out = length(colors)), colors)
 }
 
 heatmap_binary_col_fun <- function() {
-  circlize::colorRamp2(c(0, 0.5, 1), unname(viz_pal$heatmap_binary))
+  circlize::colorRamp2(c(0, 1), unname(pfos_palette("binary")))
 }
 
 scale_fill_heatmap_diverging <- function(midpoint = 0, limits = NULL, ...) {
@@ -2990,8 +3030,8 @@ scale_color_heatmap_diverging <- function(midpoint = 0, limits = NULL, ...) {
 
 scale_fill_heatmap_binary <- function(limits = c(0, 1), ...) {
   ggplot2::scale_fill_gradientn(
-    colors = unname(viz_pal$heatmap_binary),
-    values = c(0, 0.5, 1),
+    colors = unname(pfos_palette("binary")),
+    values = c(0, 1),
     limits = limits,
     ...
   )
@@ -3005,4 +3045,16 @@ build_atac_gene_candidates <- function(peak_tbl) {
     group_by(geneSymbol) %>% mutate(PeakCount = n(), DirectionConflict = any(Fold > 0) & any(Fold < 0)) %>%
     arrange(pvalue, desc(abs(Fold)), .by_group = TRUE) %>% slice_head(n = 1) %>% ungroup() %>%
     arrange(pvalue, desc(abs(Fold)), geneSymbol)
+}
+
+# 本地冻结的中心绘图规范，项目不读取中心模板运行时代码。
+
+atac_save_object_dual <- function(plot_obj, file, width=10, height=8,
+                                  standardize=FALSE, bg="white",
+                                  coordinate_system=c("axes","none")) {
+  if(is.null(plot_obj)||is.null(file))return(invisible(NULL))
+  plot_obj<-atac_text_layers(plot_obj)
+  if(standardize)plot_obj<-atac_standardize_plot(plot_obj,match.arg(coordinate_system))
+  pfos_save(plot_obj,file,max(80,183*height/width))
+  invisible(file)
 }

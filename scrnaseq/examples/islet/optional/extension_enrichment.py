@@ -31,60 +31,16 @@ import scanpy as sc
 from .runtime import atomic_json, atomic_text, atomic_tsv, sha256
 
 
-# Academic Figure Skill Typography Baseline — COPY VERBATIM, place at TOP of script
-mpl.rcParams.update({
-    "font.family": "sans-serif",
-    "font.sans-serif": ["Arial", "Helvetica", "Liberation Sans"],
-    "font.size": 8,
-    "axes.titlesize": 8,
-    "axes.labelsize": 8,
-    "xtick.labelsize": 7,
-    "ytick.labelsize": 7,
-    "legend.fontsize": 8,
-    "figure.titlesize": 9,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-    "axes.linewidth": 0.6,
-    "xtick.direction": "out",
-    "ytick.direction": "out",
-    "xtick.major.width": 0.6,
-    "ytick.major.width": 0.6,
-    "legend.frameon": False,
-})
-
-# Academic Figure Skill Nature/Cell/Science Color Palette -- COPY VERBATIM
-CATEGORICAL = ["#2166AC", "#B2182B", "#1B7837", "#F1A340", "#762A83", "#666666"]
-CATEGORICAL_EXTENDED = [
-    "#2166AC", "#B2182B", "#1B7837", "#F1A340", "#762A83", "#666666",
-    "#4393C3", "#D6604D", "#5AAE61", "#B35806", "#9970AB", "#999999",
-]
-DIVERGING = ["#2166AC", "#F7F7F7", "#B2182B"]
-SEQUENTIAL = ["#F7FBFF", "#6BAED6", "#08306B"]
-ACCENT_RED = "#B2182B"
-GREY = "#999999"
-BLACK = "#222222"
-
-# Academic Figure Skill Export Baseline — COPY VERBATIM
-mpl.rcParams.update({
-    "pdf.fonttype": 42,
-    "svg.fonttype": "none",
-    "savefig.bbox": "tight",
-    "savefig.dpi": 300,
-})
+from .plotting import save_figure as save_standard_figure
+from .figure_style import apply_style, PROFILE
+apply_style()
 
 
 def save_cns_figure(fig: plt.Figure, filename: str) -> None:
-    """Standard Academic Figure Skill export: vector PDF + 300dpi PNG preview."""
-    fig.savefig(f"{filename}.pdf", bbox_inches="tight", dpi=300)
-    fig.savefig(f"{filename}.png", bbox_inches="tight", dpi=300)
+    save_standard_figure(fig, Path(filename), dpi=300)
 
 
-DATABASE_COLORS = {
-    "GO_BP": "#0072B2",
-    "GO_CC": "#009E73",
-    "GO_MF": "#CC79A7",
-    "KEGG": "#D55E00",
-}
+DATABASE_COLORS = PROFILE["palettes"]["databases"]
 DATABASE_ORDER = ["GO_BP", "GO_CC", "GO_MF", "KEGG"]
 LEVEL_CN = {"cluster": "全图谱 cluster", "cell_type": "细胞类型", "beta_cluster": "β细胞子群"}
 MARKER_LOG2FC = 0.58
@@ -324,6 +280,7 @@ def _ensure_resources(
     r_script: Path,
     log_path: Path,
     project_root: Path,
+    rscript: Path,
 ) -> dict[str, Any]:
     resources_dir.mkdir(parents=True, exist_ok=True)
     genes = pd.DataFrame({"gene_symbol": sorted(set(map(str, gene_symbols)))})
@@ -341,7 +298,7 @@ def _ensure_resources(
     if not can_reuse:
         _run_r(
             [
-                "Rscript",
+                str(rscript),
                 str(r_script),
                 "build-resources",
                 "--resources-dir",
@@ -525,26 +482,40 @@ def _plot_group_ora(
         else:
             plot = shown.sort_values(["database", "pvalue"], ascending=[True, False]).reset_index(drop=True)
             height = min(9.0, max(3.8, 1.6 + 0.30 * len(plot)))
-            fig, ax = plt.subplots(figsize=(7.2, height))
+            if kind == "dotplot":
+                fig = plt.figure(figsize=(7.2, height + 0.6))
+                grid = fig.add_gridspec(2, 2, width_ratios=[1, 0.045], height_ratios=[1, 0.10])
+                ax = fig.add_subplot(grid[0, 0])
+                colorbar_ax = fig.add_subplot(grid[0, 1])
+                count_legend_ax = fig.add_subplot(grid[1, :])
+                count_legend_ax.set_axis_off()
+            else:
+                fig, ax = plt.subplots(figsize=(7.2, height))
             y = np.arange(len(plot))
             colors = [DATABASE_COLORS.get(db, "#777777") for db in plot["database"]]
             if kind == "dotplot":
-                sizes = 22 + 16 * np.sqrt(plot["overlap_count"].to_numpy(dtype=float))
+                sizes = 2 * plot["overlap_count"].to_numpy(dtype=float)
                 scatter = ax.scatter(
-                    plot["fold_enrichment"],
+                    plot["gene_ratio"],
                     y,
                     s=sizes,
                     c=plot["minus_log10_nominal_p"],
-                    cmap="viridis",
-                    edgecolors=colors,
-                    linewidths=1.0,
+                    cmap="viridis", vmin=PROFILE["scales"]["ora_minus_log10_p"][0], vmax=PROFILE["scales"]["ora_minus_log10_p"][1],
+                    edgecolors="#374151",
+                    linewidths=0.35,
                 )
-                ax.set_xlabel("Fold enrichment")
-                colorbar = fig.colorbar(scatter, ax=ax, pad=0.02)
-                colorbar.set_label("−log10(nominal P)", fontsize=8)
+                ax.set_xlabel("Gene ratio (overlap / tested query)")
+                ax.margins(x=0.12, y=0.04)
+                count_legend_ax.legend(handles=[ax.scatter([], [], s=2*n, color="#B7BEC6", label=str(n)) for n in (5, 20, 50)], title="Overlap genes (linear point area)", frameon=False, loc="center", ncol=3, fontsize=7, title_fontsize=7)
+                colorbar = fig.colorbar(scatter, cax=colorbar_ax)
+                colorbar.set_label("−log10(nominal P); ≥10 capped", fontsize=8)
             else:
-                ax.barh(y, plot["gene_ratio"], color=colors, alpha=0.88)
-                ax.set_xlabel("Marker gene ratio")
+                from matplotlib.colors import Normalize
+                norm = Normalize(*PROFILE["scales"]["ora_minus_log10_p"], clip=True)
+                ax.barh(y, plot["minus_log10_nominal_p"], color=plt.get_cmap("viridis")(norm(plot["minus_log10_nominal_p"])))
+                ax.set_xlabel("−log10(nominal P)")
+                colorbar = fig.colorbar(plt.cm.ScalarMappable(norm=norm, cmap="viridis"), ax=ax, pad=0.02)
+                colorbar.set_label("−log10(nominal P); ≥10 capped", fontsize=8)
             ax.set_yticks(y, plot["display_label"])
             ax.set_ylabel("")
             ax.set_title(f"Exploratory marker ORA — {analysis_level}: {group}\nnominal display; annotation only")
@@ -564,9 +535,9 @@ def _plot_group_ora(
                     f"{int(shown['passes_bh_0_05'].astype(bool).sum()) if not shown.empty else 0} 个同时通过族内BH；"
                     f"最突出条目为 {_top_theme_text(shown)}。"
                     + (
-                        "气泡横轴为富集倍数、大小为命中marker数、颜色为−log10(nominal P)，边框颜色区分数据库。"
+                        "气泡横轴为命中数/真实query_size，面积正比命中marker数，颜色为−log10(nominal P)，色阶0–10、≥10封顶；条目标签标明数据库。"
                         if kind == "dotplot"
-                        else "条长为marker基因比例，颜色区分数据库。"
+                        else "条长及颜色为−log10(nominal P)，色阶0–10、≥10封顶；条目标签标明数据库。"
                     )
                     + "这些P值仅用于细胞群功能注释，不是PFOS–WT条件推断。"
                 ),
@@ -613,7 +584,7 @@ def _overview_heatmap(result: pd.DataFrame, analysis_level: str, output_dir: Pat
             labels.append(label if len(label) <= 58 else label[:57] + "…")
         height = min(9.0, max(4.5, 1.8 + 0.28 * len(matrix)))
         fig, ax = plt.subplots(figsize=(7.2, height))
-        image = ax.imshow(matrix.to_numpy(), aspect="auto", cmap="magma", vmin=0)
+        image = ax.imshow(matrix.to_numpy(), aspect="auto", cmap="viridis", vmin=PROFILE["scales"]["ora_minus_log10_p"][0], vmax=PROFILE["scales"]["ora_minus_log10_p"][1])
         ax.set_xticks(np.arange(len(groups)), groups, rotation=45, ha="right")
         ax.set_yticks(np.arange(len(labels)), labels)
         ax.set_xlabel("Cluster" if analysis_level == "cluster" else "Cell type")
@@ -1482,6 +1453,8 @@ def run_enrichment(
     source_run: Path,
     output_dir: Path,
     resources_dir: Path,
+    *,
+    rscript: Path,
 ) -> dict[str, Any]:
     """Run marker ORA and descriptive full-rank pathway localization.
 
@@ -1544,6 +1517,7 @@ def run_enrichment(
         r_script,
         log_path,
         project_root,
+        rscript,
     )
     execution_inputs_path = output_dir / "execution_inputs.json"
     execution_snapshot = _freeze_execution_inputs(
@@ -1566,7 +1540,7 @@ def run_enrichment(
     )
     _run_r(
         [
-            "Rscript",
+            str(rscript),
             str(r_script),
             "run-ora",
             "--resources-dir",

@@ -1,0 +1,282 @@
+{
+  "profile_id": "bluepink_semantic_v2",
+  "typography": {
+    "width_mm": 183,
+    "dpi": 300,
+    "family": "Liberation Sans",
+    "text_pt": 8,
+    "tick_pt": 7,
+    "line_mm": 0.35
+  },
+  "palettes": {
+    "group": {
+      "WT": "#5F8FB3",
+      "PFOS": "#CE7C8E"
+    },
+    "de": {
+      "up": "#CE7C8E",
+      "down": "#5F8FB3",
+      "ns": "#B7BEC6"
+    },
+    "neutral": {
+      "light": "#F7F7F7",
+      "mid": "#B7BEC6",
+      "dark": "#374151",
+      "missing": "#E5E7EB"
+    },
+    "accent": {
+      "warm": "#D7A05D",
+      "green": "#73A88F",
+      "purple": "#9B83B2",
+      "yellow": "#D8C76D",
+      "teal": "#63A89A",
+      "peach": "#DCB49A"
+    },
+    "diverging": {
+      "low": "#5F8FB3",
+      "mid": "#F7F7F7",
+      "high": "#CE7C8E"
+    },
+    "sequential": [
+      "#440154",
+      "#472D7B",
+      "#3B528B",
+      "#2C728E",
+      "#21918C",
+      "#28AE80",
+      "#5EC962",
+      "#ADDC30",
+      "#FDE725"
+    ],
+    "binary": {
+      "zero": "#F7F7F7",
+      "one": "#5F8FB3"
+    },
+    "quadrant": {
+      "Hyper-Up": "#CE7C8E",
+      "Hyper-Down": "#9B83B2",
+      "Hypo-Up": "#63A89A",
+      "Hypo-Down": "#5F8FB3",
+      "NS": "#B7BEC6"
+    },
+    "go_category": {
+      "BP": "#CE7C8E",
+      "CC": "#5F8FB3",
+      "MF": "#9B83B2"
+    },
+    "assay": {
+      "rna": "#5F8FB3",
+      "wgbs": "#9B83B2",
+      "atac": "#63A89A",
+      "metabolomics": "#D7A05D",
+      "scrnaseq": "#CE7C8E"
+    },
+    "context": {
+      "sperm": "#8A739A",
+      "2cell": "#83B1C2",
+      "8cell": "#638FB1",
+      "blastocyst": "#496F96",
+      "brain": "#9B83B2",
+      "heart": "#CE7C8E",
+      "liver": "#63A89A",
+      "testis": "#D7A05D",
+      "islet": "#B09A6B"
+    },
+    "cell_type": {
+      "alpha": "#5F8FB3",
+      "beta": "#CE7C8E",
+      "delta": "#9B83B2",
+      "endothelial": "#63A89A",
+      "immune": "#D7A05D",
+      "mesenchymal": "#73A88F",
+      "unknown": "#B7BEC6"
+    },
+    "feature": {
+      "Promoter": "#CE7C8E",
+      "5' UTR": "#D7A05D",
+      "3' UTR": "#DCB49A",
+      "Exon": "#9B83B2",
+      "Intron": "#63A89A",
+      "Downstream": "#73A88F",
+      "Distal Intergenic": "#5F8FB3",
+      "Intergenic": "#5F8FB3",
+      "UTR": "#D7A05D",
+      "Other": "#B7BEC6"
+    },
+    "cgi": {
+      "CGI": "#9B83B2",
+      "shore": "#63A89A",
+      "shelf": "#D7A05D",
+      "OpenSea": "#B7BEC6",
+      "Island": "#9B83B2",
+      "N_Shore": "#63A89A",
+      "S_Shore": "#63A89A",
+      "N_Shelf": "#D7A05D",
+      "S_Shelf": "#D7A05D",
+      "Open_Sea": "#B7BEC6",
+      "Others": "#B7BEC6",
+      "NS": "#B7BEC6"
+    },
+    "clusters": {
+      "0": "#3B6E8F",
+      "1": "#C77586",
+      "2": "#4F927D",
+      "3": "#9273A6",
+      "4": "#C38D47",
+      "5": "#6E9BAC",
+      "6": "#AC6C5A",
+      "7": "#798647",
+      "8": "#5A7477",
+      "9": "#B495AB",
+      "10": "#88735E",
+      "11": "#7585AE",
+      "12": "#A65B73"
+    },
+    "beta_clusters": {
+      "0": "#3B6E8F",
+      "1": "#C77586",
+      "2": "#4F927D",
+      "3": "#9273A6",
+      "4": "#C38D47"
+    },
+    "databases": {
+      "GO_BP": "#CE7C8E",
+      "GO_CC": "#5F8FB3",
+      "GO_MF": "#9B83B2",
+      "KEGG": "#D7A05D",
+      "Reactome": "#63A89A"
+    },
+    "cell_cycle": {
+      "G1": "#B7BEC6",
+      "S": "#5F8FB3",
+      "G2M": "#CE7C8E"
+    },
+    "rna_method": {
+      "DE": "#D7A05D",
+      "DAS": "#5F8FB3",
+      "DEU": "#63A89A",
+      "IS": "#9B83B2",
+      "APA": "#73A88F",
+      "DER": "#DCB49A",
+      "DSFA": "#D8C76D"
+    },
+    "rna_category": {
+      "DE": "#D7A05D",
+      "DAS": "#5F8FB3",
+      "DEU": "#63A89A",
+      "IS": "#9B83B2",
+      "APA": "#73A88F",
+      "DER": "#DCB49A",
+      "DSFA": "#D8C76D",
+      "Before filtering": "#63A89A",
+      "After filtering": "#D7A05D",
+      "SE": "#5F8FB3",
+      "A3SS": "#73A88F",
+      "A5SS": "#9B83B2",
+      "MXE": "#D7A05D",
+      "RI": "#CE7C8E",
+      "IPA": "#73A88F",
+      "switch_genes": "#9B83B2",
+      "switch_isoforms": "#63A89A",
+      "genes_with_pair_summary": "#D7A05D",
+      "ssGSEA": "#5F8FB3",
+      "mMCPcounter": "#9B83B2",
+      "intergenic": "#5F8FB3",
+      "other": "#B7BEC6",
+      "unclustered": "#B7BEC6",
+      "multi_evidence_genes": "#374151",
+      "high_support_genes": "#CE7C8E",
+      "de_genes": "#D7A05D",
+      "das_genes": "#5F8FB3",
+      "deu_genes": "#63A89A",
+      "is_genes": "#9B83B2",
+      "apa_genes": "#73A88F",
+      "der_genes": "#DCB49A",
+      "exon": "#9B83B2",
+      "intron": "#63A89A",
+      "promoter": "#CE7C8E",
+      "utr": "#D7A05D"
+    },
+    "enrichment_category": {
+      "BP": "#CE7C8E",
+      "CC": "#5F8FB3",
+      "MF": "#9B83B2",
+      "Metabolism": "#D7A05D",
+      "Signaling": "#63A89A",
+      "Disease": "#DCB49A",
+      "Human Diseases": "#DCB49A",
+      "Immune": "#73A88F",
+      "Cellular Process": "#D8C76D",
+      "Cellular Processes": "#D8C76D",
+      "Environmental Information Processing": "#63A89A",
+      "Genetic Information Processing": "#9B83B2",
+      "Organismal Systems": "#73A88F",
+      "Transport": "#374151",
+      "Development": "#D8C76D",
+      "Stress": "#B7BEC6",
+      "Mixed": "#374151",
+      "GO": "#5F8FB3",
+      "KEGG": "#D7A05D",
+      "Reactome": "#9B83B2",
+      "Hallmark": "#63A89A",
+      "Process": "#CE7C8E",
+      "Component": "#5F8FB3",
+      "Function": "#9B83B2",
+      "RCTM": "#9B83B2",
+      "WikiPathways": "#73A88F",
+      "COMPARTMENTS": "#9B83B2",
+      "NetworkNeighborAL": "#374151"
+    }
+  },
+  "scales": {
+    "correlation": [
+      -1,
+      1
+    ],
+    "methylation_fraction": [
+      0,
+      1
+    ],
+    "methylation_percent": [
+      0,
+      100
+    ],
+    "effect_midpoint": 0,
+    "missing_color": "#E5E7EB",
+    "marker_zscore": [
+      -2.5,
+      2.5
+    ],
+    "ora_minus_log10_p": [
+      0,
+      10
+    ],
+    "row_zscore": [
+      -2.5,
+      2.5
+    ],
+    "nes": [
+      -3,
+      3
+    ]
+  },
+  "recipe_selection": {
+    "ora_dot": "semantic_dot_v2",
+    "gsea_dot": "semantic_dot_v2",
+    "marker_dot": "expression_fraction_dot_v2",
+    "effect_heatmap": "annotated_matrix_v2",
+    "correlation_heatmap": "fixed_correlation_v2",
+    "absolute_methylation_heatmap": "fraction_matrix_v2",
+    "evidence_matrix": "layered_evidence_v2",
+    "program_card": "context_program_v2",
+    "locus": "shared_locus_v2",
+    "background_calibration": "conditional_null_v2"
+  },
+  "category_identity": {
+    "method": "murmur3_hcl",
+    "seed": 1,
+    "chroma": 50,
+    "luminance": 62,
+    "meaning": "Arbitrary identity only; no direction, significance, or cross-context biological equivalence."
+  }
+}

@@ -43,9 +43,9 @@ def main():
                     raise ValueError('STALE_OUTPUTS: ' + str(path))
             inputs += [current / 'run_status.tsv', signature_path]
         tables = [
-            ('方法捕获注释层', 'differential/9_differential_capture/tables/04_annotation/capture_results_method2_vs_method1.csv'),
-            ('配对设计', 'differential/9_differential_capture/tables/capture_contrast_manifest.csv'),
-            ('外参过程 QC', 'describe/13_spikein_qc/tables/spikein_qc_summary.csv'),
+            ('方法捕获注释层', 'differential/04_differential_capture/tables/04_annotation/capture_results_method2_vs_method1.csv'),
+            ('配对设计', 'differential/04_differential_capture/tables/capture_contrast_manifest.csv'),
+            ('外参过程 QC', 'describe/03_spikein_qc/tables/spikein_qc_summary.csv'),
         ]
         annotation = read(root / 'result' / tables[0][1])
         contrast = read(root / 'result' / tables[1][1])[0]
@@ -82,16 +82,16 @@ def main():
             path = root / 'result' / relative
             inputs.append(path)
             report.append(f'- [{title}](result/{relative})')
-        report += ['', '历史输出、旧源码与日志保存在本模块内部 history，保留原执行身份；当前结论以本轮重新执行的结果为准。', '', '## 主要图及解释', '']
+        report += ['', '历史输出、旧源码与日志保存在本模块内部 history，保留原执行身份；当前结论以本轮重新执行的结果为准。', '', '分析顺序：01_setup → 02_method_similarity → 03_spikein_qc → 04_differential_capture → 05_capture_bias_diagnostics。外参类别图在 03_spikein_qc/profiles 内按 01–05 连续编号。', '', '## 主要图及解释', '']
         figures = [
-            ('方法间 RNA 组成', 'describe/11_method_similarity/plots/02_rna_class_composition/rna_class_composition_by_method', '按文库比较 RNA 类别占比，判断不同方法捕获的 RNA 谱。占比依赖总 reads 分母，不能直接视为绝对 RNA 产量。'),
-            ('观察到的检出广度', 'describe/11_method_similarity/plots/03_detection_sensitivity/observed_detection_counts', '展示当前深度下实际检出的特征数。方法 3–6 各只有一库，检出差异同时受测序深度影响，不能据此作普遍方法排名。'),
-            ('技术分装的一致性', 'describe/11_method_similarity/plots/06_reproducibility/technical_replicate_agreement', '检查同一方法内部技术分装的一致性；相关性用于评估技术稳定性，不能增加供体数。'),
-            ('外参观察信号', 'describe/13_spikein_qc/plots/spikein_detection_overview', '供体 3 的 cel-miR-39 精确匹配与近似匹配分别报告；没有已知全过程回收标定，不能从 reads 推算提取回收率。'),
-            ('供体 3 深度敏感性', 'describe/13_spikein_qc/plots/paired_depth_sensitivity', '供体 3 两库单独比较观察深度和等深度抽样敏感性，反映该次实验的技术抽样波动，不参与供体 2 的方法排名。'),
-            ('注释层差异捕获', 'differential/9_differential_capture/plots/04_annotation/capture_volcano_method2_vs_method1', '横轴向右表示方法 2 捕获较高，向左表示方法 1 较高；纵轴为显著性。结论限于该供体的技术捕获差异，逐项数值见注释层结果表。'),
-            ('类别层差异捕获', 'differential/9_differential_capture/plots/02_category/capture_volcano_method2_vs_method1', '把序列捕获差异汇总到 RNA 大类，分清类别整体变化与少数注释特征变化；同样采用方法 2−方法 1 方向。'),
-            ('配对捕获方向的一致性', 'differential/10_capture_bias_diagnostics/plots/02_pair_consistency/capture_pair_logfc_consistency', '每个面板比较两个 PairID 的序列 log2FC。第一、三象限表示方向一致，第二、四象限提示方向不一致；每个点是序列，不是独立供体。'),
+            ('方法间 RNA 组成', 'describe/02_method_similarity/plots/02_rna_class_composition/rna_class_composition_by_method', '按文库比较 RNA 类别占比，判断不同方法捕获的 RNA 谱。占比依赖总 reads 分母，不能直接视为绝对 RNA 产量。'),
+            ('观察到的检出广度', 'describe/02_method_similarity/plots/03_detection_sensitivity/observed_detection_counts', '展示当前深度下实际检出的特征数。方法 3–6 各只有一库，检出差异同时受测序深度影响，不能据此作普遍方法排名。'),
+            ('技术分装的一致性', 'describe/02_method_similarity/plots/06_reproducibility/technical_replicate_agreement', '检查同一方法内部技术分装的一致性；相关性用于评估技术稳定性，不能增加供体数。'),
+            ('外参观察信号', 'describe/03_spikein_qc/plots/spikein_detection_overview', '供体 3 的 cel-miR-39 精确匹配与近似匹配分别报告；没有已知全过程回收标定，不能从 reads 推算提取回收率。'),
+            ('供体 3 深度敏感性', 'describe/03_spikein_qc/plots/paired_depth_sensitivity', '供体 3 两库单独比较观察深度和等深度抽样敏感性，反映该次实验的技术抽样波动，不参与供体 2 的方法排名。'),
+            ('注释层差异捕获', 'differential/04_differential_capture/plots/04_annotation/capture_volcano_method2_vs_method1', '横轴向右表示方法 2 捕获较高，向左表示方法 1 较高；纵轴为显著性。结论限于该供体的技术捕获差异，逐项数值见注释层结果表。'),
+            ('类别层差异捕获', 'differential/04_differential_capture/plots/02_category/capture_volcano_method2_vs_method1', '把序列捕获差异汇总到 RNA 大类，分清类别整体变化与少数注释特征变化；同样采用方法 2−方法 1 方向。'),
+            ('配对捕获方向的一致性', 'differential/05_capture_bias_diagnostics/plots/02_pair_consistency/capture_pair_logfc_consistency', '每个面板比较两个 PairID 的序列 log2FC。第一、三象限表示方向一致，第二、四象限提示方向不一致；每个点是序列，不是独立供体。'),
         ]
         for number, (title, relative, note) in enumerate(figures, 1):
             for suffix in ['.png', '.pdf']:

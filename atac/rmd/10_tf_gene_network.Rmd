@@ -1,0 +1,88 @@
+## Module 10. 基因调控网络分析
+
+使用igraph构建基于差异Peak关联基因和转录因子的调控网络。
+
+```{r network_analysis}
+network_peak_genes <- if(file.exists(step_table_file("Step7", "Annotated_DiffPeaks.csv"))) {
+  read.csv(step_table_file("Step7", "Annotated_DiffPeaks.csv"), stringsAsFactors = FALSE)
+} else {
+  data.frame()
+}
+if(nrow(network_peak_genes) > 0 && "SYMBOL" %in% colnames(network_peak_genes) && !"geneSymbol" %in% colnames(network_peak_genes)) {
+  colnames(network_peak_genes)[colnames(network_peak_genes) == "SYMBOL"] <- "geneSymbol"
+}
+
+network_edges <- data.frame()
+network_edge_source <- NA_character_
+
+candidate_network_tables <- list(
+  Step09_TF_Target_Module = read_step_table("Step9", "TF_Target_Module_Edges.csv"),
+  Step09_Footprint_Motif_Target = read_step_table("Step9", "Footprint_Supported_Motif_Target_Edges.csv")
+)
+
+for(edge_name in names(candidate_network_tables)) {
+  edge_tbl <- candidate_network_tables[[edge_name]]
+  if(nrow(edge_tbl) == 0) next
+  if(all(c("motif_name", "geneSymbol") %in% colnames(edge_tbl))) {
+    network_edges <- edge_tbl %>%
+      transmute(source = motif_name, target = geneSymbol, type = "footprint_or_motif_site_supported")
+  } else if(all(c("source", "target") %in% colnames(edge_tbl))) {
+    network_edges <- edge_tbl %>%
+      transmute(source = source, target = target, type = if("type" %in% colnames(edge_tbl)) type else "evidence_supported")
+  }
+  network_edges <- network_edges %>%
+    filter(!is.na(source), source != "", !is.na(target), target != "") %>%
+    distinct()
+  if(nrow(network_edges) > 0) {
+    network_edge_source <- edge_name
+    break
+  }
+}
+
+if(nrow(network_edges) > 0) {
+  g <- graph_from_data_frame(network_edges, directed = TRUE)
+  set.seed(123)
+  p_network <- ggraph(g, layout = "fr") +
+    geom_edge_link(alpha = 0.35, edge_width = 0.5, color = viz_pal$neutral_dark) +
+    geom_node_point(aes(size = degree(g)), color = viz_pal$motif) +
+    geom_node_text(aes(label = name), repel = TRUE, size = 3) +
+    theme_void() +
+    labs(title = "Evidence-supported TF-target gene regulatory network",
+         subtitle = paste("Edge source:", network_edge_source))
+  save_plot_pdf(
+    p_network,
+    step_plot_file("Step10", "TF_Target_Network.pdf"),
+    width = 12,
+    height = 10,
+    coordinate_system = "none"
+  )
+  print(p_network)
+
+  write.csv(network_edges, step_table_file("Step10", "Network_Edges.csv"), row.names = FALSE)
+
+  node_degrees <- degree(g)
+  betweenness_centrality <- betweenness(g)
+  pagerank_scores <- page_rank(g)$vector
+
+  network_stats <- data.frame(
+    gene = names(node_degrees),
+    degree = node_degrees,
+    betweenness = betweenness_centrality,
+    pagerank = pagerank_scores
+  )
+
+  write.csv(network_stats, step_table_file("Step10", "Network_Node_Statistics.csv"), row.names = FALSE)
+  cat("网络节点数:", vcount(g), "\n")
+  cat("网络边数:", ecount(g), "\n")
+  cat("平均度数:", mean(node_degrees), "\n")
+} else {
+  write_skipped_state(
+    "Step10",
+    "TF_Target_Network",
+    "No footprint- or motif-site-supported TF-target edge table was available; skipped pseudo TF-target inference.",
+    clear_plot_files = "TF_Target_Network.pdf"
+  )
+}
+
+write_module_status_plot("Step10", "Module 10 TF-gene network status")
+```

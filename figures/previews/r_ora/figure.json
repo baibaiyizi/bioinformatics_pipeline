@@ -1,0 +1,17 @@
+{
+  "status": "COMPLETED",
+  "recipe": "r_ora",
+  "data_kind": "real_PFOS_frozen_source",
+  "statistics_recomputed": false,
+  "input_sha256": {
+    "marker_ora.tsv": "afcec81713627576729e9b0ef6e3440335f150daf2ef24dc59e7790d4dd50837"
+  },
+  "script_sha256": "222e2e5f5052d69fa963e20f84d3260453daced84ddf47d1bfdfd83b348ffc12",
+  "runner_sha256": "354956fefbaf8bb1c7d8e5125a3413269d04248f3b6c2ab5dab63e06ce9b33ac",
+  "style_sha256": "7fc1e558d3b0f23a916a74d2ab25d9b530c6f9a8ca299e72e6b851478fce6a10",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "output_sha256": {
+    "figure.pdf": "3f40986337d073c0d9c0a9ab622c0dbad9861692297678f29111def066dee775",
+    "figure.png": "31086d3f1f6b7ddb788ed8633432f6a24fec69f1d948dcc05436c1d3d5b39aa0"
+  }
+}

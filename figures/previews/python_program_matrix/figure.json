@@ -1,0 +1,21 @@
+{
+  "status": "COMPLETED",
+  "kind": "evidence_matrix",
+  "rows": 126,
+  "input_sha256": "6f8830547bd618e1316a444b1bb17889d1b39042f143dac660dd6168263135fc",
+  "script_sha256": "9ffa46f485a0ad008a1e902ad5a54df7e3b6c9e0057ffe10fa96909d160ff7eb",
+  "profile_id": "bluepink_semantic_v2",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "value_label": "Module-wise visual z-score; descriptive n=1/library",
+  "statistics_recomputed": false,
+  "outputs": {
+    "pdf": {
+      "path": "figure.pdf",
+      "sha256": "c4feb2c69d05d30cd1a2c5e30c1e560e37411b313876537d298db0567062eb7c"
+    },
+    "png": {
+      "path": "figure.png",
+      "sha256": "47c84f53df37075c8d35fab85cf0686e8c6bd23fcf4ed913a6bbe17b5fd1334c"
+    }
+  }
+}

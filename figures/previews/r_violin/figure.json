@@ -1,0 +1,17 @@
+{
+  "status": "COMPLETED",
+  "recipe": "r_violin",
+  "data_kind": "real_PFOS_frozen_source",
+  "statistics_recomputed": false,
+  "input_sha256": {
+    "gene_effect_violin.tsv": "30065b69cbda3a71206be25107d90ee34508d304f2269a78887197ac96a8d5aa"
+  },
+  "script_sha256": "222e2e5f5052d69fa963e20f84d3260453daced84ddf47d1bfdfd83b348ffc12",
+  "runner_sha256": "354956fefbaf8bb1c7d8e5125a3413269d04248f3b6c2ab5dab63e06ce9b33ac",
+  "style_sha256": "7fc1e558d3b0f23a916a74d2ab25d9b530c6f9a8ca299e72e6b851478fce6a10",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "output_sha256": {
+    "figure.pdf": "ebac7da692286bb3ebba2d2ee25fa5b6d748e7ee69d686df9df3d25407aaaaf2",
+    "figure.png": "1efe4ce5545c0f11896a74a35390d39f8104c746814ff39b12f143904a4efb46"
+  }
+}

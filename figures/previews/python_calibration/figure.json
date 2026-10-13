@@ -1,0 +1,16 @@
+{
+  "status": "COMPLETED",
+  "kind": "calibration",
+  "input_sha256": {
+    "source.tsv": "a0b565356d0820296c1e67e064f241ec023043c1bdb6e1cdce9c481b2202f955",
+    "tests.tsv": "cb9c4ebed84f6d7b5f9f197b2eb18e4a0eedf7349fc88234092bf8ab36e6f4bf"
+  },
+  "rows": 30000,
+  "script_sha256": "24f690a2baf280490c22265f02480178a5089f6ec76589beda286da93611f58c",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "statistics_recomputed": false,
+  "outputs": {
+    "pdf": "fa762535d2a0daddbc77ca3a4799039d5dd427e9ec24935465cc5bdd0745b0e5",
+    "png": "019018bd5db7fcf8544e619fa52605ccedc2b74b7af314919635d17d7999ccbf"
+  }
+}

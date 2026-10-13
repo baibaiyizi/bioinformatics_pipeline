@@ -1,0 +1,16 @@
+family	variant	entrypoint	inputs	meaning	validation_state	preview	execution_state
+volcano	bluepink_direction_evidence_shape	scripts/render.py --kind volcano	feature,effect,pvalue,evidence	Frozen source classification; no new model	example_executed	previews/python_volcano/figure.png	COMPLETED
+ora_dot	gene_ratio_count_nominal_p	scripts/render.py --kind ora	term,count,query_size,pvalue	GeneRatio; linear area Count; viridis raw P 0..10	example_executed	previews/python_ora/figure.png	COMPLETED
+ora_dot	r_native	scripts/recipes.R plot_ora	term,count,query_size,pvalue	Same semantics; independent R layout candidate	example_executed	previews/r_ora/figure.png	COMPLETED
+marker_dot	expression_detection	scripts/render.py --kind marker	gene,group,fraction,value	Marker expression z and captured detection; no condition P	example_executed	previews/python_marker/figure.png	COMPLETED
+marker_dot	r_native	scripts/recipes.R plot_marker	gene,group,fraction,value	Fixed cluster names; same expression/detection semantics	example_executed	previews/r_marker/figure.png	COMPLETED
+effect	frozen_effect_interval	scripts/render.py --kind effect	feature,effect;optional lower,upper	Existing effect and existing interval; not calculated	source_audited		not_run
+effect_heatmap	frozen_row_z	scripts/render.py --kind heatmap	feature,sample,value	Existing standardized values; missing masked	source_audited		not_run
+embedding	frozen_coordinates	scripts/render.py --kind embedding	x,y,group	Existing coordinates; no new embedding	source_audited		not_run
+composition	captured_proportion	scripts/render.py --kind composition	library_id,cell_type,proportion	Captured composition; not animal abundance	example_executed	previews/python_composition/figure.png	COMPLETED
+program_matrix	annotation_strips	scripts/render.py --kind evidence_matrix	feature,library_id,condition,cell_type,value	Existing module-wise z; n1 descriptive	example_executed	previews/python_program_matrix/figure.png	COMPLETED
+program_matrix	complexheatmap_cells	scripts/recipes.R plot_program_matrix	program table;captured cells table	Same matrix plus actual captured-cell counts	example_executed	previews/r_program_matrix/figure.png	COMPLETED
+program_nes	context_collection	scripts/dense_recipes.py --kind program_nes	context,collection,pathway,NES,padj_context_collection	Frozen GSEA NES and BH; explicit display subset	example_executed	previews/python_program_nes/figure.png	COMPLETED
+calibration	stratified_null	scripts/dense_recipes.py --kind calibration	null permutation,test,count;tests observed,empirical_p,B,seed	Existing conditional null and empirical P; no recomputation	example_executed	previews/python_calibration/figure.png	COMPLETED
+locus	layer_specific_units	scripts/dense_recipes.py --kind locus	gene_id,symbol,assay,chr,start,end,effect,unit,direction	Shared coordinates; layer effects retain units	example_executed	previews/python_locus/figure.png	COMPLETED
+violin	outline_free_median_iqr	scripts/recipes.R plot_violin	category,group,value;named group_colors;value_label	Filled density; point median and thin Q1-Q3; no box or outline	example_executed	previews/r_violin/figure.png	COMPLETED

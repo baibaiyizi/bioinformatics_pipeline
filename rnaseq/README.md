@@ -54,6 +54,10 @@ bash run_rmd.sh
 
 主要表在 `result/NN_*/tables/`，图在 `plots/` 或对应子模块。`result/index.html` 汇总真实现存图表；只有表、只有跳过状态时也可生成。每张图提供方法/读图/限制；报告中的图表存在性不能替代 `result/module_status.tsv` 的执行状态。`--report-only` 仅刷新报告，不宣称分析已重新运行。
 
+`bash run_rmd.sh --plots-only` 为已有完整小鼠归档结果提供纯绘图入口。使用前须在本模块冻结 `rmd/plot_inputs.tsv`（原图表达、counts、logCPM矩阵）与 `rmd/plot_samples.tsv`，并保留对应原表和缓存；新复制的空模板不具备这些来源。该入口复用现役Rmd的绘图片段，禁止DE、富集和评分重算；PCA、相关性、热图聚类、网络布局及描述性拟合属于展示派生。先在临时目录成图，核对所有原图、数值与源码SHA并生成报告后再发布，记录独立的 `result/00_audit/tables/plot_receipt.json`。缺少来源直接失败。原图cohort与后来完整cohort必须分别记录，不能互换。
+
+本地 `rmd/figure_style.R`、`plot_heatmaps.R` 统一183 mm、Liberation Sans、8/7 pt、白底RGB 300 dpi PNG与嵌入字体PDF，保留分面、组合、UpSet及原筛选范围。项目运行本地冻结副本，模板来源以 `template_snapshot.tsv` 核验。历史执行记录和输入签名不因重新成图而改写。
+
 PCA：生物学意义为样本整体表达差异的描述；数据分布特征以 PC 解释方差和样本位置为准；最终结论只能是表达结构诊断，不能据此自动选择样本或证明组间效应。
 
 DE 火山图/MA 图：生物学意义为显式两组表达关联；数据分布特征来自实际 log2FC、P 与平均表达；最终结论限于当前设计与阈值的候选基因，原始 P 筛选需标注探索性并同时查看 padj。

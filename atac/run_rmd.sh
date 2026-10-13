@@ -3,6 +3,22 @@ set -euo pipefail
 
 # 独立 ATAC 下游模块入口；配置集中于 config/project.env。默认保留结果。
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 纯绘图入口早于配置调度、Rmd 依赖恢复与旧结果清理。
+if [[ " ${*} " == *" --plots-only "* ]]; then
+  plot_args=(--root "${ROOT_DIR}" --assay atac)
+  while (( $# )); do
+    case "$1" in
+      --plots-only) shift ;;
+      --steps) plot_args+=(--steps "$2"); shift 2 ;;
+      --check) plot_args+=(--check); shift ;;
+      *) echo "[ERROR] --plots-only 不支持参数: $1" >&2; exit 2 ;;
+    esac
+  done
+  source "${ROOT_DIR}/scripts/load_config.sh"
+  exec python3 "${ROOT_DIR}/scripts/replot.py" "${plot_args[@]}"
+fi
+
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 
 source "$ROOT_DIR/scripts/load_config.sh"
@@ -22,8 +38,8 @@ RESULT_DIR="${ROOT_DIR}/result"
 LOG_DIR="${RESULT_DIR}/logs"
 REPORT_SCRIPT="${RMD_DIR}/generate_result_report.R"
 
-TOTAL_STEPS=16
-ACTIVE_STEPS=(1 2 3 4 5 6 7 8 10 12 13 14 15 16)
+TOTAL_STEPS=14
+ACTIVE_STEPS=(1 2 3 4 5 6 7 8 9 10 11 12 13 14)
 DRY_RUN=false
 RUN_ALL=false
 
@@ -36,12 +52,12 @@ declare -A STEP_FILES=(
   [6]="06_genome_tracks.Rmd"
   [7]="07_peak_gene_enrichment.Rmd"
   [8]="08_motif_activity.Rmd"
-  [10]="10_footprinting_tf_evidence.Rmd"
-  [12]="12_tf_gene_network.Rmd"
-  [13]="13_conservation_gc.Rmd"
-  [14]="14_machine_learning.Rmd"
-  [15]="15_keygenes_locus_reports.Rmd"
-  [16]="16_export_summary_manifest.Rmd"
+  [9]="09_footprinting_tf_evidence.Rmd"
+  [10]="10_tf_gene_network.Rmd"
+  [11]="11_sequence_conservation_gc.Rmd"
+  [12]="12_machine_learning.Rmd"
+  [13]="13_keygenes_locus_reports.Rmd"
+  [14]="14_export_summary_manifest.Rmd"
 )
 
 declare -A STEP_TITLES=(
@@ -53,12 +69,12 @@ declare -A STEP_TITLES=(
   [6]="genome tracks"
   [7]="peak-associated gene enrichment"
   [8]="motif enrichment and motif activity"
-  [10]="footprinting and TF evidence"
-  [12]="TF-gene network"
-  [13]="sequence conservation and GC context"
-  [14]="machine-learning feature ranking"
-  [15]="key genes and locus reports"
-  [16]="export, summary and result manifest"
+  [9]="footprinting and TF evidence"
+  [10]="TF-gene network"
+  [11]="sequence conservation and GC context"
+  [12]="machine-learning feature ranking"
+  [13]="key genes and locus reports"
+  [14]="export, summary and result manifest"
 )
 
 declare -A STEP_RESULT_DIRS=(
@@ -69,12 +85,12 @@ declare -A STEP_RESULT_DIRS=(
   [6]="06_genome_tracks"
   [7]="07_peak_gene_enrichment"
   [8]="08_motif_activity"
-  [10]="10_footprinting_tf_evidence"
-  [12]="12_tf_gene_network"
-  [13]="13_sequence_conservation_gc"
-  [14]="14_machine_learning"
-  [15]="15_keygenes_locus_reports"
-  [16]="16_export_summary_manifest"
+  [9]="09_footprinting_tf_evidence"
+  [10]="10_tf_gene_network"
+  [11]="11_sequence_conservation_gc"
+  [12]="12_machine_learning"
+  [13]="13_keygenes_locus_reports"
+  [14]="14_export_summary_manifest"
 )
 
 step_abs_path() {
@@ -111,7 +127,7 @@ Usage:
   ${SCRIPT_NAME} 5 8
 
 Behavior:
-  1) No arguments or --all runs the current ATAC steps (9 and 11 have been removed).
+  1) No arguments or --all runs the continuous ATAC steps 01–14.
   2) --steps accepts ids, aliases, comma-separated values, and numeric ranges.
   3) Positional step ids/aliases are accepted for quick use.
   4) Requested steps auto-run their required upstream steps in scientific order.
@@ -138,12 +154,12 @@ step_alias_hint() {
     6) echo "tracks" ;;
     7) echo "enrichment" ;;
     8) echo "motif" ;;
-    10) echo "footprint" ;;
-    12) echo "network" ;;
-    13) echo "conservation" ;;
-    14) echo "ml" ;;
-    15) echo "keygenes" ;;
-    16) echo "export" ;;
+    9) echo "footprint" ;;
+    10) echo "network" ;;
+    11) echo "conservation" ;;
+    12) echo "ml" ;;
+    13) echo "keygenes" ;;
+    14) echo "export" ;;
   esac
 }
 
@@ -266,12 +282,12 @@ step_id_from_token() {
     track|tracks|gviz|genome-tracks) echo 6 ;;
     enrichment|peak-gene|geneset|go|kegg) echo 7 ;;
     motif|motifs|chromvar|activity) echo 8 ;;
-    footprint|footprinting|tobias|tf-evidence) echo 10 ;;
-    network|tf-network|tf-gene) echo 12 ;;
-    conservation|gc|sequence) echo 13 ;;
-    ml|machine-learning|machine|feature) echo 14 ;;
-    keygene|keygenes|locus|loci) echo 15 ;;
-    export|manifest|summary|delivery) echo 16 ;;
+    footprint|footprinting|tobias|tf-evidence) echo 9 ;;
+    network|tf-network|tf-gene) echo 10 ;;
+    conservation|gc|sequence) echo 11 ;;
+    ml|machine-learning|machine|feature) echo 12 ;;
+    keygene|keygenes|locus|loci) echo 13 ;;
+    export|manifest|summary|delivery) echo 14 ;;
     *) return 1 ;;
   esac
 }
@@ -347,39 +363,34 @@ mark_with_dependencies() {
       mark_with_dependencies 4
       mark_with_dependencies 5
       ;;
+    9)
+      mark_with_dependencies 1
+      mark_with_dependencies 4
+      mark_with_dependencies 5
+      mark_with_dependencies 8
+      ;;
     10)
       mark_with_dependencies 1
       mark_with_dependencies 4
       mark_with_dependencies 5
+      mark_with_dependencies 7
       mark_with_dependencies 8
+      mark_with_dependencies 9
       ;;
-    12)
+    11|12)
+      mark_with_dependencies 1
+      mark_with_dependencies 4
+      mark_with_dependencies 5
+      ;;
+    13)
       mark_with_dependencies 1
       mark_with_dependencies 4
       mark_with_dependencies 5
       mark_with_dependencies 7
-      mark_with_dependencies 8
-      mark_with_dependencies 10
       ;;
-    13|14)
-      mark_with_dependencies 1
-      mark_with_dependencies 4
-      mark_with_dependencies 5
-      ;;
-    15)
-      mark_with_dependencies 1
-      mark_with_dependencies 4
-      mark_with_dependencies 5
-      mark_with_dependencies 7
-      mark_with_dependencies 8
-      mark_with_dependencies 10
-      mark_with_dependencies 12
-      mark_with_dependencies 13
-      mark_with_dependencies 14
-      ;;
-    16)
+    14)
       local i
-      for i in "${ACTIVE_STEPS[@]}"; do [[ "$i" == 16 ]] || mark_with_dependencies "${i}"; done
+      for i in "${ACTIVE_STEPS[@]}"; do [[ "$i" == 14 ]] || mark_with_dependencies "${i}"; done
       ;;
   esac
 }
@@ -494,18 +505,18 @@ fi
 # 可选足迹和保守性按显式开关执行；ATAC 候选与网络不依赖跨组学开关。
 filtered=()
 for step in "${REQUESTED_STEPS[@]}"; do
-  [[ "$step" != 14 ]] || { echo "[SKIPPED] 14 machine_learning 已停用" >&2; continue; }
-  if [[ "$step" == 10 ]]; then [[ "$ATAC_ENABLE_FOOTPRINT" == 1 ]] || { echo "[SKIPPED] footprint 未启用: $step" >&2; continue; }; fi
-  if [[ "$step" == 13 ]]; then [[ "$ATAC_ENABLE_CONSERVATION" == 1 ]] || { echo "[SKIPPED] conservation 未启用: $step" >&2; continue; }; fi
+  [[ "$step" != 12 ]] || { echo "[SKIPPED] 12 machine_learning 已停用" >&2; continue; }
+  if [[ "$step" == 9 ]]; then [[ "$ATAC_ENABLE_FOOTPRINT" == 1 ]] || { echo "[SKIPPED] footprint 未启用: $step" >&2; continue; }; fi
+  if [[ "$step" == 11 ]]; then [[ "$ATAC_ENABLE_CONSERVATION" == 1 ]] || { echo "[SKIPPED] conservation 未启用: $step" >&2; continue; }; fi
   filtered+=("$step")
 done
 REQUESTED_STEPS=("${filtered[@]}")
 resolve_run_order "${REQUESTED_STEPS[@]}"
 filtered=()
 for step in "${RUN_ORDER[@]}"; do
-  [[ "$step" != 14 ]] || { echo "[SKIPPED] 14 machine_learning 已停用" >&2; continue; }
-  if [[ "$step" == 10 ]]; then [[ "$ATAC_ENABLE_FOOTPRINT" == 1 ]] || { echo "[SKIPPED] footprint 未启用: $step" >&2; continue; }; fi
-  if [[ "$step" == 13 ]]; then [[ "$ATAC_ENABLE_CONSERVATION" == 1 ]] || { echo "[SKIPPED] conservation 未启用: $step" >&2; continue; }; fi
+  [[ "$step" != 12 ]] || { echo "[SKIPPED] 12 machine_learning 已停用" >&2; continue; }
+  if [[ "$step" == 9 ]]; then [[ "$ATAC_ENABLE_FOOTPRINT" == 1 ]] || { echo "[SKIPPED] footprint 未启用: $step" >&2; continue; }; fi
+  if [[ "$step" == 11 ]]; then [[ "$ATAC_ENABLE_CONSERVATION" == 1 ]] || { echo "[SKIPPED] conservation 未启用: $step" >&2; continue; }; fi
   filtered+=("$step")
 done
 RUN_ORDER=("${filtered[@]}")
@@ -536,21 +547,22 @@ if compgen -G "$ROOT_DIR/02mapping/bam/*.final.bam" >/dev/null; then
     python3 "$ROOT_DIR/scripts/input_audit.py" --root "$ROOT_DIR" --prefix ATAC --verify upstream
   fi
   python3 "$ROOT_DIR/scripts/input_audit.py" --root "$ROOT_DIR" --prefix ATAC --record downstream
-mkdir -p "${LOG_DIR}" "${ROOT_DIR}/.cache/rmd"
-printf 'module\tenabled\n10_footprint\t%s\n13_conservation\t%s\n14_machine_learning\tDISABLED\n' "$ATAC_ENABLE_FOOTPRINT" "$ATAC_ENABLE_CONSERVATION" > "$RESULT_DIR/optional_module_gates.tsv"
+printf 'module\tenabled\n09_footprint\t%s\n11_conservation\t%s\n12_machine_learning\tDISABLED\n' "$ATAC_ENABLE_FOOTPRINT" "$ATAC_ENABLE_CONSERVATION" > "$RESULT_DIR/optional_module_gates.tsv"
 
 
 [[ -f "$RESULT_DIR/execution.tsv" ]] || printf "time\tmodule\tstatus\n" > "$RESULT_DIR/execution.tsv"
-for step in 10 13 14; do
+for step in 9 11 12; do
   disabled=0
   case "$step" in
-    10) [[ "$ATAC_ENABLE_FOOTPRINT" == 1 ]] || disabled=1 ;;
-    13) [[ "$ATAC_ENABLE_CONSERVATION" == 1 ]] || disabled=1 ;;
-    14) disabled=1 ;;
+    9) [[ "$ATAC_ENABLE_FOOTPRINT" == 1 ]] || disabled=1 ;;
+    11) [[ "$ATAC_ENABLE_CONSERVATION" == 1 ]] || disabled=1 ;;
+    12) disabled=1 ;;
   esac
   [[ "$disabled" == 0 ]] || printf '%s\t%s\tSKIPPED_DISABLED\n' "$(date -Is)" "$step" >> "$RESULT_DIR/execution.tsv"
 done
 CURRENT_STEP=report
+mkdir -p "${LOG_DIR}" "${ROOT_DIR}/.cache/rmd"
+
 RUN_TAG="run_rmd_$(date +%Y%m%d_%H%M%S)"
 RUN_LOG_FILE="${LOG_DIR}/${RUN_TAG}.log"
 if [[ -e "${RUN_LOG_FILE}" ]]; then

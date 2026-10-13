@@ -1,0 +1,21 @@
+{
+  "status": "COMPLETED",
+  "kind": "ora",
+  "rows": 24,
+  "input_sha256": "afcec81713627576729e9b0ef6e3440335f150daf2ef24dc59e7790d4dd50837",
+  "script_sha256": "9ffa46f485a0ad008a1e902ad5a54df7e3b6c9e0057ffe10fa96909d160ff7eb",
+  "profile_id": "bluepink_semantic_v2",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "value_label": "Marker ORA; annotation only",
+  "statistics_recomputed": false,
+  "outputs": {
+    "pdf": {
+      "path": "figure.pdf",
+      "sha256": "69fc61a72bd7891d1dbfc375d3a3593bbaa02839440893726dbebde5b02273eb"
+    },
+    "png": {
+      "path": "figure.png",
+      "sha256": "ac4e4427409ddea0736fb0ec191fd156c4178db2a09042ad5d1639da63d1c71e"
+    }
+  }
+}

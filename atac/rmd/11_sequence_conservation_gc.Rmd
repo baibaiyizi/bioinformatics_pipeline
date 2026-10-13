@@ -1,0 +1,232 @@
+## Module 11. 保守性分析（supportive analysis）
+
+分析差异Peak的进化保守性，识别功能重要的区域。
+
+```{r conservation_analysis}
+if(nrow(res_df) == 0) {
+  cat("没有差异Peak,跳过保守性分析。\n")
+  write_skipped_state(
+    "Step11",
+    "Conservation_Analysis",
+    "No differential peaks detected.",
+    clear_plot_files = c("GC_Content_Distribution.pdf", "GC_vs_FoldChange.pdf", "PhastCons_Distribution.pdf", "PhastCons_vs_FoldChange.pdf")
+  )
+} else {
+
+  mm39_levels <- seqlevels(BSgenome.Mmusculus.UCSC.mm39)
+
+  normalize_to_ucsc <- function(gr) {
+    if(length(gr) == 0) return(gr)
+    if(!any(grepl("^chr", seqlevels(gr)))) {
+      # Rename levels (automatically updates seqnames)
+      seqlevels(gr) <- paste0("chr", seqlevels(gr))
+    }
+    # Rename MT to M if present
+    if("chrMT" %in% seqlevels(gr)) {
+      new_levels <- seqlevels(gr)
+      new_levels[new_levels == "chrMT"] <- "chrM"
+      seqlevels(gr) <- new_levels
+    }
+    keepSeqlevels(gr, intersect(seqlevels(gr), mm39_levels), pruning.mode = "coarse")
+  }
+
+  peaks_step10 <- normalize_to_ucsc(dba_res)
+
+  if(length(peaks_step10) == 0) {
+    cat("差异Peak的坐标与mm39不匹配,跳过保守性分析。\n")
+    write_skipped_state(
+      "Step11",
+      "Conservation_Analysis",
+      "Differential peaks could not be mapped to primary mm39 UCSC chromosomes.",
+      clear_plot_files = c("GC_Content_Distribution.pdf", "GC_vs_FoldChange.pdf", "PhastCons_Distribution.pdf", "PhastCons_vs_FoldChange.pdf")
+    )
+  } else {
+    run_phast_cons <- env_bool("ATAC_RUN_PHASTCONS", FALSE)
+    phast_cons <- if(run_phast_cons) {
+      tryCatch(getGScores("phastCons35way.UCSC.mm39"), error = function(e) {
+        cat("无法加载phastCons35way.UCSC.mm39,仅计算GC含量。\n")
+        NULL
+      })
+    } else {
+      write_skipped_state(
+        "Step11",
+        "PhastCons_Module",
+        "ATAC_RUN_PHASTCONS is false; phastCons35way.UCSC.mm39 was not loaded. GC-content analysis was still generated."
+      )
+      NULL
+    }
+
+    seq_lengths <- seqlengths(BSgenome.Mmusculus.UCSC.mm39)[as.character(seqnames(peaks_step10))]
+    in_bounds <- !is.na(seq_lengths) & start(peaks_step10) >= 1 & end(peaks_step10) <= seq_lengths
+    bounds_filter_summary <- data.frame(
+      InputPeaks = length(peaks_step10),
+      InBoundsPeaks = sum(in_bounds),
+      OutOfBoundsPeaks = sum(!in_bounds),
+      stringsAsFactors = FALSE
+    )
+    write.csv(bounds_filter_summary, step_table_file("Step11", "Sequence_Bounds_Filter_Summary.csv"), row.names = FALSE)
+    if(any(!in_bounds)) {
+      out_of_bounds <- data.frame(
+        seqnames = as.character(seqnames(peaks_step10))[!in_bounds],
+        start = start(peaks_step10)[!in_bounds],
+        end = end(peaks_step10)[!in_bounds],
+        seqlength = seq_lengths[!in_bounds],
+        stringsAsFactors = FALSE
+      )
+      write.csv(out_of_bounds, step_table_file("Step11", "Out_Of_Bounds_Peaks.csv"), row.names = FALSE)
+    }
+    peaks_step10 <- peaks_step10[in_bounds]
+    if(length(peaks_step10) == 0) {
+      write_skipped_state(
+        "Step11",
+        "GC_Content_Analysis",
+        "No differential peaks remained after filtering intervals to BSgenome mm39 chromosome bounds.",
+        clear_plot_files = c("GC_Content_Distribution.pdf", "GC_vs_FoldChange.pdf", "PhastCons_Distribution.pdf", "PhastCons_vs_FoldChange.pdf")
+      )
+      knitr::knit_exit()
+    }
+
+    peak_ids <- paste(seqnames(peaks_step10), start(peaks_step10), end(peaks_step10), sep = ":")
+    peak_seqs <- getSeq(BSgenome.Mmusculus.UCSC.mm39, peaks_step10)
+    gc_values <- rowSums(letterFrequency(peak_seqs, c("G", "C"), as.prob = TRUE))
+
+    res_df_step10 <- res_df %>%
+      mutate(seqnames = ensure_ucsc_seqnames(seqnames)) %>%
+      mutate(seqnames = sub("chrMT", "chrM", seqnames)) %>%
+      transmute(peak_id = paste(seqnames, start, end, sep = ":"),
+                fold_change = Fold,
+                pvalue = pvalue,
+                fdr = FDR)
+
+    diff_anno_step10 <- if(exists("diff_anno")) {
+      diff_tbl <- as.data.frame(diff_anno)
+      if("SYMBOL" %in% colnames(diff_tbl)) {
+        colnames(diff_tbl)[colnames(diff_tbl) == "SYMBOL"] <- "geneSymbol"
+      }
+      if(!"geneSymbol" %in% colnames(diff_tbl)) {
+        diff_tbl$geneSymbol <- NA_character_
+      }
+      diff_tbl %>%
+        mutate(seqnames = ensure_ucsc_seqnames(seqnames)) %>%
+        mutate(seqnames = sub("chrMT", "chrM", seqnames)) %>%
+        transmute(peak_id = paste(seqnames, start, end, sep = ":"),
+                  geneSymbol = geneSymbol)
+    } else {
+      tibble(peak_id = character(), geneSymbol = character())
+    }
+
+    conservation_df <- tibble(
+      peak_id = peak_ids,
+      seqnames = as.character(seqnames(peaks_step10)),
+      start = start(peaks_step10),
+      end = end(peaks_step10),
+      gc_content = gc_values
+    ) %>%
+      left_join(res_df_step10, by = "peak_id") %>%
+      left_join(diff_anno_step10, by = "peak_id") %>%
+      mutate(RawPvalueSignificant = is.finite(pvalue) & pvalue >= 0 & pvalue < 0.05)
+
+    if(!is.null(phast_cons)) {
+      phast_gr <- gscores(phast_cons, peaks_step10)
+      conservation_df$phast_cons <- mcols(phast_gr)[,1]
+    } else {
+      conservation_df$phast_cons <- NA_real_
+    }
+
+    gc_hist <- ggplot(conservation_df, aes(gc_content)) +
+      geom_histogram(bins = 50, fill = viz_pal$burden_density, alpha = 0.7) +
+      geom_vline(xintercept = mean(conservation_df$gc_content), linetype = "dashed", color = viz_pal$group[comparison_group]) +
+      labs(title = "GC Content Distribution of Differential Peaks",
+           x = "GC Content", y = "Count") +
+      theme_atac_classic(base_size = 12)
+
+    save_gg_dual(
+      gc_hist,
+      file = step_plot_file("Step11", "GC_Content_Distribution.pdf"),
+      width = 8,
+      height = 6
+    )
+    print(gc_hist)
+
+    gc_vs_fc <- ggplot(conservation_df, aes(gc_content, fold_change, color = RawPvalueSignificant)) +
+      geom_point(
+        data = subset(conservation_df, !(RawPvalueSignificant)),
+        color = pal_pick(viz_pal$neutral_mid),
+        alpha = 0.45,
+        size = 1.8
+      ) +
+      geom_point(
+        data = subset(conservation_df, RawPvalueSignificant),
+        color = pal_pick(viz_pal$group[comparison_group]),
+        alpha = 0.95,
+        size = 2.8
+      ) +
+      scale_color_manual(values = pal_named(`FALSE` = viz_pal$neutral_mid, `TRUE` = viz_pal$group[comparison_group]),
+                         labels = c("FALSE" = "pvalue unavailable or >= 0.05", "TRUE" = "raw pvalue < 0.05")) +
+      geom_smooth(method = "lm", se = FALSE, color = viz_pal$neutral["dark"]) +
+      labs(title = "GC Content vs Fold Change",
+           x = "GC Content", y = "Log2 Fold Change",
+           color = "Raw pvalue") +
+      theme_atac_classic(base_size = 12)
+
+    save_plot_pdf(gc_vs_fc, step_plot_file("Step11", "GC_vs_FoldChange.pdf"), width = 8, height = 6)
+    print(gc_vs_fc)
+
+    if(!all(is.na(conservation_df$phast_cons))) {
+      phast_hist <- ggplot(conservation_df, aes(phast_cons)) +
+        geom_histogram(bins = 50, fill = viz_pal$dmr["Hyper"], alpha = 0.7) +
+        labs(title = "phastCons Conservation Scores", x = "Mean phastCons Score", y = "Count") +
+        theme_atac_classic(base_size = 12)
+
+      save_gg_dual(
+        phast_hist,
+        file = step_plot_file("Step11", "PhastCons_Distribution.pdf"),
+        width = 8,
+        height = 6
+      )
+      print(phast_hist)
+
+      phast_vs_fc <- ggplot(conservation_df, aes(phast_cons, fold_change, color = RawPvalueSignificant)) +
+        geom_point(
+          data = subset(conservation_df, !(RawPvalueSignificant)),
+          color = pal_pick(viz_pal$neutral_mid),
+          alpha = 0.45,
+          size = 1.8
+        ) +
+        geom_point(
+          data = subset(conservation_df, RawPvalueSignificant),
+          color = pal_pick(viz_pal$group[comparison_group]),
+          alpha = 0.95,
+          size = 2.8
+        ) +
+        scale_color_manual(values = pal_named(`FALSE` = viz_pal$neutral_mid, `TRUE` = viz_pal$group[comparison_group]),
+                           labels = c("FALSE" = "pvalue unavailable or >= 0.05", "TRUE" = "raw pvalue < 0.05")) +
+        labs(title = "phastCons vs Fold Change", x = "Mean phastCons Score", y = "Log2 Fold Change",
+             color = "Raw pvalue") +
+        theme_atac_classic(base_size = 12)
+
+      save_plot_pdf(phast_vs_fc, step_plot_file("Step11", "PhastCons_vs_FoldChange.pdf"), width = 8, height = 6)
+      print(phast_vs_fc)
+    } else {
+      remove_output_with_preview(step_plot_file("Step11", "PhastCons_Distribution.pdf"))
+      remove_output_with_preview(step_plot_file("Step11", "PhastCons_vs_FoldChange.pdf"))
+      write_skipped_state(
+        "Step11",
+        "PhastCons_Module",
+        "All phastCons values are NA; conservation table retained but phastCons plots were not exported."
+      )
+    }
+
+    write.csv(conservation_df, step_table_file("Step11", "Peak_Conservation_Analysis.csv"), row.names = FALSE)
+
+    high_gc_peaks <- conservation_df %>% filter(gc_content > 0.5)
+    write.csv(high_gc_peaks, step_table_file("Step11", "High_GC_Peaks.csv"), row.names = FALSE)
+
+    cat("差异Peak的平均GC含量:", round(mean(conservation_df$gc_content, na.rm = TRUE), 3), "\n")
+    cat("高GC含量的Peak数量 (> 0.5):", nrow(high_gc_peaks), "\n")
+    if(!all(is.na(conservation_df$phast_cons))) {
+      cat("差异Peak的平均phastCons分数:", round(mean(conservation_df$phast_cons, na.rm = TRUE), 3), "\n")
+    }
+  }
+}
+```

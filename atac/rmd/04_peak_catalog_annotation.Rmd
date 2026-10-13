@@ -307,20 +307,11 @@ draw_upset_dual(
   step_plot_file("Step4", "Peak_UpSet.pdf"),
   width = 8,
   height = 6,
-  upset(
-    overlap_by_group_df,
-    sets = colnames(overlap_by_group_df),
-    order.by = "freq",
-    main.bar.color = viz_pal$upset_main,
-    sets.bar.color = viz_pal$upset_sets,
-    text.scale = c(1.3, 1.3, 1, 1, 2, 1.5)
-  )
+  print(atac_plot_peak_upset(overlap_by_group_df))
 )
 
 # 在 Rmd 中显示
-upset(overlap_by_group_df, sets = colnames(overlap_by_group_df), order.by = "freq",
-      main.bar.color = viz_pal$upset_main, sets.bar.color = viz_pal$upset_sets,
-      text.scale = c(1.3, 1.3, 1, 1, 2, 1.5))
+print(atac_plot_peak_upset(overlap_by_group_df))
 
 group_a <- group_levels[1]
 group_b <- group_levels[2]
