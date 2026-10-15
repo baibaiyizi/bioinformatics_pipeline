@@ -1,0 +1,23 @@
+{
+  "status": "COMPLETED",
+  "kind": "drivers",
+  "data_kind": "real_PFOS_source",
+  "intended_use": "internal_exploratory_preview",
+  "publication_figure_gate": "not_run",
+  "scientific_coordinate_count": 3,
+  "composition_method": "source_data_shared_canvas",
+  "input_media_files": [],
+  "atomic_panel_geometry_comparison": "not_run",
+  "statistics_recomputed": false,
+  "input_sha256": {
+    "source.tsv": "0a92f904b6f9f9477390733e4fd913192d3af2d8399152bdce8928956df935da",
+    "secondary.tsv": "185a488039d730f50634b801635c5013cf461fcf6d9364320778585ed4223d42"
+  },
+  "script_sha256": "668f365418beb28fcae46e7273267123c725a42b567bacb0195c06bd7d75b77f",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "style_sha256": "87bcd37747de36c361ae62e6591e5a4382e1f2ec2c2c9c607e24baaba3f4aa3e",
+  "outputs": {
+    "pdf": "a31d091b27a11bf5afe1ea883cd0bbb0622d20e169dca1244beb7df715b639fe",
+    "png": "d726aabd3e903c4b07a3b21b173a4b40c9727c08a85b8d8b3fb4143f5d7f91d9"
+  }
+}

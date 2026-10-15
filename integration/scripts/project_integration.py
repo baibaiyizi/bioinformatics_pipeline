@@ -578,19 +578,11 @@ def _run_project(w,integrate,run):
         previous_signatures=parent.get('input_signatures',{})
         if any(signatures.get(key)!=value for key,value in previous_signatures.items()):raise ValueError('冻结数值源与当前原始输入签名不一致，禁止混用陈旧统计')
         print('FROZEN SOURCES',len(catalog),'existing figure pairs',sum(manifest.status=='COMPLETED'),flush=True)
-        # 保留原生产记录为独立历史执行证据；不修改其状态、路径或 hash。
-        history=root.parents[3]/'maintenance/pfos_unification_20261012/integration'
-        history.mkdir(parents=True,exist_ok=True)
-        parent_bytes=json.dumps(parent,ensure_ascii=False,indent=2)
-        parent_hash=hashlib.sha256(parent_bytes.encode()).hexdigest()
-        historical=history/('producer_receipt_'+parent_hash+'.json')
-        if not historical.exists():historical.write_text(parent_bytes)
-        previous_evidence=history/'previous_execution_evidence'
-        for p in current.rglob('*'):
-            if p.is_file() and (p.suffix=='.txt' or p.name in {'analysis.html','input_audit.tsv'}):
-                dest=previous_evidence/p.relative_to(current);dest.parent.mkdir(parents=True,exist_ok=True)
-                if not dest.exists():shutil.copy2(p,dest)
-        receipt.update(parent_receipt_sha256=digest(historical),input_signatures=signatures,code_signatures=code)
+        # 前次生产回执按原始字节留在本模块审计目录，不另建维护副本。
+        parent_receipt=stage/'00_audit/parent_run.json'
+        shutil.copy2(current/'00_audit/run.json',parent_receipt)
+        receipt.update(parent_receipt_path='00_audit/parent_run.json',parent_receipt_sha256=digest(parent_receipt),
+                       input_signatures=signatures,code_signatures=code)
         save(catalog,stage,'00_audit/tables/source_catalog.tsv');save(audit,stage,'00_audit/tables/input_audit.tsv')
         old=manifest[manifest.analysis.isin(['cross_context/rnaseq','cross_context_rna','liver_atac_rna_wgbs','multiomics/liver','wgbs_2cell_liver','wgbs_2cell_sperm','wgbs_sperm_liver','wgbs_rna_2cell','wgbs_rna_liver','wgbs_rna_sperm'])].copy()
         if integrate:
@@ -631,14 +623,6 @@ def _run_project(w,integrate,run):
         audit_path.write_text(json.dumps(receipt,ensure_ascii=False,indent=2))
         run.publish(stage, current)
         w.report.write_text(readme)
-        (history/'verification.json').write_text(json.dumps(stats,ensure_ascii=False,indent=2))
-        refinement=root.parents[3]/'maintenance/pfos_visual_refinement_20261012/integration'
-        refinement.mkdir(parents=True,exist_ok=True)
-        for source,name in [(current/'00_audit/deepening_receipt.json','deepening_receipt.json'),
-                            (current/'00_audit/tables/semantic_qa.tsv','semantic_qa.tsv'),
-                            (current/'00_audit/run.json','run.json')]:
-            if source.is_file():shutil.copy2(source,refinement/name)
-        (refinement/'figure_profile_sha256.txt').write_text(digest((root/w.cfg['figure_profile']).resolve())+'  projects/pfos/config/figure_style.json\n')
         print(json.dumps(dict(status='COMPLETED',**stats),ensure_ascii=False),flush=True)
         return 0
     except BaseException as e:

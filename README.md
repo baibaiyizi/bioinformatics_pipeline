@@ -31,7 +31,7 @@ python3 copy_template.py rnaseq ../projects/new_study/mouse/rnaseq
 
 ## 联合分析
 
-跨组织、跨阶段和跨组学使用 [integration](integration/README.md)；血清方法比较可单独复制 `integration/method_comparison`。项目内先分实际human/mouse，单组学输出供联合流程读取。
+跨组织、跨阶段和跨组学使用 [integration](integration/README.md)；血清方法比较可单独复制 `integration/method_comparison`；多时期RNA的扰动签名投影和事件级剪接分析见 [multistage_rnaseq](integration/multistage_rnaseq/README.md)。项目内先分实际human/mouse，单组学输出供联合流程读取。
 
 ## 统一绘图
 

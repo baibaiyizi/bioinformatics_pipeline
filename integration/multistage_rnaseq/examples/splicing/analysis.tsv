@@ -1,0 +1,17 @@
+key	value
+stages	S1,S2
+event_types	A3SS
+reference_group	MY
+comparison_group	MO
+reference_label	Young
+comparison_label	Aged
+reference_color	#0072B2
+comparison_color	#D55E00
+count_modes	JC
+plot_count_mode	JC
+sashimi_required	false
+container_image	quay.io/biocontainers/rmats2sashimiplot:3.0.0--py310ha6fa2df_2
+bam_subdir	1.Mapping
+exon_scale	1
+intron_scale	20
+min_counts	1

@@ -1,0 +1,5 @@
+group1=MO
+group2=MY
+group1_samples=MO3,MO4
+group2_samples=MY3,MY4
+sample_key=MO3,MO4,MY3,MY4

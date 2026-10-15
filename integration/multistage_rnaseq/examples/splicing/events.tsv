@@ -1,0 +1,2 @@
+event_id	event_type	gene	chrom	strand	longExonStart_0base	longExonEnd	shortES	shortEE	flankingES	flankingEE	sashimi_stage
+Example_A3SS	A3SS	ExampleGene	chr1	+	100	200	120	200	10	50	S1

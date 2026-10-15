@@ -1,0 +1,49 @@
+signature_id	source_stage	direction	comparison_stage	gene_symbol	mapped	project_gene_id	project_stat	exclusion_reason
+S_A_up	StageA	up_in_mzKO	StageA	G01	TRUE	ENSMUSG00000000001	4	
+S_A_up	StageA	up_in_mzKO	StageA	G02	TRUE	ENSMUSG00000000002	3.79487179487179	
+S_A_up	StageA	up_in_mzKO	StageA	G03	TRUE	ENSMUSG00000000003	3.58974358974359	
+S_A_up	StageA	up_in_mzKO	StageA	G04	TRUE	ENSMUSG00000000004	3.38461538461538	
+S_A_up	StageA	up_in_mzKO	StageA	G05	TRUE	ENSMUSG00000000005	3.17948717948718	
+S_A_up	StageA	up_in_mzKO	StageA	G06	TRUE	ENSMUSG00000000006	2.97435897435897	
+S_A_down	StageA	down_in_mzKO	StageA	G35	TRUE	ENSMUSG00000000035	-2.97435897435897	
+S_A_down	StageA	down_in_mzKO	StageA	G36	TRUE	ENSMUSG00000000036	-3.17948717948718	
+S_A_down	StageA	down_in_mzKO	StageA	G37	TRUE	ENSMUSG00000000037	-3.38461538461538	
+S_A_down	StageA	down_in_mzKO	StageA	G38	TRUE	ENSMUSG00000000038	-3.58974358974359	
+S_A_down	StageA	down_in_mzKO	StageA	G39	TRUE	ENSMUSG00000000039	-3.79487179487179	
+S_A_down	StageA	down_in_mzKO	StageA	G40	TRUE	ENSMUSG00000000040	-4	
+S_B_up	StageB	up_in_mzKO	StageA	G35	TRUE	ENSMUSG00000000035	-2.97435897435897	
+S_B_up	StageB	up_in_mzKO	StageA	G36	TRUE	ENSMUSG00000000036	-3.17948717948718	
+S_B_up	StageB	up_in_mzKO	StageA	G37	TRUE	ENSMUSG00000000037	-3.38461538461538	
+S_B_up	StageB	up_in_mzKO	StageA	G38	TRUE	ENSMUSG00000000038	-3.58974358974359	
+S_B_up	StageB	up_in_mzKO	StageA	G39	TRUE	ENSMUSG00000000039	-3.79487179487179	
+S_B_up	StageB	up_in_mzKO	StageA	G40	TRUE	ENSMUSG00000000040	-4	
+S_missing	StageB	down_in_mzKO	StageA	X1	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageA	X2	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageA	X3	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageA	X4	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageA	X5	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageA	X6	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_A_up	StageA	up_in_mzKO	StageB	G01	TRUE	ENSMUSG00000000001	-2	
+S_A_up	StageA	up_in_mzKO	StageB	G02	TRUE	ENSMUSG00000000002	-1.8974358974359	
+S_A_up	StageA	up_in_mzKO	StageB	G03	TRUE	ENSMUSG00000000003	-1.79487179487179	
+S_A_up	StageA	up_in_mzKO	StageB	G04	TRUE	ENSMUSG00000000004	-1.69230769230769	
+S_A_up	StageA	up_in_mzKO	StageB	G05	TRUE	ENSMUSG00000000005	-1.58974358974359	
+S_A_up	StageA	up_in_mzKO	StageB	G06	TRUE	ENSMUSG00000000006	-1.48717948717949	
+S_A_down	StageA	down_in_mzKO	StageB	G35	TRUE	ENSMUSG00000000035	1.48717948717949	
+S_A_down	StageA	down_in_mzKO	StageB	G36	TRUE	ENSMUSG00000000036	1.58974358974359	
+S_A_down	StageA	down_in_mzKO	StageB	G37	TRUE	ENSMUSG00000000037	1.69230769230769	
+S_A_down	StageA	down_in_mzKO	StageB	G38	TRUE	ENSMUSG00000000038	1.79487179487179	
+S_A_down	StageA	down_in_mzKO	StageB	G39	TRUE	ENSMUSG00000000039	1.8974358974359	
+S_A_down	StageA	down_in_mzKO	StageB	G40	TRUE	ENSMUSG00000000040	2	
+S_B_up	StageB	up_in_mzKO	StageB	G35	TRUE	ENSMUSG00000000035	1.48717948717949	
+S_B_up	StageB	up_in_mzKO	StageB	G36	TRUE	ENSMUSG00000000036	1.58974358974359	
+S_B_up	StageB	up_in_mzKO	StageB	G37	TRUE	ENSMUSG00000000037	1.69230769230769	
+S_B_up	StageB	up_in_mzKO	StageB	G38	TRUE	ENSMUSG00000000038	1.79487179487179	
+S_B_up	StageB	up_in_mzKO	StageB	G39	TRUE	ENSMUSG00000000039	1.8974358974359	
+S_B_up	StageB	up_in_mzKO	StageB	G40	TRUE	ENSMUSG00000000040	2	
+S_missing	StageB	down_in_mzKO	StageB	X1	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageB	X2	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageB	X3	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageB	X4	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageB	X5	FALSE	NA	NA	no_exact_project_gene_symbol_match
+S_missing	StageB	down_in_mzKO	StageB	X6	FALSE	NA	NA	no_exact_project_gene_symbol_match

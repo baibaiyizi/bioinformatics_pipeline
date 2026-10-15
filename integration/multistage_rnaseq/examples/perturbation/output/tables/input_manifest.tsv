@@ -1,0 +1,6 @@
+input	path	sha256	bytes
+ranked	/home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/ranked.tsv	373314d8ebf0da906ad261cdde3168330db617f749a3b187e1202e083c88f30d	6672
+vst	/home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/vst.tsv	dd1bb14da48134db98b911465164af8deaafcd7c70a7a5efc38f19af1a1d2a81	8734
+samples	/home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/samples.tsv	cef68edd982813b6ffd53124e7d0106cea5dc357e70704c388b3f9c742687cad	290
+obox_signatures	/home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/obox.tsv	49f6caf83bb2e74f67eafad82a4108733c7f496531d421ed39ec3af873453b8a	792
+pabpn_effects	/home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/pabpn.tsv	312ca7e8ae5c844fdce5cd5769b32c66821f7b21b7ce4156845b0c660ac866e9	5604

@@ -1,0 +1,42 @@
+{
+  "data_kind": "real_PFOS_source",
+  "meaning": "冻结真实项目显示子集；纯绘图，不重算模型；内部探索预览",
+  "files": [
+    {
+      "original_path": "/home/h1028/workspace/projects/pfos/mouse/integration/result/07_mechanism/05_figures/mtorc1_signaling/source.tsv",
+      "source_sha256": "0a92f904b6f9f9477390733e4fd913192d3af2d8399152bdce8928956df935da",
+      "example": "mechanism_drivers.tsv",
+      "example_sha256": "0a92f904b6f9f9477390733e4fd913192d3af2d8399152bdce8928956df935da"
+    },
+    {
+      "original_path": "/home/h1028/workspace/projects/pfos/mouse/integration/result/07_mechanism/05_figures/mtorc1_signaling/secondary.tsv",
+      "source_sha256": "185a488039d730f50634b801635c5013cf461fcf6d9364320778585ed4223d42",
+      "example": "mechanism_drivers_secondary.tsv",
+      "example_sha256": "185a488039d730f50634b801635c5013cf461fcf6d9364320778585ed4223d42"
+    },
+    {
+      "original_path": "/home/h1028/workspace/projects/pfos/mouse/integration/result/07_mechanism/05_figures/regulatory_bridge/source.tsv",
+      "source_sha256": "724a3f5a4f907240f05fd0df11bd3e07ec3693e4bfe7581b8526fa34679439ee",
+      "example": "mechanism_regulatory.tsv",
+      "example_sha256": "724a3f5a4f907240f05fd0df11bd3e07ec3693e4bfe7581b8526fa34679439ee"
+    },
+    {
+      "original_path": "/home/h1028/workspace/projects/pfos/mouse/integration/result/07_mechanism/05_figures/cpg_mpc2_1/source.tsv",
+      "source_sha256": "46dc609c081455fb42b4e314b5faf4f41d74fb5ed9667a99f1739621ef5da15f",
+      "example": "mechanism_cpg.tsv",
+      "example_sha256": "46dc609c081455fb42b4e314b5faf4f41d74fb5ed9667a99f1739621ef5da15f"
+    },
+    {
+      "original_path": "/home/h1028/workspace/projects/pfos/mouse/integration/result/07_mechanism/05_figures/pyruvate_reactions/source.tsv",
+      "source_sha256": "32d9351ab96789dae492d7aef20430a4b1b428340eaf686b0769c7f5980115ec",
+      "example": "mechanism_reactions.tsv",
+      "example_sha256": "32d9351ab96789dae492d7aef20430a4b1b428340eaf686b0769c7f5980115ec"
+    },
+    {
+      "original_path": "/home/h1028/workspace/projects/pfos/mouse/integration/result/07_mechanism/05_figures/pyruvate_reactions/secondary.tsv",
+      "source_sha256": "7fdf9b6eee83bdfaeb2d5baba2adf1581d28dc420804159ba9471e87643d67bc",
+      "example": "mechanism_reactions_secondary.tsv",
+      "example_sha256": "7fdf9b6eee83bdfaeb2d5baba2adf1581d28dc420804159ba9471e87643d67bc"
+    }
+  ]
+}

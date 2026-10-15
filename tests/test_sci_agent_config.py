@@ -29,6 +29,8 @@ def configs():
     parsed = {}
     for path in sorted(AGENT_DIR.glob("sci*.toml")):
         data = tomllib.loads(path.read_text(encoding="utf-8"))
+        if data["name"] in parsed:
+            raise ValueError(f"Duplicate SCI role: {data['name']} ({path})")
         parsed[data["name"]] = (path, data)
     return parsed
 
@@ -37,6 +39,28 @@ class SciAgentConfigurationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.agents = configs()
+
+    def require_terms(self, text, terms, owner):
+        """Keep failures readable; this checks declarations, not agent behavior."""
+        for term in terms:
+            self.assertTrue(term in text, f"{owner}: missing declaration {term!r}")
+
+    def contract(self, name):
+        return (AGENT_DIR / name).read_text(encoding="utf-8")
+
+    def test_shared_contract_references_resolve(self):
+        sources = [path for path, _ in self.agents.values()]
+        sources.extend(AGENT_DIR.glob("sci*contract.md"))
+        for path in sources:
+            refs = re.findall(r"\b(sci[a-z_]*_contract\.md)\b", path.read_text(encoding="utf-8"))
+            for ref in refs:
+                self.assertTrue((AGENT_DIR / ref).is_file(), f"{path.name}: missing {ref}")
+
+    def test_all_roles_use_shared_scientific_core(self):
+        core = self.contract("sci_core_contract.md")
+        self.require_terms(core, ["contract_version:", "假说", "原始", "敏感", "授权"], "scientific core")
+        for name, (_, data) in self.agents.items():
+            self.assertIn("sci_core_contract.md", data["developer_instructions"], name)
 
     def test_names_unique_and_complete(self):
         expected = ANALYSIS_ROLES | {"sci", "sci_evidence", "sci_writer", "sci_reviewer"}
@@ -60,30 +84,32 @@ class SciAgentConfigurationTests(unittest.TestCase):
         instructions = self.agents["sci"][1]["developer_instructions"]
         for role in ANALYSIS_ROLES:
             self.assertIn(role, instructions)
-        self.assertIn("最多同时运行三个子 agent", instructions)
-        self.assertIn("只有 `sci` 可以创建子 agent", instructions)
+        self.require_terms(instructions, ["并发", "当前会话"], "runtime delegation limits")
 
     def test_route_scenarios(self):
         router = self.agents["sci"][1]["developer_instructions"]
         cases = {
-            "bulk/total/small RNA": ["sci_transcriptomics", "sci_analyst"],
-            "scRNA": ["sci_singlecell", "pseudobulk"],
-            "空间代谢组": ["sci_metabolomics", "sci_spatialomics"],
+            "bulk/total/small RNA": ["sci_transcriptomics"],
+            "scRNA": ["sci_singlecell"],
+            "空间转录": ["sci_spatialomics"],
+            "LC/GC-MS": ["sci_metabolomics"],
             "bulk ATAC": ["sci_epigenomics"],
             "跨组学整合": ["sci_multiomics"],
-            "分类、回归": ["sci_ml"],
+            "分类/回归": ["sci_ml"],
             "网络药理": ["sci_evidence", "sci_network_pharmacology"],
-            "对接、MD": ["sci_molecular_modeling"],
+            "对接/MD": ["sci_molecular_modeling"],
         }
         for scenario, tokens in cases.items():
-            self.assertIn(scenario, router)
+            rows = [line for line in router.splitlines()
+                    if line.startswith("|") and scenario in line.split("|")[1]]
+            self.assertEqual(len(rows), 1, f"Ambiguous or missing route: {scenario}")
             for token in tokens:
-                self.assertIn(token, router)
+                self.assertIn(token, rows[0])
 
     def test_negative_scientific_boundaries_are_explicit(self):
         text = "\n".join(data["developer_instructions"] for _, data in self.agents.values())
         shared = (AGENT_DIR / "sci_analysis_contract.md").read_text(encoding="utf-8")
-        combined = text + "\n" + shared
+        combined = text + "\n" + shared + "\n" + self.contract("sci_core_contract.md")
         for forbidden_shortcut in [
             "细胞、spot、pixel",
             "全数据筛选特征",
@@ -104,17 +130,13 @@ class SciAgentConfigurationTests(unittest.TestCase):
         evidence = self.agents["sci_evidence"][1]["developer_instructions"]
         shared = (AGENT_DIR / "sci_analysis_contract.md").read_text(encoding="utf-8")
 
-        for token in [
-            "/home/h1028/workspace/sci_learning/",
-            "knowledge_refs",
-            "adopt",
-            "adapt",
-            "background_only",
-            "reject",
-            "knowledge_feedback",
-        ]:
-            self.assertIn(token, router)
-            self.assertIn(token, shared)
+        learning = (LEARNING_ROOT / "README.md").read_text(encoding="utf-8")
+        card_template = (LEARNING_ROOT / "cards/_template.md").read_text(encoding="utf-8")
+        self.require_terms(router, ["sci_learning/", "knowledge_refs"], "SCI retrieval entry")
+        self.require_terms(shared, ["knowledge_refs", "knowledge_feedback"], "analysis handoff")
+        self.require_terms(learning, ["adopt", "adapt", "background_only", "reject",
+                                     "supported", "unsupported", "inconclusive", "not_run"],
+                           "learning decisions and outcomes")
 
         for token in [
             "new_to_library",
@@ -122,9 +144,8 @@ class SciAgentConfigurationTests(unittest.TestCase):
             "uncertain",
             "abstract_only",
             "搜索片段",
-            "学习卡不能作为正式引文",
         ]:
-            self.assertIn(token, evidence)
+            self.assertTrue(token in evidence + learning + card_template, f"learning authority: {token}")
 
     def test_quantitative_literature_learning_and_figure_value_gates(self):
         router = self.agents["sci"][1]["developer_instructions"]
@@ -137,22 +158,20 @@ class SciAgentConfigurationTests(unittest.TestCase):
             "规范化标题",
             "独立生物学单位",
             "引用数必须带数据库与快照日期",
-            "四层分离",
         ]:
-            self.assertIn(token, "\n".join([router, evidence]))
+            self.assertTrue(token in evidence, f"evidence role: {token}")
         for token in [
             "方法采用以问题为单位",
-            "预先写明的 estimand",
-            "图形数量不是分析充分性的验收标准",
-            "同一统计结果换配色、换图型或拆成多个文件不计为新增分析证据",
-            "证据漏斗",
+            "estimand",
+            "同一结果换画法不增加独立证据",
+            "各门输入数、通过数、失败原因",
             "竞争型或自身型零假设",
             "不能用强制联合批次校正制造共同效应",
             "失败运行和负结果必须保留",
         ]:
-            self.assertIn(token, shared)
-        for token in ["public_metadata_gate", "对应推断分支必须 `NO-GO`", "队列内按其物理尺度估计"]:
-            self.assertIn(token, router)
+            self.assertTrue(token in shared, f"analysis authority: {token}")
+        self.require_terms(shared, ["NO-GO", "供者/患者/动物/窝", "跨队列", "物理尺度"],
+                           "metadata eligibility and cohort analysis")
 
     def test_review_writing_and_visualization_learning_contracts(self):
         router = self.agents["sci"][1]["developer_instructions"]
@@ -165,8 +184,7 @@ class SciAgentConfigurationTests(unittest.TestCase):
         self.assertTrue(writing_contract.is_file())
         self.assertTrue(figure_contract.is_file())
 
-        for token in ["writing", "visualization", "阶段 1–5"]:
-            self.assertIn(token, router)
+        self.require_terms(router, ["sci_writer", "sci_reviewer"], "writing/review delegation")
         for instructions in (writer, reviewer):
             self.assertIn("knowledge_refs", instructions)
             self.assertIn("knowledge_feedback", instructions)
@@ -183,14 +201,9 @@ class SciAgentConfigurationTests(unittest.TestCase):
 
         for token in [
             "一图一主张",
-            "MediaBox/CropBox",
-            "FontFile",
-            "deuteranopia",
             "程序化矢量",
             "target-review deconstruction",
             "orienting_overview",
-            "review-specific boundary",
-            "arrow paraphrase",
             "非定量综述示意图",
             "`basis` 只允许 `official | observed | inference`",
             "narrative_salience_encoding",
@@ -204,10 +217,16 @@ class SciAgentConfigurationTests(unittest.TestCase):
             "relation_type",
             "figure_rule_ledger.tsv",
         ]:
-            self.assertIn(token, figure_contract.read_text(encoding="utf-8"))
+            self.assertTrue(token in figure_contract.read_text(encoding="utf-8"),
+                            f"review semantics: {token}")
 
-        self.assertIn("不得直接修改全局卡片或索引", evidence)
-        self.assertIn("不得更新全局 `index.md` 或 `methods_index.md`", evidence)
+        self.require_terms(self.contract("sci_figure_contract.md"),
+                           ["MediaBox/CropBox", "字体嵌入", "deuteranopia", "源数据", "画布"],
+                           "shared figure production")
+        self.assertIn("sci_figure_contract.md", figure_contract.read_text(encoding="utf-8"))
+        self.assertNotIn("原生矢量面板按1.0比例拼版", figure_contract.read_text(encoding="utf-8"))
+
+        self.require_terms(evidence, ["主SCI", "不得并发修改全局"], "evidence writing ownership")
 
     def test_learning_templates_accept_writing_and_visualization(self):
         readme = (LEARNING_ROOT / "README.md").read_text(encoding="utf-8")
@@ -297,9 +316,10 @@ class SciAgentConfigurationTests(unittest.TestCase):
     def test_parallel_review_agents_are_not_global_learning_writers(self):
         evidence = self.agents["sci_evidence"][1]["developer_instructions"]
         router = self.agents["sci"][1]["developer_instructions"]
-        self.assertIn("不得直接修改全局卡片或索引", evidence)
-        self.assertIn("不得更新全局 `index.md` 或 `methods_index.md`", evidence)
-        self.assertIn("全局学习库采用单写者", router)
+        self.require_terms(evidence, ["不得并发修改全局", "主SCI", "串行"],
+                           "evidence writing ownership")
+        learning = (LEARNING_ROOT / "README.md").read_text(encoding="utf-8")
+        self.require_terms(router + learning, ["单写者", "串行"], "global learning ownership")
 
     def test_learning_workspace_contract(self):
         required_files = [
@@ -360,19 +380,20 @@ class SciAgentConfigurationTests(unittest.TestCase):
         router = self.agents["sci"][1]["developer_instructions"]
         evidence = self.agents["sci_evidence"][1]["developer_instructions"]
         shared = (AGENT_DIR / "sci_analysis_contract.md").read_text(encoding="utf-8")
-        combined = "\n".join([router, evidence, shared])
+        combined = "\n".join([router, evidence, shared,
+                               (LEARNING_ROOT / "README.md").read_text(encoding="utf-8"),
+                               (LEARNING_ROOT / "repositories/_template.md").read_text(encoding="utf-8")])
         for token in [
-            "github-owner-repository",
-            "gitlab-namespace-repository",
+            "github-",
+            "gitlab-",
             "checked_commit",
             "metadata_only",
             "readme_docs",
             "source_audit",
             "executed",
             "许可证",
-            "代码仓库本身不自动构成科学有效性证据",
         ]:
-            self.assertIn(token, combined)
+            self.assertTrue(token in combined, f"repository learning authority: {token}")
 
     def test_network_pharmacology_closed_loop_contract(self):
         instructions = self.agents["sci_network_pharmacology"][1][

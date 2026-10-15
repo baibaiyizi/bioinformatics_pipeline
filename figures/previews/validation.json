@@ -1,7 +1,8 @@
 {
   "status": "PASS",
-  "figure_pairs": 12,
+  "figure_pairs": 16,
   "issues": [],
+  "receipt_hashes_checked": true,
   "scientific_model_rerun": false,
-  "manual_visual_review": "另见workspace维护报告；自动规格通过不等同视觉或投稿通过"
+  "manual_visual_review": "not_run_by_updater；自动规格通过不等同视觉或投稿通过"
 }

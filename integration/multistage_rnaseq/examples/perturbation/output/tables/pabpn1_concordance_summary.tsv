@@ -1,0 +1,3 @@
+stage	mapped_genes	spearman_rho_eps1	spearman_rho_eps0_1	source_effect_sensitivity_rho	concordant_fraction_eps1	concordant_fraction_eps0_1	source_sign_stability
+StageA	40	-1	-1	1	0	0	1
+StageB	40	1	1	1	1	1	1

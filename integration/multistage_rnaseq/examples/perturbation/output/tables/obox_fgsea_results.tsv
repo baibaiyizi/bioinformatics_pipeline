@@ -1,0 +1,9 @@
+signature_id	source_stage	direction	comparison_stage	source_size	mapped_size	test_status	ES	NES	pvalue	n_more_extreme	leading_edge	padj_family	display_stars	concordance_NES	matching_stage	family_size
+S_A_up	StageA	up_in_mzKO	StageA	6	6	tested	1	2.38866854803431	0.00191204588910134	0	G01;G02;G03;G04;G05;G06	0.002710027100271	**	2.38866854803431	TRUE	8
+S_A_down	StageA	down_in_mzKO	StageA	6	6	tested	-1	-2.32334929630284	0.00203252032520325	0	G40;G39;G38;G37;G36;G35	0.002710027100271	**	2.32334929630284	TRUE	8
+S_B_up	StageB	up_in_mzKO	StageA	6	6	tested	-1	-2.32334929630284	0.00203252032520325	0	G40;G39;G38;G37;G36;G35	0.002710027100271	**	-2.32334929630284	FALSE	8
+S_missing	StageB	down_in_mzKO	StageA	6	0	not_tested_below_min_size	NA	NA	NA	NA	NA	NA	NT	NA	FALSE	8
+S_A_up	StageA	up_in_mzKO	StageB	6	6	tested	-1	-2.36347344554614	0.00198807157057654	0	G01;G02;G03;G04;G05;G06	0.002710027100271	**	-2.36347344554614	FALSE	8
+S_A_down	StageA	down_in_mzKO	StageB	6	6	tested	1	2.36464782981763	0.00196850393700787	0	G40;G39;G38;G37;G36;G35	0.002710027100271	**	-2.36464782981763	FALSE	8
+S_B_up	StageB	up_in_mzKO	StageB	6	6	tested	1	2.36464782981763	0.00196850393700787	0	G40;G39;G38;G37;G36;G35	0.002710027100271	**	2.36464782981763	TRUE	8
+S_missing	StageB	down_in_mzKO	StageB	6	0	not_tested_below_min_size	NA	NA	NA	NA	NA	NA	NT	NA	TRUE	8

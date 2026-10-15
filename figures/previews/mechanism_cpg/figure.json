@@ -1,0 +1,22 @@
+{
+  "status": "COMPLETED",
+  "kind": "cpg",
+  "data_kind": "real_PFOS_source",
+  "intended_use": "internal_exploratory_preview",
+  "publication_figure_gate": "not_run",
+  "scientific_coordinate_count": 2,
+  "composition_method": "source_data_shared_canvas",
+  "input_media_files": [],
+  "atomic_panel_geometry_comparison": "not_run",
+  "statistics_recomputed": false,
+  "input_sha256": {
+    "source.tsv": "46dc609c081455fb42b4e314b5faf4f41d74fb5ed9667a99f1739621ef5da15f"
+  },
+  "script_sha256": "668f365418beb28fcae46e7273267123c725a42b567bacb0195c06bd7d75b77f",
+  "profile_sha256": "e22153228d724956351f4964f014e3720877d8591dbf4b5ecf61ab8a8183c227",
+  "style_sha256": "87bcd37747de36c361ae62e6591e5a4382e1f2ec2c2c9c607e24baaba3f4aa3e",
+  "outputs": {
+    "pdf": "af04ac84e63e9ad64ab061a5f8335dc5d829130618288c66e79e26b9b69b157d",
+    "png": "5d0a8e33405cad1bf4647563c803e1777f0fa1a5528b1dd383e02195d17013b2"
+  }
+}

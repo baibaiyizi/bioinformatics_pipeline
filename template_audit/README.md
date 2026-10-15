@@ -14,3 +14,5 @@ python3 template_audit/verify_templates.py
 smallRNA 现采用 2026-10-11 新版 PANDORA 的本地冻结实现；当前验证见其 [VALIDATION.md](../smallrnaseq/docs/VALIDATION.md)，不能沿用旧编号模块的验收结论。
 
 其他模板的具体重放方法和生产上游 `not_run` 边界，仍以各模块 README、VALIDATION 和 [能力矩阵](../analysis_capability_matrix.md) 为准。原有小数据证据保留于 [validation](validation/)。
+
+SCI规则、学习索引及绘图实现入口的当前核验见 [SCI路由核验](validation/sci_routing_review.md)：包含实际安装指纹、37项自动测试和6项独立上下文演练，明确区分配置验收与真实科研验证。

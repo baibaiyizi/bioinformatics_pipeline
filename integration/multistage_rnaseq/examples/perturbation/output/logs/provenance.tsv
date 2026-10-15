@@ -1,0 +1,14 @@
+provenance_key	value
+generated	2026-10-14 17:28:30 UTC
+command	/home/h1028/miniconda3/lib/R/bin/exec/R --no-echo --no-restore --file=/home/h1028/workspace/templates/integration/multistage_rnaseq/scripts/perturbation_signatures.R --args --ranked /home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/ranked.tsv --vst /home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/vst.tsv --samples /home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/samples.tsv --obox-signatures /home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/obox.tsv --pabpn-effects /home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/input/pabpn.tsv --config /home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/config.json --output /home/h1028/workspace/templates/integration/multistage_rnaseq/examples/perturbation/output
+seed	20261015
+min_size	3
+max_size	50
+nperm_simple	1000
+permutation_p_resolution	1/(n_same_sign+1), where n_same_sign <= 1000; theoretical lower bound 1/(1000+1) before family adjustment
+family_size	8
+core_contract	sci-core-2026-10-15-v2 | e443ec5bc51799b498f507ea6284acfcbb56b2d6690a9c693f8f1652d6395f9a
+analysis_contract	sci-analysis-routing-2026-10-13-v9 | 830d7b2e97febd9c33f263a338a3fef452ec3171a07144443129eea65c836070
+figure_contract	sci-figure-task-loading-2026-10-13-v5 | 980e66aadb4d8f3e30c92b786ef4c3c464f443da69cf3c4ff8da406d9284fff1
+inference_status	exploratory
+comparison_direction	Positive project statistics and log2FC denote MO higher than MY
